@@ -1,35 +1,53 @@
 export type Side = "up" | "down"
+export type PriceSource = "binance" | "coinbase"
 
 export type Config = {
-  roundSeconds: number
+  windowSeconds: number
+  marketSeconds: number
   feeBps: number
-  betCutoffMs: number
   minStakeMicros: number
+  source: PriceSource
+  botCount: number
 }
 
 export type TrayRow = {
   address: string
   side: Side
   stakeMicros: number
+  bot: boolean
 }
 
-export type RoundSnapshot = {
+export type Band = {
   id: number
-  startsAt: number
-  endsAt: number
+  betsOpen: number
+  strikeAt: number
+  settlesAt: number
   strike: string | null
   status: string
   poolUpMicros: number
   poolDownMicros: number
   playersUp: number
   playersDown: number
-  tray: TrayRow[]
 }
+
+export type PoolCard = Band & { tray: TrayRow[] }
+
+export type Board = {
+  blockStart: number
+  blockEnd: number
+  windowEndsAt: number
+  phase: "bets" | "market"
+  join: PoolCard | null
+  live: PoolCard | null
+  bands: Band[]
+}
+
+export type OpenBet = { roundId: number; side: Side; stakeMicros: number }
 
 export type You = {
   address: string
   balanceMicros: number
-  openBet: null | { roundId: number; side: Side; stakeMicros: number }
+  openBets: OpenBet[]
 }
 
 export type HistoryRound = {

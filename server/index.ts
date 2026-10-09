@@ -1,12 +1,13 @@
 import { existsSync } from "node:fs"
 import { join, normalize, sep } from "node:path"
-import { betCutoffMs, feeBps, MIN_STAKE_MICROS, roundMs } from "./config"
+import { botCount, feeBps, marketMs, MIN_STAKE_MICROS, priceSource, windowMs } from "./config"
 import { getDb } from "./db"
 import { hub } from "./hub"
 import { normalizeAddress, parseMicros } from "./money"
 import { startOracle } from "./oracle"
 import {
   advance,
+  board,
   ensureUser,
   feedStatus,
   fund,
@@ -14,7 +15,6 @@ import {
   notePrint,
   placeBet,
   roundDetail,
-  snapshot,
   tapePoints,
   withdraw,
   type Side,
@@ -37,7 +37,7 @@ startOracle((print) => {
 function publishRound(now = Date.now()) {
   const feed = feedStatus(now)
   lastFeed = feed
-  hub.broadcast({ type: "round", serverNow: now, feed, round: snapshot(now) })
+  hub.broadcast({ type: "round", serverNow: now, feed, source: priceSource(), board: board(now) })
 }
 
 setInterval(() => {
@@ -73,13 +73,20 @@ async function readJson(req: Request) {
 }
 
 function publicConfig() {
-  return { roundSeconds: roundMs() / 1000, feeBps: feeBps(), betCutoffMs: betCutoffMs(), minStakeMicros: MIN_STAKE_MICROS }
+  return {
+    windowSeconds: windowMs() / 1000,
+    marketSeconds: marketMs() / 1000,
+    feeBps: feeBps(),
+    minStakeMicros: MIN_STAKE_MICROS,
+    source: priceSource(),
+    botCount: botCount(),
+  }
 }
 
 async function handle(req: Request): Promise<Response> {
   const url = new URL(req.url)
 
-  if (req.method === "GET" && url.pathname === "/api/health") return json({ ok: true })
+  if (req.method === "GET" && url.pathname === "/api/health") return json({ ok: true, source: priceSource() })
 
   if (req.method === "GET" && url.pathname === "/api/state") {
     const now = Date.now()
@@ -88,7 +95,7 @@ async function handle(req: Request): Promise<Response> {
       serverNow: now,
       feed: feedStatus(now),
       config: publicConfig(),
-      round: snapshot(now),
+      board: board(now),
       you: address ? ensureUser(address) : null,
       tape: tapePoints(),
     })
@@ -130,7 +137,7 @@ async function handle(req: Request): Promise<Response> {
     const result = placeBet({ address, side: side as Side, stakeMicros: stake, now: Date.now() })
     if (!result.ok) return json({ error: result.error }, 400)
     publishRound()
-    return json({ you: result.you, round: result.round })
+    return json({ you: result.you, board: result.board })
   }
 
   if (req.method === "GET" && url.pathname === "/api/rounds") {
@@ -186,7 +193,7 @@ Bun.serve({
     open(ws) {
       hub.add(ws)
       const now = Date.now()
-      ws.send(JSON.stringify({ type: "round", serverNow: now, feed: feedStatus(now), round: snapshot(now) }))
+      ws.send(JSON.stringify({ type: "round", serverNow: now, feed: feedStatus(now), source: priceSource(), board: board(now) }))
     },
     message() {},
     close(ws) {

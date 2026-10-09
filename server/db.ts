@@ -6,7 +6,8 @@ const SCHEMA = `
 CREATE TABLE IF NOT EXISTS users (
   address TEXT PRIMARY KEY,
   balance_micros INTEGER NOT NULL,
-  created_at INTEGER NOT NULL
+  created_at INTEGER NOT NULL,
+  is_bot INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS rounds (
@@ -53,6 +54,10 @@ function openDatabase(path: string): Database {
   if (path !== ":memory:") db.exec("PRAGMA journal_mode = WAL;")
   db.exec("PRAGMA foreign_keys = ON;")
   db.exec(SCHEMA)
+  const columns = db.query("PRAGMA table_info(users)").all() as { name: string }[]
+  if (!columns.some((column) => column.name === "is_bot")) {
+    db.exec("ALTER TABLE users ADD COLUMN is_bot INTEGER NOT NULL DEFAULT 0")
+  }
   return db
 }
 

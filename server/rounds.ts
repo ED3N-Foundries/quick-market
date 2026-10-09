@@ -1,12 +1,12 @@
 import {
-  betCutoffMs,
+  botCount,
+  clockAt,
   feeBps,
   FUND_MICROS,
+  LIVE_MS,
+  marketBounds,
   MIN_STAKE_MICROS,
-  roundBounds,
-  roundIdAt,
   STARTING_BALANCE_MICROS,
-  STALE_MS,
   TAPE_MS,
 } from "./config"
 import { getDb } from "./db"
@@ -25,19 +25,32 @@ export type TrayRow = {
   address: string
   side: Side
   stakeMicros: number
+  bot: boolean
 }
 
-export type RoundSnapshot = {
+export type Band = {
   id: number
-  startsAt: number
-  endsAt: number
+  betsOpen: number
+  strikeAt: number
+  settlesAt: number
   strike: string | null
   status: "open" | "settled" | "void"
   poolUpMicros: number
   poolDownMicros: number
   playersUp: number
   playersDown: number
-  tray: TrayRow[]
+}
+
+export type PoolCard = Band & { tray: TrayRow[] }
+
+export type Board = {
+  blockStart: number
+  blockEnd: number
+  windowEndsAt: number
+  phase: "bets" | "market"
+  join: PoolCard | null
+  live: PoolCard | null
+  bands: Band[]
 }
 
 export type OpenBet = {
@@ -49,7 +62,7 @@ export type OpenBet = {
 export type You = {
   address: string
   balanceMicros: number
-  openBet: OpenBet | null
+  openBets: OpenBet[]
 }
 
 export type SettledEvent = {
@@ -91,6 +104,7 @@ type BetRow = {
   stake_micros: number
   payout_micros: number | null
   created_at: number
+  is_bot?: number
 }
 
 class BetError extends Error {}
@@ -98,50 +112,77 @@ class BetError extends Error {}
 const prints: Print[] = []
 let lastReceivedAt = 0
 let secondBucket: { sec: number; price: string; source: string; exchangeTs: number } | null = null
-let cachedRoundId = -1
+let cachedKey = ""
+let seatedMarket = -1
+
+const STAKE_LADDER = [5, 10, 25, 50]
 
 export function resetRuntime() {
   prints.length = 0
   lastReceivedAt = 0
   secondBucket = null
-  cachedRoundId = -1
+  cachedKey = ""
+  seatedMarket = -1
+}
+
+export function botAddress(index: number): string {
+  return `0xb07${index.toString(16).padStart(37, "0")}`
 }
 
 export function notePrint(print: Print) {
   if (!/^\d+(\.\d+)?$/.test(print.price)) return
   prints.push(print)
   lastReceivedAt = print.receivedAt
-  const cutoff = print.receivedAt - TAPE_MS
-  while (prints.length > 8000 || (prints[0] && prints[0].receivedAt < cutoff)) prints.shift()
+  const cutoff = print.exchangeTs - TAPE_MS
+  while (prints.length > 20_000 || (prints[0] && prints[0].exchangeTs < cutoff)) prints.shift()
   recordSecond(print)
 }
 
 export function feedStatus(now: number): "live" | "stale" {
   if (!lastReceivedAt) return "stale"
-  return now - lastReceivedAt <= STALE_MS ? "live" : "stale"
+  return now - lastReceivedAt <= LIVE_MS ? "live" : "stale"
 }
 
 export function tapePoints(): { t: number; price: string }[] {
-  if (prints.length <= 1500) return prints.map((print) => ({ t: print.exchangeTs, price: print.price }))
-  const step = prints.length / 1500
-  const out: { t: number; price: string }[] = []
-  for (let i = 0; i < 1500; i++) {
-    const print = prints[Math.floor(i * step)]
-    if (print) out.push({ t: print.exchangeTs, price: print.price })
+  const map = (print: Print) => ({ t: print.exchangeTs, price: print.price })
+  if (prints.length <= 4_000) return prints.map(map)
+  const lastTs = prints[prints.length - 1]?.exchangeTs ?? 0
+  const recentCut = lastTs - 60_000
+  const older: Print[] = []
+  const recent: Print[] = []
+  for (const print of prints) {
+    if (print.exchangeTs >= recentCut) recent.push(print)
+    else older.push(print)
   }
-  const last = prints[prints.length - 1]
-  if (last) out.push({ t: last.exchangeTs, price: last.price })
+  const out: { t: number; price: string }[] = []
+  const step = Math.max(1, older.length / 800)
+  for (let i = 0; i < older.length; i += step) {
+    const print = older[Math.floor(i)]
+    if (print) out.push(map(print))
+  }
+  for (const print of recent) out.push(map(print))
   return out
 }
 
-function priceAt(boundary: number): Print | null {
+function priceAt(boundary: number, maxAge: number): Print | null {
   let best: Print | null = null
   for (const print of prints) {
     if (print.exchangeTs > boundary) continue
-    if (boundary - print.exchangeTs > STALE_MS) continue
+    if (boundary - print.exchangeTs > maxAge) continue
     if (!best || print.exchangeTs > best.exchangeTs) best = print
   }
-  return best
+  if (best) return best
+  const row = getDb()
+    .query(
+      `SELECT price, source, exchange_ts FROM ticks
+       WHERE second_ts <= ? AND second_ts >= ?
+       ORDER BY second_ts DESC LIMIT 1`,
+    )
+    .get(Math.floor(boundary / 1000), Math.floor((boundary - maxAge) / 1000)) as
+    | { price: string; source: "binance" | "coinbase"; exchange_ts: number }
+    | null
+  if (!row || boundary - row.exchange_ts > maxAge) return null
+  return { price: row.price, exchangeTs: row.exchange_ts, receivedAt: row.exchange_ts, source: row.source }
 }
 
 function recordSecond(print: Print) {
@@ -168,16 +209,16 @@ function getRound(id: number): RoundRow | null {
   return (getDb().query("SELECT * FROM rounds WHERE id = ?").get(id) as RoundRow | null) ?? null
 }
 
-function ensureRound(id: number): boolean {
-  const bounds = roundBounds(id)
-  const result = getDb()
+function ensureRound(id: number): void {
+  if (id < 0) return
+  const bounds = marketBounds(id)
+  getDb()
     .query(
       `INSERT INTO rounds (id, starts_at, ends_at, status, fee_micros, pool_up_micros, pool_down_micros)
        VALUES (?, ?, ?, 'open', 0, 0, 0)
        ON CONFLICT(id) DO NOTHING`,
     )
-    .run(id, bounds.startsAt, bounds.endsAt)
-  return result.changes > 0
+    .run(id, bounds.strikeAt, bounds.settlesAt)
 }
 
 function poolSums(roundId: number) {
@@ -203,42 +244,81 @@ function poolSums(roundId: number) {
   return { poolUpMicros, poolDownMicros, playersUp, playersDown }
 }
 
-export function snapshot(now = Date.now()): RoundSnapshot {
-  const id = roundIdAt(now)
-  ensureRound(id)
-  const round = getRound(id)
-  const bounds = roundBounds(id)
-  const sums = poolSums(id)
-  const tray = (
-    getDb()
-      .query(
-        `SELECT address, side, stake_micros FROM bets WHERE round_id = ? ORDER BY created_at ASC, address ASC`,
-      )
-      .all(id) as { address: string; side: Side; stake_micros: number }[]
-  ).map((row) => ({ address: row.address, side: row.side, stakeMicros: row.stake_micros }))
+function trayFor(roundId: number): TrayRow[] {
+  const rows = getDb()
+    .query(
+      `SELECT b.address, b.side, b.stake_micros, COALESCE(u.is_bot, 0) AS bot
+       FROM bets b LEFT JOIN users u ON u.address = b.address
+       WHERE b.round_id = ?
+       ORDER BY b.created_at ASC, b.address ASC`,
+    )
+    .all(roundId) as { address: string; side: Side; stake_micros: number; bot: number }[]
+  return rows.map((row) => ({
+    address: row.address,
+    side: row.side,
+    stakeMicros: row.stake_micros,
+    bot: row.bot === 1,
+  }))
+}
 
+function toBand(row: RoundRow): Band {
+  const bounds = marketBounds(row.id)
+  const sums =
+    row.status === "open"
+      ? poolSums(row.id)
+      : {
+          poolUpMicros: row.pool_up_micros,
+          poolDownMicros: row.pool_down_micros,
+          playersUp: 0,
+          playersDown: 0,
+        }
   return {
-    id,
-    startsAt: round?.starts_at ?? bounds.startsAt,
-    endsAt: round?.ends_at ?? bounds.endsAt,
-    strike: round?.strike ?? null,
-    status: round?.status ?? "open",
+    id: row.id,
+    betsOpen: bounds.betsOpen,
+    strikeAt: row.starts_at,
+    settlesAt: row.ends_at,
+    strike: row.strike,
+    status: row.status,
     ...sums,
-    tray,
   }
 }
 
-function openBetFor(address: string): OpenBet | null {
-  const row = getDb()
+function cardFor(id: number): PoolCard | null {
+  if (id < 0) return null
+  ensureRound(id)
+  const row = getRound(id)
+  if (!row) return null
+  return { ...toBand(row), ...poolSums(id), tray: trayFor(id) }
+}
+
+export function board(now = Date.now()): Board {
+  const clock = clockAt(now)
+  if (clock.joinId !== null) ensureRound(clock.joinId)
+  if (clock.liveId >= 0) ensureRound(clock.liveId)
+  const rows = getDb()
+    .query("SELECT * FROM rounds WHERE ends_at > ? ORDER BY id ASC")
+    .all(now - TAPE_MS) as RoundRow[]
+  return {
+    blockStart: clock.blockStart,
+    blockEnd: clock.blockEnd,
+    windowEndsAt: clock.windowEndsAt,
+    phase: clock.windowOpen ? "bets" : "market",
+    join: clock.joinId === null ? null : cardFor(clock.joinId),
+    live: cardFor(clock.liveId),
+    bands: rows.map(toBand),
+  }
+}
+
+function openBetsFor(address: string): OpenBet[] {
+  const rows = getDb()
     .query(
       `SELECT b.round_id, b.side, b.stake_micros
        FROM bets b JOIN rounds r ON r.id = b.round_id
        WHERE b.address = ? AND r.status = 'open'
-       LIMIT 1`,
+       ORDER BY b.round_id ASC`,
     )
-    .get(address) as { round_id: number; side: Side; stake_micros: number } | null
-  if (!row) return null
-  return { roundId: row.round_id, side: row.side, stakeMicros: row.stake_micros }
+    .all(address) as { round_id: number; side: Side; stake_micros: number }[]
+  return rows.map((row) => ({ roundId: row.round_id, side: row.side, stakeMicros: row.stake_micros }))
 }
 
 export function youFor(address: string): You | null {
@@ -246,16 +326,33 @@ export function youFor(address: string): You | null {
     | { balance_micros: number }
     | null
   if (!row) return null
-  return { address, balanceMicros: row.balance_micros, openBet: openBetFor(address) }
+  return { address, balanceMicros: row.balance_micros, openBets: openBetsFor(address) }
 }
 
 export function ensureUser(address: string): You {
   const existing = youFor(address)
   if (existing) return existing
   getDb()
-    .query("INSERT INTO users (address, balance_micros, created_at) VALUES (?, ?, ?)")
+    .query("INSERT INTO users (address, balance_micros, created_at, is_bot) VALUES (?, ?, ?, 0)")
     .run(address, STARTING_BALANCE_MICROS, Date.now())
   return youFor(address)!
+}
+
+function ensureBot(address: string, now: number) {
+  const row = getDb().query("SELECT balance_micros FROM users WHERE address = ?").get(address) as
+    | { balance_micros: number }
+    | null
+  if (!row) {
+    getDb()
+      .query("INSERT INTO users (address, balance_micros, created_at, is_bot) VALUES (?, ?, ?, 1)")
+      .run(address, STARTING_BALANCE_MICROS, now)
+    return
+  }
+  if (row.balance_micros < 1_000 * MIN_STAKE_MICROS) {
+    getDb()
+      .query("UPDATE users SET balance_micros = ?, is_bot = 1 WHERE address = ?")
+      .run(STARTING_BALANCE_MICROS, address)
+  }
 }
 
 export function fund(address: string): You {
@@ -296,7 +393,7 @@ export function placeBet(input: {
   side: Side
   stakeMicros: number
   now: number
-}): { ok: true; you: You; round: RoundSnapshot } | { ok: false; error: string } {
+}): { ok: true; you: You; board: Board } | { ok: false; error: string } {
   try {
     const tx = getDb().transaction(() => {
       if (input.side !== "up" && input.side !== "down") throw new BetError("Side is invalid")
@@ -304,23 +401,26 @@ export function placeBet(input: {
         throw new BetError("Minimum stake is 1 USDC")
       }
 
-      const id = roundIdAt(input.now)
+      const clock = clockAt(input.now)
+      const id = clock.joinId
+      if (id === null) throw new BetError("Betting is closed")
       ensureRound(id)
       const round = getRound(id)
-      if (!round || round.status !== "open") throw new BetError("This round is not open")
+      if (!round || round.status !== "open") throw new BetError("Betting is closed")
 
       ensureUser(input.address)
-      const open = openBetFor(input.address)
-      if (open && open.roundId !== id) throw new BetError("Your last bet is still open")
-      if (open && open.side !== input.side) throw new BetError("You are already on the other side")
-      if (!round.strike) throw new BetError("This round has no strike yet")
-      if (input.now >= round.ends_at - betCutoffMs()) throw new BetError("Betting is closed for this round")
+      const opens = openBetsFor(input.address)
+      const onThis = opens.find((bet) => bet.roundId === id)
+      for (const bet of opens) {
+        if (bet.roundId !== id && bet.roundId !== clock.liveId) throw new BetError("Your last bet is still open")
+      }
+      if (onThis && onThis.side !== input.side) throw new BetError("You are already on the other side")
       if (feedStatus(input.now) !== "live") throw new BetError("Price feed is delayed")
 
       const user = youFor(input.address)!
       if (input.stakeMicros > user.balanceMicros) throw new BetError("Insufficient balance")
 
-      if (open) {
+      if (onThis) {
         getDb()
           .query("UPDATE bets SET stake_micros = stake_micros + ? WHERE round_id = ? AND address = ?")
           .run(input.stakeMicros, id, input.address)
@@ -336,7 +436,7 @@ export function placeBet(input: {
         .run(input.stakeMicros, input.address)
     })
     tx()
-    return { ok: true, you: youFor(input.address)!, round: snapshot(input.now) }
+    return { ok: true, you: youFor(input.address)!, board: board(input.now) }
   } catch (error) {
     if (error instanceof BetError) return { ok: false, error: error.message }
     throw error
@@ -344,12 +444,21 @@ export function placeBet(input: {
 }
 
 function loadBets(roundId: number): BetRow[] {
-  return getDb().query("SELECT * FROM bets WHERE round_id = ? ORDER BY created_at ASC").all(roundId) as BetRow[]
+  return getDb()
+    .query(
+      `SELECT b.*, COALESCE(u.is_bot, 0) AS is_bot
+       FROM bets b LEFT JOIN users u ON u.address = b.address
+       WHERE b.round_id = ? ORDER BY b.created_at ASC`,
+    )
+    .all(roundId) as BetRow[]
 }
 
 function closeRound(round: RoundRow): SettledEvent {
+  const life = round.ends_at - round.starts_at
+  let strike = round.strike
+  if (!strike) strike = priceAt(round.starts_at, life)?.price ?? null
+  const settlePrint = priceAt(round.ends_at, life)
   const bets = loadBets(round.id)
-  const print = priceAt(round.ends_at)
   const outcome = settleRound({
     bets: bets.map((bet) => ({
       id: bet.id,
@@ -357,10 +466,10 @@ function closeRound(round: RoundRow): SettledEvent {
       side: bet.side,
       stakeMicros: bet.stake_micros,
     })),
-    strike: round.strike,
-    settle: print?.price ?? null,
+    strike,
+    settle: settlePrint?.price ?? null,
     feeBps: feeBps(),
-    stale: !round.strike || !print,
+    stale: !strike || !settlePrint,
   })
 
   const tx = getDb().transaction(() => {
@@ -378,11 +487,12 @@ function closeRound(round: RoundRow): SettledEvent {
     getDb()
       .query(
         `UPDATE rounds
-         SET settle = ?, status = ?, fee_micros = ?, winning_side = ?, resolution = ?,
+         SET strike = COALESCE(strike, ?), settle = ?, status = ?, fee_micros = ?, winning_side = ?, resolution = ?,
              pool_up_micros = ?, pool_down_micros = ?
          WHERE id = ? AND status = 'open'`,
       )
       .run(
+        strike,
         outcome.settle,
         status,
         outcome.feeMicros,
@@ -401,7 +511,7 @@ function closeRound(round: RoundRow): SettledEvent {
     status: outcome.resolution === "void" ? "void" : "settled",
     resolution: outcome.resolution,
     winningSide: outcome.winningSide,
-    strike: round.strike,
+    strike,
     settle: outcome.settle,
     feeMicros: outcome.feeMicros,
     payouts: outcome.payouts.map((payout) => ({
@@ -417,31 +527,82 @@ function closeRound(round: RoundRow): SettledEvent {
   }
 }
 
+function mix(seed: number) {
+  let state = seed >>> 0
+  return () => {
+    state = (Math.imul(state, 1664525) + 1013904223) >>> 0
+    return state / 4294967296
+  }
+}
+
+function seatBots(marketId: number, now: number): boolean {
+  const requested = botCount()
+  if (requested <= 0) return false
+  if (seatedMarket === marketId) return false
+  const seats = Math.max(requested, 2)
+  const present = new Set(
+    (
+      getDb()
+        .query(
+          `SELECT b.address FROM bets b JOIN users u ON u.address = b.address
+           WHERE b.round_id = ? AND u.is_bot = 1`,
+        )
+        .all(marketId) as { address: string }[]
+    ).map((row) => row.address),
+  )
+  const rng = mix(marketId + 1)
+  let seated = false
+  let missing = 0
+  for (let index = 0; index < seats; index++) {
+    const address = botAddress(index)
+    const side: Side = index === 0 ? "up" : index === 1 ? "down" : rng() < 0.5 ? "up" : "down"
+    const stake = STAKE_LADDER[Math.floor(rng() * STAKE_LADDER.length)]! * MIN_STAKE_MICROS
+    if (present.has(address)) continue
+    missing += 1
+    ensureBot(address, now)
+    const result = placeBet({ address, side, stakeMicros: stake, now })
+    if (result.ok) {
+      seated = true
+      missing -= 1
+    }
+  }
+  if (missing === 0) seatedMarket = marketId
+  return seated
+}
+
 export function advance(now: number): { settled: SettledEvent[]; broadcastRound: boolean } {
-  const currentId = roundIdAt(now)
+  const clock = clockAt(now)
   const settled: SettledEvent[] = []
-  let broadcastRound = cachedRoundId !== currentId
+  let broadcastRound = false
 
   const due = getDb()
-    .query("SELECT * FROM rounds WHERE status = 'open' AND id < ? ORDER BY id ASC")
-    .all(currentId) as RoundRow[]
+    .query("SELECT * FROM rounds WHERE status = 'open' AND ends_at <= ? ORDER BY id ASC")
+    .all(now) as RoundRow[]
   for (const round of due) settled.push(closeRound(round))
   if (settled.length) broadcastRound = true
 
-  ensureRound(currentId)
-  if (cachedRoundId !== currentId) cachedRoundId = currentId
+  if (clock.joinId !== null) ensureRound(clock.joinId)
+  if (clock.liveId >= 0) ensureRound(clock.liveId)
 
-  const current = getRound(currentId)
-  if (current && !current.strike) {
-    const print = priceAt(current.starts_at)
-    if (print) {
-      const result = getDb()
-        .query("UPDATE rounds SET strike = ? WHERE id = ? AND strike IS NULL")
-        .run(print.price, currentId)
-      if (result.changes > 0) broadcastRound = true
-    }
+  const locking = getDb()
+    .query("SELECT * FROM rounds WHERE status = 'open' AND strike IS NULL AND starts_at <= ?")
+    .all(now) as RoundRow[]
+  for (const round of locking) {
+    const print = priceAt(round.starts_at, round.ends_at - round.starts_at)
+    if (!print) continue
+    const result = getDb()
+      .query("UPDATE rounds SET strike = ? WHERE id = ? AND strike IS NULL")
+      .run(print.price, round.id)
+    if (result.changes > 0) broadcastRound = true
   }
 
+  if (clock.joinId !== null && feedStatus(now) === "live" && seatBots(clock.joinId, now)) broadcastRound = true
+
+  const key = `${clock.cycle}:${clock.windowOpen ? "bets" : "market"}`
+  if (key !== cachedKey) {
+    cachedKey = key
+    broadcastRound = true
+  }
   return { settled, broadcastRound }
 }
 
@@ -513,6 +674,7 @@ export function roundDetail(id: number) {
     side: bet.side,
     stakeMicros: bet.stake_micros,
     payoutMicros: bet.payout_micros,
+    bot: bet.is_bot === 1,
   }))
   return { round: mapHistory(round), bets }
 }

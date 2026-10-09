@@ -1,20 +1,22 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import type { TapeChart, TapePoint } from "./chart"
-import { formatMicros } from "./format"
-import type { Config, RoundSnapshot, SettledMessage, Side, You } from "./types"
+import { formatCents } from "./format"
+import type { Board, Config, SettledMessage, Side, You } from "./types"
 
 const ADDRESS_KEY = "qm.address"
 
 const defaultConfig: Config = {
-  roundSeconds: 10,
+  windowSeconds: 5,
+  marketSeconds: 5,
   feeBps: 25,
-  betCutoffMs: 1000,
   minStakeMicros: 1_000_000,
+  source: "binance",
+  botCount: 8,
 }
 
 export function useMarket() {
   const [address, setAddress] = useState<string | null>(() => localStorage.getItem(ADDRESS_KEY))
-  const [round, setRound] = useState<RoundSnapshot | null>(null)
+  const [board, setBoard] = useState<Board | null>(null)
   const [you, setYou] = useState<You | null>(null)
   const [config, setConfig] = useState<Config>(defaultConfig)
   const [feed, setFeed] = useState<"live" | "stale">("stale")
@@ -75,7 +77,7 @@ export function useMarket() {
       .then((response) => response.json())
       .then((body) => {
         if (cancel) return
-        setRound(body.round)
+        setBoard(body.board)
         setConfig(body.config)
         setFeed(body.feed)
         offsetRef.current = body.serverNow - Date.now()
@@ -108,7 +110,7 @@ export function useMarket() {
       socket.onmessage = (event) => {
         const message = JSON.parse(String(event.data)) as
           | { type: "tick"; price: string; exchangeTs: number; serverNow: number; feed: "live" | "stale" }
-          | { type: "round"; serverNow: number; feed: "live" | "stale"; round: RoundSnapshot }
+          | { type: "round"; serverNow: number; feed: "live" | "stale"; board: Board }
           | SettledMessage
         if ("serverNow" in message) offsetRef.current = message.serverNow - Date.now()
         if (message.type === "tick") {
@@ -116,22 +118,20 @@ export function useMarket() {
           pushTick(message.exchangeTs, message.price)
         } else if (message.type === "round") {
           setFeed(message.feed)
-          setRound(message.round)
+          setBoard(message.board)
         } else if (message.type === "settled") {
           const mine = message.payouts.find((payout) => payout.address === addressRef.current)
           const balance = message.balances.find((row) => row.address === addressRef.current)
-          if (balance) {
-            setYou((current) =>
-              current
-                ? {
-                    ...current,
-                    balanceMicros: balance.balanceMicros,
-                    openBet: current.openBet?.roundId === message.roundId ? null : current.openBet,
-                  }
-                : current,
-            )
-          }
-          setResult(describeResult(message, mine ?? null))
+          setYou((current) =>
+            current
+              ? {
+                  ...current,
+                  balanceMicros: balance?.balanceMicros ?? current.balanceMicros,
+                  openBets: current.openBets.filter((bet) => bet.roundId !== message.roundId),
+                }
+              : current,
+          )
+          if (mine) setResult(describeResult(message, mine))
           setHistoryVersion((value) => value + 1)
         }
       }
@@ -149,10 +149,19 @@ export function useMarket() {
     }
   }, [pushTick])
 
+  const openKey = you?.openBets.map((bet) => bet.roundId).join(",") ?? ""
+  const caught = useRef("")
   useEffect(() => {
-    const roundId = round?.id
-    const openRound = you?.openBet?.roundId
-    if (!address || !roundId || !openRound || openRound === roundId) return
+    if (!address || !board || !you?.openBets.length) return
+    const live = new Set<number>()
+    if (board.live) live.add(board.live.id)
+    if (board.join) live.add(board.join.id)
+    const stuck = you.openBets
+      .filter((bet) => !live.has(bet.roundId))
+      .map((bet) => bet.roundId)
+      .join(",")
+    if (!stuck || caught.current === stuck) return
+    caught.current = stuck
     let cancel = false
     fetch(`/api/state?address=${encodeURIComponent(address)}`)
       .then((response) => response.json())
@@ -163,7 +172,7 @@ export function useMarket() {
     return () => {
       cancel = true
     }
-  }, [address, round?.id, you?.openBet?.roundId])
+  }, [address, board, openKey, you?.openBets])
 
   const connect = useCallback((nextAddress: string) => {
     localStorage.setItem(ADDRESS_KEY, nextAddress)
@@ -189,7 +198,7 @@ export function useMarket() {
           return
         }
         setYou(body.you)
-        setRound(body.round)
+        setBoard(body.board)
         setResult(null)
       } catch {
         setError("Can't reach the market server")
@@ -240,7 +249,7 @@ export function useMarket() {
 
   return {
     address,
-    round,
+    board,
     you,
     config,
     feed,
@@ -256,29 +265,16 @@ export function useMarket() {
     fundWallet,
     withdrawWallet,
     bindChart,
-    setRoundOnChart: (chart: TapeChart, current: RoundSnapshot) => {
-      chart.setRound(current.startsAt, current.endsAt, current.strike === null ? null : Number(current.strike))
-    },
   }
 }
 
 function describeResult(event: SettledMessage, mine: SettledMessage["payouts"][number] | null): string {
-  if (event.resolution === "void") return mine ? "Void, refunded" : "Void"
-  if (event.winningSide === "push") return mine ? "Push, refunded" : "Push"
-  if (event.resolution === "refund") {
-    if (mine) return "Refunded"
-    if (event.winningSide === "up") return "Up, refund"
-    if (event.winningSide === "down") return "Down, refund"
-    return "Refunded"
-  }
-  if (!mine) {
-    if (event.winningSide === "up") return "Up won"
-    if (event.winningSide === "down") return "Down won"
-    return "Resolved"
-  }
+  if (event.resolution === "void") return "Void"
+  if (event.winningSide === "push" || !event.winningSide) return "Push"
+  if (!mine) return event.winningSide === "up" ? "Up" : "Down"
   const profit = mine.payoutMicros - mine.stakeMicros
   const label = mine.side === "up" ? "Up" : "Down"
-  if (profit === 0) return `${label} +0.00`
+  if (profit === 0) return label
   const sign = profit > 0 ? "+" : "−"
-  return `${label} ${sign}${formatMicros(Math.abs(profit))}`
+  return `${label} ${sign}${formatCents(profit)}`
 }

@@ -4,11 +4,11 @@ Simulated bitcoin up/down pools. One shared window, two sides, pari-mutuel payou
 
 ## Progress
 
-- [ ] Scaffold: Bun, SQLite, React shell
-- [ ] Live BTC tape and continuous chart
-- [ ] Rounds, pari-mutuel settlement, one-bet lock
-- [ ] Trading screen
-- [ ] History and demo wallet
+- [x] Scaffold: Bun, SQLite, React shell
+- [x] Live BTC tape and continuous chart
+- [x] Rounds, pari-mutuel settlement, overlapping window
+- [x] Trading screen
+- [x] History and demo wallet
 
 ## Run
 
@@ -20,16 +20,17 @@ bun run dev
 
 Open http://127.0.0.1:5173. The API listens on http://127.0.0.1:3001.
 
-`ROUND_SECONDS=5 bun run dev` switches the window to 5 seconds. The default is 10.
+`WINDOW_SECONDS` and `MARKET_SECONDS` both default to 5. `PRICE_SOURCE=binance` (or `coinbase`) picks the only price feed. `BOT_COUNT` defaults to 8.
 
 ## Rules
 
-- Rounds align to UTC. A new window opens as the previous one ends.
-- The line is the Binance `BTCUSDT` trade tape (Coinbase `BTC-USD` if Binance is silent for 2 seconds). The open is the price at the boundary. Green is above that open, red is below.
+- Time is a UTC block of window plus market. The first part is the betting window, and the previous market is still live on that same stretch. The second part is the new market, with betting closed.
+- The open prints when the window closes. That market settles when the next window closes. A player may hold the live market and still place the open window.
+- The line is one feed for the whole session: Binance `BTCUSDT` or Coinbase `BTC-USD`. The server does not switch between them. Green is above that market's open, red is below.
 - Stake is demo USDC. Your payout is your share of the winning side, after a 0.25% fee on the pot.
-- A tie, a one-sided pool, or a stale price refunds the stake. No fee on those.
-- One open bet per address. The next window stays locked until this one pays and the spendable balance updates.
-- Connect, Fund, and Withdraw move the demo balance only.
+- A tie is a push: stakes return, no fee. A market with no print across its whole life is void, and stakes return.
+- Bots, marked Bot, fill both sides of every window.
+- Connect, Fund, and Withdraw move the demo balance only. Withdraw spends only the spendable balance.
 
 ## Brief
 
