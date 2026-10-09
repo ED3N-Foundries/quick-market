@@ -778,7 +778,7 @@ function ResultToast({ event, address, onDone }: { event: SettledMessage; addres
 
   const tone = toastTone(event, mine.stakeMicros, mine.payoutMicros)
   const title = event.resolution === "void" ? "Void" : tone === "win" ? "You win" : tone === "loss" ? "Lost" : "= Push"
-  const move = event.strike && event.settle ? `${formatPrice(event.strike)} → ${formatPrice(event.settle)}` : null
+  const move = event.strike && event.settle ? moveText(event.strike, event.settle) : null
   return (
     <button type="button" className={`toast ${tone}`} onClick={onDone}>
       <span>
@@ -844,4 +844,15 @@ function toastTone(event: SettledMessage, stake: number, payout: number): string
   if (payout > stake) return "win"
   if (payout === 0) return "loss"
   return "push"
+}
+
+function moveText(strike: string, settle: string): string | null {
+  const delta = formatPriceDelta(settle, strike)
+  if (!delta) return null
+  const from = formatPrice(strike)
+  const to = formatPrice(settle)
+  if (delta.side === "push") return `${from} = ${to} ($0.00)`
+  const glyph = delta.side === "up" ? "▲" : "▼"
+  const sign = delta.side === "up" ? "+" : "−"
+  return `${from} ${glyph} ${to} (${sign}$${delta.text.slice(1)})`
 }

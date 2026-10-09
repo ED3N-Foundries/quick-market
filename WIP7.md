@@ -1,0 +1,1 @@
+Make it more clear price action in the toasts so show a down, up, or push (=) between the prices to show the clear difference of the price action what happened. Maybe include in parentheses what price diff happened (-$60) for example.
