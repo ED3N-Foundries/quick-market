@@ -15,3 +15,9 @@ Wallet code should go into the spendable box.
 Put dollar signs next to the items in the up down boxes. In my plays it should be gain/loss, so if I bet $10 and lost then it should show -$10, if I won then it would show $10+the winnings.
 
 Show an opacity lock over the left side once the market starts running so people know it's locked in.
+
+Remove the last market completing logic from the chart, it confuses people. We care about the markets we bet on only.
+
+Also, the market result push notifications should only show for markets we participated in and in that case it should be more contrasty so we see it but not modal blocking, so sit at the bottom of the page like real toasts. Allow them to stack if needed. Use some react toast lib or something like shadcn or whatevs if we have to.
+
+Make this pool table collapsable and default collapse it.
