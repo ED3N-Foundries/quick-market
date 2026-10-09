@@ -1,4 +1,4 @@
-import { HALF_FLOOR, halfSpan, type PricePoint } from "./scale"
+import { HALF_FLOOR, contentHalf, halfSpan, shownHalf, type PricePoint } from "./scale"
 
 export type TapePoint = PricePoint
 
@@ -62,8 +62,8 @@ export function mountChart(
   let running = true
   let raf = 0
   let scale: ChartScale | null = null
-  let smoothHalf = HALF_FLOOR
-  let smoothed = false
+  let shown = HALF_FLOOR
+  let scaled = false
   let lastBaseline: number | null = null
   let lastViewStart = 0
   let lastEaseAt = 0
@@ -96,23 +96,17 @@ export function mountChart(
     for (const listener of listeners) listener()
   }
 
-  function easeHalf(target: number, baseline: number | null, viewStart: number, viewEnd: number) {
+  function easeHalf(target: number, content: number, baseline: number | null, viewStart: number, viewEnd: number) {
     const stamp = performance.now()
     const dt = lastEaseAt ? stamp - lastEaseAt : 0
     lastEaseAt = stamp
     const span = Math.max(1, viewEnd - viewStart)
-    const jumped = smoothed && Math.abs(viewStart - lastViewStart) > span * 0.2
-    const baselineChanged = smoothed && baseline !== lastBaseline
-    let next = target
-    if (smoothed && !jumped && !baselineChanged) {
-      if (target > smoothHalf) next = target
-      else {
-        const k = 1 - Math.exp(-Math.max(0, dt) / EASE_MS)
-        next = smoothHalf + (target - smoothHalf) * k
-      }
-    }
-    smoothHalf = next
-    smoothed = true
+    const jumped = scaled && Math.abs(viewStart - lastViewStart) > span * 0.2
+    const baselineChanged = scaled && baseline !== lastBaseline
+    const k = 1 - Math.exp(-Math.max(0, dt) / EASE_MS)
+    const next = shownHalf(shown, target, content, k, !scaled || jumped || baselineChanged)
+    shown = next
+    scaled = true
     lastBaseline = baseline
     lastViewStart = viewStart
     return next
@@ -158,7 +152,7 @@ export function mountChart(
     const baseline = rawBaseline != null && Number.isFinite(rawBaseline) ? rawBaseline : null
     const lastReal = visible[visible.length - 1] ?? null
     const center = baseline ?? lastReal?.price ?? 0
-    const half = easeHalf(halfSpan(visible, center, now), baseline, viewStart, viewEnd)
+    const half = easeHalf(halfSpan(visible, center, now), contentHalf(visible, center, now), baseline, viewStart, viewEnd)
     const min = center - half
     const max = center + half
     const yAt = (price: number) => PAD.t + ((max - price) / (max - min)) * plotH
