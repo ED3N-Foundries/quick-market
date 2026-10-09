@@ -36,16 +36,16 @@ function board(over: Partial<Board> = {}): Board {
   }
 }
 
-test("with no open bet the chart stays on the betting window that has started", () => {
+test("with no open bet the chart rolls into the next session when the window ends", () => {
   const current = board()
   expect(followWindow(current, [], 12_000)).toEqual({ start: 10_000, end: 15_000 })
   expect(heldMarket(current, [], 12_000)).toBeNull()
   expect(focusPool(current, [], 12_000)?.id).toBe(2)
 
   const closed = board({ phase: "market", join: null })
-  expect(followWindow(closed, [], 15_001)).toEqual({ start: 10_000, end: 15_000 })
-  expect(followWindow(closed, [], 16_000)).toEqual({ start: 10_000, end: 15_000 })
-  expect(followWindow(closed, [], 19_000)).toEqual({ start: 10_000, end: 15_000 })
+  expect(followWindow(closed, [], 15_000)).toEqual({ start: 15_000, end: 20_000 })
+  expect(followWindow(closed, [], 16_000)).toEqual({ start: 15_000, end: 20_000 })
+  expect(followWindow(closed, [], 19_000)).toEqual({ start: 15_000, end: 20_000 })
   expect(focusPool(closed, [], 16_000)).toBeNull()
 
   const next = board({
@@ -61,11 +61,13 @@ test("with no open bet the chart stays on the betting window that has started", 
   expect(followWindow(next, [], 24_000)).toEqual({ start: 20_000, end: 25_000 })
 })
 
-test("the no-bet view is always exactly one betting window wide", () => {
+test("the no-bet view stays one window wide and always contains now", () => {
   const current = board()
-  for (let now = 10_000; now <= 30_000; now += 250) {
+  for (let now = 0; now <= 30_000; now += 250) {
     const frame = followWindow(current, [], now)
     expect(frame.end - frame.start).toBe(5_000)
+    expect(now).toBeGreaterThanOrEqual(frame.start)
+    expect(now).toBeLessThan(frame.end)
   }
 })
 
@@ -75,7 +77,7 @@ test("an open bet freezes the chart on that market until it settles", () => {
   expect(heldMarket(current, bet, 12_000)?.id).toBe(1)
   expect(followWindow(current, bet, 12_000)).toEqual({ start: 0, end: 15_000 })
   expect(focusPool(current, bet, 12_000)?.id).toBe(1)
-  expect(followWindow(current, bet, 15_000)).toEqual({ start: 10_000, end: 15_000 })
+  expect(followWindow(current, bet, 15_000)).toEqual({ start: 15_000, end: 20_000 })
   expect(heldMarket(current, bet, 15_000)).toBeNull()
 })
 

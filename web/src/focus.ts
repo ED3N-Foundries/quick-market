@@ -1,3 +1,5 @@
+import { betSession } from "./betChart"
+import { marketSession } from "./marketChart"
 import type { Band, Board, OpenBet, PoolCard } from "./types"
 
 function findMarket(board: Board, id: number): Band | null {
@@ -19,14 +21,13 @@ export function heldMarket(board: Board, openBets: OpenBet[], now: number): Band
   return best
 }
 
-/** Follow span for the chart. A held market stays fixed until it settles.
- *  With no bet, the chart shows the 5s betting window that has already
- *  started, and keeps it through the gap until the next one opens.
+/** Follow span for the chart. A held bet uses the market frame until it
+ *  settles. With no bet, the bet chart rolls into the next live session.
  */
 export function followWindow(board: Board, openBets: OpenBet[], now: number): { start: number; end: number } {
   const held = heldMarket(board, openBets, now)
-  if (held) return { start: held.betsOpen, end: held.settlesAt }
-  return { start: board.blockStart, end: board.windowEndsAt }
+  if (held) return marketSession(held)
+  return betSession(board, now)
 }
 
 /** Pool shown in the trade panel. A held market wins. Otherwise only the bet window. */

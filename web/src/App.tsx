@@ -143,7 +143,6 @@ export function App() {
             chart={chart}
             board={board}
             shade={heldSpan && now >= heldSpan.strikeAt ? { betsOpen: heldSpan.betsOpen, strikeAt: heldSpan.strikeAt } : null}
-            heldId={heldSpan?.id ?? null}
             openBets={openBets}
             feeBps={market.config.feeBps}
             hover={scrub.hover}
@@ -327,7 +326,6 @@ function ChartOverlay({
   chart,
   board,
   shade,
-  heldId,
   openBets,
   feeBps,
   hover,
@@ -335,7 +333,6 @@ function ChartOverlay({
   chart: TapeChart
   board: Board | null
   shade: { betsOpen: number; strikeAt: number } | null
-  heldId: number | null
   openBets: OpenBet[]
   feeBps: number
   hover: { t: number } | null
@@ -347,22 +344,6 @@ function ChartOverlay({
 
   return (
     <div className="chart-overlay">
-      {board.bands.map((band) => {
-        if (heldId != null && band.id !== heldId) return null
-        const left = Math.max(current.plotLeft, xAt(band.betsOpen))
-        const right = Math.min(current.plotLeft + current.plotWidth, xAt(band.strikeAt))
-        if (right - left < 2) return null
-        const open = heldId == null && band.id === board.join?.id && board.phase === "bets"
-        return (
-          <div
-            key={`w-${band.id}`}
-            className={open ? "window-span on" : "window-span"}
-            style={{ left, width: right - left, top: current.plotTop, height: current.plotHeight }}
-          >
-            {open && <span>Bets</span>}
-          </div>
-        )
-      })}
       {shade && <LockShade betsOpen={shade.betsOpen} strikeAt={shade.strikeAt} scale={current} xAt={xAt} />}
       {openBets.map((bet) => {
         const band = board.bands.find((row) => row.id === bet.roundId) ?? (board.join?.id === bet.roundId ? board.join : null)
@@ -816,7 +797,7 @@ function Replay({ row, windowMs, onClose }: { row: HistoryRound; windowMs: numbe
         </header>
         <section className="chart-wrap still" onPointerMove={scrub.move} onPointerLeave={scrub.clear}>
           <canvas ref={canvasRef} />
-          {chart && <ChartOverlay chart={chart} board={board} shade={null} heldId={null} openBets={[]} feeBps={0} hover={scrub.hover} />}
+          {chart && <ChartOverlay chart={chart} board={board} shade={null} openBets={[]} feeBps={0} hover={scrub.hover} />}
         </section>
         {failed && <p className="empty">Couldn't load this market.</p>}
         {bets && bets.length === 0 && <p className="empty">No bets in this pool.</p>}
