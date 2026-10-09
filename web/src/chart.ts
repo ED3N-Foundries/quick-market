@@ -132,27 +132,11 @@ export function mountChart(
     const xAt = (t: number) => PAD.l + ((t - viewStart) / span) * plotW
     const markets = options.getMarkets().filter((market) => market.settlesAt > viewStart && market.betsOpen < viewEnd)
 
-    const visible: TapePoint[] = []
-    let anchor: TapePoint | null = null
-    for (const point of points) {
-      if (point.t < viewStart) {
-        anchor = point
-        continue
-      }
-      if (anchor) {
-        visible.push(anchor)
-        anchor = null
-      }
-      if (point.t > viewEnd) break
-      visible.push(point)
-    }
-    if (anchor) visible.push(anchor)
-
+    const series = tapeInView(points, viewStart, viewEnd, now, options.extendLive(), view.follow)
     const rawOpen = openPrice(points, viewStart)
     const baseline = rawOpen != null && Number.isFinite(rawOpen) ? rawOpen : null
-    const lastReal = visible[visible.length - 1] ?? null
     const center = baseline ?? 0
-    const half = snapHalf(halfSpan(visible, center), contentHalf(visible, center), baseline, viewStart, viewEnd)
+    const half = snapHalf(halfSpan(series, center), contentHalf(series, center), baseline, viewStart, viewEnd)
     const min = center - half
     const max = center + half
     const yAt = (price: number) => PAD.t + ((max - price) / (max - min)) * plotH
@@ -185,9 +169,6 @@ export function mountChart(
     ctx.beginPath()
     ctx.rect(PAD.l, PAD.t, plotW, plotH)
     ctx.clip()
-
-    const liveHead = options.extendLive() && !!lastReal && now > lastReal.t && now >= viewStart && now <= viewEnd
-    const series = stepped(visible, liveHead && lastReal ? { t: Math.min(now, viewEnd), price: lastReal.price } : null)
 
     if (!series.length) {
       ctx.fillStyle = "rgba(243,240,232,0.45)"
@@ -303,6 +284,44 @@ export function mountChart(
       return { price: point.price, at: point.t, previous }
     },
   }
+}
+
+/** Step series for one view. A print from before the window is held at the left edge.
+ *  While now is inside the view, the live head runs to now. A follow view that
+ *  now has passed holds the last price to the right edge. A view still in the
+ *  future is not filled across.
+ */
+export function tapeInView(
+  points: TapePoint[],
+  viewStart: number,
+  viewEnd: number,
+  now: number,
+  extendLive: boolean,
+  follow: boolean,
+): TapePoint[] {
+  const visible: TapePoint[] = []
+  let anchor: TapePoint | null = null
+  for (const point of points) {
+    if (point.t < viewStart) {
+      anchor = point
+      continue
+    }
+    if (anchor) {
+      visible.push({ t: viewStart, price: anchor.price })
+      anchor = null
+    }
+    if (point.t > viewEnd) break
+    visible.push(point)
+  }
+  if (anchor) visible.push({ t: viewStart, price: anchor.price })
+
+  const last = visible[visible.length - 1] ?? null
+  let head: TapePoint | null = null
+  if (extendLive && last && now > last.t) {
+    if (now >= viewStart && now <= viewEnd) head = { t: now, price: last.price }
+    else if (follow && now > viewEnd) head = { t: viewEnd, price: last.price }
+  }
+  return stepped(visible, head)
 }
 
 function stepped(points: TapePoint[], head: TapePoint | null): TapePoint[] {

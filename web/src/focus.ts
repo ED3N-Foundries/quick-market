@@ -20,17 +20,13 @@ export function heldMarket(board: Board, openBets: OpenBet[], now: number): Band
 }
 
 /** Follow span for the chart. A held market stays fixed until it settles.
- *  With no bet, the chart only ever shows one 5s betting window: the one
- *  that is open, or the next one once the market stretch starts.
+ *  With no bet, the chart shows the 5s betting window that has already
+ *  started, and keeps it through the gap until the next one opens.
  */
 export function followWindow(board: Board, openBets: OpenBet[], now: number): { start: number; end: number } {
   const held = heldMarket(board, openBets, now)
   if (held) return { start: held.betsOpen, end: held.settlesAt }
-  const start = board.blockStart
-  const windowEnd = board.windowEndsAt
-  if (now <= windowEnd) return { start, end: windowEnd }
-  const span = Math.max(1, windowEnd - start)
-  return { start: board.blockEnd, end: board.blockEnd + span }
+  return { start: board.blockStart, end: board.windowEndsAt }
 }
 
 /** Pool shown in the trade panel. A held market wins. Otherwise only the bet window. */

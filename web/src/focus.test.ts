@@ -36,17 +36,29 @@ function board(over: Partial<Board> = {}): Board {
   }
 }
 
-test("with no open bet the chart rolls from one 5s betting window to the next", () => {
+test("with no open bet the chart stays on the betting window that has started", () => {
   const current = board()
   expect(followWindow(current, [], 12_000)).toEqual({ start: 10_000, end: 15_000 })
   expect(heldMarket(current, [], 12_000)).toBeNull()
   expect(focusPool(current, [], 12_000)?.id).toBe(2)
 
   const closed = board({ phase: "market", join: null })
-  expect(followWindow(closed, [], 15_001)).toEqual({ start: 20_000, end: 25_000 })
-  expect(followWindow(closed, [], 16_000)).toEqual({ start: 20_000, end: 25_000 })
-  expect(followWindow(closed, [], 20_000)).toEqual({ start: 20_000, end: 25_000 })
+  expect(followWindow(closed, [], 15_001)).toEqual({ start: 10_000, end: 15_000 })
+  expect(followWindow(closed, [], 16_000)).toEqual({ start: 10_000, end: 15_000 })
+  expect(followWindow(closed, [], 19_000)).toEqual({ start: 10_000, end: 15_000 })
   expect(focusPool(closed, [], 16_000)).toBeNull()
+
+  const next = board({
+    blockStart: 20_000,
+    blockEnd: 30_000,
+    windowEndsAt: 25_000,
+    phase: "bets",
+    join: card(band(3, 20_000)),
+    live: card(band(2, 10_000, "101")),
+    bands: [],
+  })
+  expect(followWindow(next, [], 20_000)).toEqual({ start: 20_000, end: 25_000 })
+  expect(followWindow(next, [], 24_000)).toEqual({ start: 20_000, end: 25_000 })
 })
 
 test("the no-bet view is always exactly one betting window wide", () => {

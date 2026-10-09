@@ -120,7 +120,7 @@ button.primary, .wallet .primary {
 .chart-wrap:active { cursor: grabbing; }
 .chart-wrap canvas { width: 100%; height: 100%; display: block; }
 .chart-overlay { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
-.window-span, .pots, .chip, .ytick { position: absolute; }
+.window-span, .chip, .ytick { position: absolute; }
 .window-span {
   background: rgba(243, 240, 232, 0.035);
   border-top: 2px solid rgba(243, 240, 232, 0.16);
@@ -138,20 +138,7 @@ button.primary, .wallet .primary {
   letter-spacing: 0.12em;
   text-transform: uppercase;
 }
-.pots, .chip, .ytick { font-size: 11px; font-variant-numeric: tabular-nums; }
-.pots {
-  margin: 0;
-  color: var(--text);
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  line-height: 1.2;
-  overflow: hidden;
-  white-space: nowrap;
-  padding: 3px 6px;
-  border-radius: 8px;
-  background: rgba(9, 10, 12, 0.88);
-}
+.chip, .ytick { font-size: 11px; font-variant-numeric: tabular-nums; }
 .chip {
   margin: 0;
   display: flex;
@@ -167,30 +154,6 @@ button.primary, .wallet .primary {
 .chip.down strong { color: var(--down); }
 .chip span { color: var(--muted); }
 .ytick { color: var(--muted); transform: translateY(-50%); }
-.market-tag {
-  position: absolute;
-  margin: 0;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 8px;
-  align-items: baseline;
-  padding: 4px 7px;
-  border-radius: 8px;
-  background: rgba(9, 10, 12, 0.88);
-  color: var(--muted);
-  font-size: 11px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  line-height: 1.3;
-  white-space: nowrap;
-  overflow: hidden;
-}
-.market-tag b {
-  font-weight: 600;
-  letter-spacing: 0;
-  text-transform: none;
-  font-variant-numeric: tabular-nums;
-}
 .lock-shade {
   position: absolute;
   display: flex;
