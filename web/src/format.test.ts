@@ -40,7 +40,7 @@ test("payoutMicros matches a paid pool and refunds a one-sided pool", () => {
 test("quoteDollar prices one dollar and says when it only comes back", () => {
   expect(quoteDollar("up", 0, 0, 25)).toBe("$1 back")
   expect(quoteDollar("up", 50_000_000, 0, 25)).toBe("$1 back")
-  expect(quoteDollar("up", 50_000_000, 100_000_000, 25)).toBe("$1 = $2.95")
+  expect(quoteDollar("up", 50_000_000, 100_000_000, 25)).toBe("$1 can win $2.95")
 })
 
 test("parseAmountMicros rejects empty and non-positive amounts", () => {

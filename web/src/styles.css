@@ -274,9 +274,17 @@ button.primary, .wallet .primary {
   margin-top: auto;
   min-height: 64px;
   border: 0;
-  font-size: 22px;
-  letter-spacing: 0.04em;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  font-variant-numeric: tabular-nums;
 }
+.side button .arrow { font-size: 16px; line-height: 1; }
 .side.up button { background: var(--up); color: var(--up-ink); }
 .side.down button { background: var(--down); color: var(--down-ink); }
 

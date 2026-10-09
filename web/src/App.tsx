@@ -349,9 +349,9 @@ function ChartOverlay({
     <div className="chart-overlay">
       {board.bands.map((band) => {
         if (heldId != null && band.id !== heldId) return null
-        const left = xAt(band.betsOpen)
-        const right = xAt(band.strikeAt)
-        if (right - left < 2 || right < 0 || left > current.width) return null
+        const left = Math.max(current.plotLeft, xAt(band.betsOpen))
+        const right = Math.min(current.plotLeft + current.plotWidth, xAt(band.strikeAt))
+        if (right - left < 2) return null
         const open = heldId == null && band.id === board.join?.id && board.phase === "bets"
         return (
           <div
@@ -611,7 +611,8 @@ function SideCard(props: {
       </p>
       <p className="to-win">{props.quote}</p>
       <button type="button" disabled={props.disabled} onClick={props.onBet}>
-        {up ? "Bet up" : "Bet down"}
+        <span className="arrow" aria-hidden="true">{up ? "▲" : "▼"}</span>
+        <span>{up ? "Bet up" : "Bet down"}</span>
       </button>
     </article>
   )
