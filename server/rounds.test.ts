@@ -1,7 +1,7 @@
 import { beforeEach, expect, test } from "bun:test"
 import { useDatabase } from "./db"
 import { parseMicros } from "./money"
-import { advance, board, ensureUser, feedStatus, notePrint, placeBet, resetRuntime, withdraw, youFor, type Print } from "./rounds"
+import { advance, board, ensureUser, feedStatus, notePrint, placeBet, resetRuntime, roundDetail, withdraw, youFor, type Print } from "./rounds"
 
 const USDC = 1_000_000
 const T = 10_000_000_000_000
@@ -144,6 +144,21 @@ test("bots take both sides once per window", () => {
   advance(T + 80)
   const again = board(T + 90).join
   expect((again?.poolUpMicros ?? 0) + (again?.poolDownMicros ?? 0)).toBe(pot)
+})
+
+test("round detail includes the tape and the price held into the open", () => {
+  notePrint(print("99.50", T - 50))
+  advance(T + 10)
+  notePrint(print("100.25", T + WINDOW + 2_000))
+  notePrint(print("100.75", T + WINDOW + BLOCK - 500))
+  advance(T + WINDOW + BLOCK + 5)
+  const detail = roundDetail(MARKET_ID)
+  expect(detail).not.toBeNull()
+  const tape = detail?.tape ?? []
+  expect(tape[0]).toEqual({ t: T - 50, price: "99.50" })
+  expect(tape.map((point) => point.price)).toContain("100.25")
+  expect(tape.map((point) => point.price)).toContain("100.75")
+  expect(tape.every((point) => point.t <= T + WINDOW + BLOCK)).toBe(true)
 })
 
 test("insufficient balance does not open a bet", () => {

@@ -666,6 +666,29 @@ export function listRounds(limit: number, address?: string | null, mine = false)
   return rows.map(mapHistory)
 }
 
+function roundTape(round: RoundRow): { t: number; price: string }[] {
+  const bounds = marketBounds(round.id)
+  const from = bounds.betsOpen
+  const to = round.ends_at
+  const byTime = new Map<number, string>()
+  const rows = getDb()
+    .query(
+      `SELECT exchange_ts AS t, price FROM ticks
+       WHERE second_ts >= ? AND second_ts <= ?
+       ORDER BY second_ts ASC`,
+    )
+    .all(Math.floor(from / 1000), Math.floor(to / 1000)) as { t: number; price: string }[]
+  for (const row of rows) byTime.set(row.t, row.price)
+  for (const print of prints) {
+    if (print.exchangeTs < from || print.exchangeTs > to) continue
+    byTime.set(print.exchangeTs, print.price)
+  }
+  const life = Math.max(1_000, round.ends_at - round.starts_at)
+  const held = priceAt(round.starts_at, life)
+  if (held) byTime.set(held.exchangeTs, held.price)
+  return [...byTime.entries()].sort((left, right) => left[0] - right[0]).map(([t, price]) => ({ t, price }))
+}
+
 export function roundDetail(id: number) {
   const round = getRound(id)
   if (!round) return null
@@ -676,5 +699,5 @@ export function roundDetail(id: number) {
     payoutMicros: bet.payout_micros,
     bot: bet.is_bot === 1,
   }))
-  return { round: mapHistory(round), bets }
+  return { round: mapHistory(round), bets, tape: roundTape(round) }
 }

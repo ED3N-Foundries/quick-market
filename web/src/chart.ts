@@ -1,4 +1,6 @@
-export type TapePoint = { t: number; price: number }
+import { HALF_FLOOR, halfSpan, type PricePoint } from "./scale"
+
+export type TapePoint = PricePoint
 
 export type MarketSpan = {
   id: number
@@ -22,10 +24,15 @@ export type ChartScale = {
   ticks: { price: number; y: number; label: string }[]
 }
 
+export type TapeSample = { price: number; at: number; previous: number | null }
+
 export type TapeChart = {
   reset(points: TapePoint[]): void
   push(t: number, price: number): void
   destroy(): void
+  subscribe(listener: () => void): () => void
+  getScale(): ChartScale | null
+  sample(t: number): TapeSample | null
 }
 
 type View = { follow: boolean; start: number; end: number }
@@ -38,23 +45,7 @@ const NEUTRAL = "rgba(243,240,232,0.7)"
 const STRIKE = "rgba(243,240,232,0.55)"
 const PAD = { l: 12, r: 68, t: 16, b: 22 }
 const TAPE_MS = 15 * 60 * 1000
-
-let scale: ChartScale | null = null
-const listeners = new Set<() => void>()
-
-export function subscribeScale(listener: () => void) {
-  listeners.add(listener)
-  return () => listeners.delete(listener)
-}
-
-export function getScale() {
-  return scale
-}
-
-function publish(next: ChartScale) {
-  scale = next
-  for (const listener of listeners) listener()
-}
+const EASE_MS = 1_000
 
 export function mountChart(
   canvas: HTMLCanvasElement,
@@ -63,11 +54,20 @@ export function mountChart(
     getView: () => View
     getClock: () => { blockStart: number; blockEnd: number } | null
     getMarkets: () => MarketSpan[]
+    getBaseline: () => number | null
+    extendLive: () => boolean
   },
 ): TapeChart {
   let points: TapePoint[] = []
   let running = true
   let raf = 0
+  let scale: ChartScale | null = null
+  let smoothHalf = HALF_FLOOR
+  let smoothed = false
+  let lastBaseline: number | null = null
+  let lastViewStart = 0
+  let lastEaseAt = 0
+  const listeners = new Set<() => void>()
 
   const resize = () => {
     const rect = canvas.getBoundingClientRect()
@@ -91,6 +91,33 @@ export function mountChart(
   }
   raf = requestAnimationFrame(frame)
 
+  function publish(next: ChartScale) {
+    scale = next
+    for (const listener of listeners) listener()
+  }
+
+  function easeHalf(target: number, baseline: number | null, viewStart: number, viewEnd: number) {
+    const stamp = performance.now()
+    const dt = lastEaseAt ? stamp - lastEaseAt : 0
+    lastEaseAt = stamp
+    const span = Math.max(1, viewEnd - viewStart)
+    const jumped = smoothed && Math.abs(viewStart - lastViewStart) > span * 0.2
+    const baselineChanged = smoothed && baseline !== lastBaseline
+    let next = target
+    if (smoothed && !jumped && !baselineChanged) {
+      if (target > smoothHalf) next = target
+      else {
+        const k = 1 - Math.exp(-Math.max(0, dt) / EASE_MS)
+        next = smoothHalf + (target - smoothHalf) * k
+      }
+    }
+    smoothHalf = next
+    smoothed = true
+    lastBaseline = baseline
+    lastViewStart = viewStart
+    return next
+  }
+
   function draw() {
     const ctx = canvas.getContext("2d")
     if (!ctx) return
@@ -112,42 +139,28 @@ export function mountChart(
     const markets = options.getMarkets().filter((market) => market.settlesAt > viewStart && market.betsOpen < viewEnd)
 
     const visible: TapePoint[] = []
-    let previous: TapePoint | null = null
+    let anchor: TapePoint | null = null
     for (const point of points) {
       if (point.t < viewStart) {
-        previous = point
+        anchor = point
         continue
       }
-      if (previous) {
-        visible.push(previous)
-        previous = null
+      if (anchor) {
+        visible.push(anchor)
+        anchor = null
       }
       if (point.t > viewEnd) break
       visible.push(point)
     }
+    if (anchor) visible.push(anchor)
 
-    let min = Infinity
-    let max = -Infinity
-    for (const point of visible) {
-      min = Math.min(min, point.price)
-      max = Math.max(max, point.price)
-    }
-    for (const market of markets) {
-      if (market.strike === null) continue
-      if (market.settlesAt < viewStart || market.strikeAt > viewEnd) continue
-      min = Math.min(min, market.strike)
-      max = Math.max(max, market.strike)
-    }
-    if (!Number.isFinite(min) || !Number.isFinite(max)) {
-      min = 0
-      max = 1
-    }
-    const mid = (min + max) / 2
-    const raw = Math.max(max - min, 0)
-    const priceSpan = raw > 0 ? raw : Math.max(Math.abs(mid) * 0.00001, 0.01)
-    const yPad = priceSpan * 0.12
-    min = mid - priceSpan / 2 - yPad
-    max = mid + priceSpan / 2 + yPad
+    const rawBaseline = options.getBaseline()
+    const baseline = rawBaseline != null && Number.isFinite(rawBaseline) ? rawBaseline : null
+    const lastReal = visible[visible.length - 1] ?? null
+    const center = baseline ?? lastReal?.price ?? 0
+    const half = easeHalf(halfSpan(visible, center, now), baseline, viewStart, viewEnd)
+    const min = center - half
+    const max = center + half
     const yAt = (price: number) => PAD.t + ((max - price) / (max - min)) * plotH
     const ticks = priceTicks(min, max).map((tick) => ({ ...tick, y: yAt(tick.price) }))
 
@@ -174,12 +187,20 @@ export function mountChart(
       ctx.stroke()
     }
 
-    if (!visible.length) {
+    ctx.save()
+    ctx.beginPath()
+    ctx.rect(PAD.l, PAD.t, plotW, plotH)
+    ctx.clip()
+
+    const liveHead = options.extendLive() && !!lastReal && now > lastReal.t && now >= viewStart && now <= viewEnd
+    const series = stepped(visible, liveHead && lastReal ? { t: Math.min(now, viewEnd), price: lastReal.price } : null)
+
+    if (!series.length) {
       ctx.fillStyle = "rgba(243,240,232,0.45)"
       ctx.font = "13px ui-sans-serif, system-ui, sans-serif"
       ctx.fillText("Waiting for the price", PAD.l, PAD.t + 18)
     } else {
-      const path = visible.map((point) => ({ ...point, x: xAt(point.t), y: yAt(point.price) }))
+      const path = series.map((point) => ({ ...point, x: xAt(point.t), y: yAt(point.price) }))
       for (const market of markets) {
         if (market.strike === null) continue
         const x0 = xAt(Math.max(market.strikeAt, viewStart))
@@ -216,25 +237,27 @@ export function mountChart(
         const b = path[i]
         if (a && b) strokePair(ctx, a, b, markets)
       }
-
-      const last = path[path.length - 1]
-      if (last) {
-        const market = marketAt(markets, last.t)
-        const color = market?.strike == null ? NEUTRAL : last.price >= market.strike ? UP : DOWN
-        ctx.fillStyle = color
-        ctx.beginPath()
-        ctx.arc(last.x, last.y, 3.5, 0, Math.PI * 2)
-        ctx.fill()
-      }
     }
 
-    if (now >= viewStart && now <= viewEnd) {
+    if (options.extendLive() && now >= viewStart && now <= viewEnd) {
       ctx.strokeStyle = "rgba(243,240,232,0.28)"
+      ctx.lineWidth = 1
       ctx.beginPath()
       ctx.moveTo(xAt(now), PAD.t)
       ctx.lineTo(xAt(now), PAD.t + plotH)
       ctx.stroke()
     }
+
+    const last = series.length ? series[series.length - 1] : null
+    if (last) {
+      const market = marketAt(markets, last.t)
+      const color = market?.strike == null ? NEUTRAL : last.price >= market.strike ? UP : DOWN
+      ctx.fillStyle = color
+      ctx.beginPath()
+      ctx.arc(xAt(last.t), yAt(last.price), 3.5, 0, Math.PI * 2)
+      ctx.fill()
+    }
+    ctx.restore()
 
     ctx.fillStyle = "rgba(243,240,232,0.45)"
     ctx.font = "11px ui-sans-serif, system-ui, sans-serif"
@@ -267,8 +290,57 @@ export function mountChart(
       running = false
       cancelAnimationFrame(raf)
       observer.disconnect()
+      listeners.clear()
+    },
+    subscribe(listener) {
+      listeners.add(listener)
+      return () => listeners.delete(listener)
+    },
+    getScale() {
+      return scale
+    },
+    sample(t) {
+      const index = latestIndex(points, t)
+      if (index < 0) return null
+      const point = points[index]
+      if (!point) return null
+      const previous = index > 0 ? (points[index - 1]?.price ?? null) : null
+      return { price: point.price, at: point.t, previous }
     },
   }
+}
+
+function stepped(points: TapePoint[], head: TapePoint | null): TapePoint[] {
+  if (!points.length) return []
+  const out: TapePoint[] = []
+  for (let i = 0; i < points.length; i++) {
+    const point = points[i]
+    if (!point) continue
+    const previous = out[out.length - 1]
+    if (previous && point.price !== previous.price) out.push({ t: point.t, price: previous.price })
+    out.push(point)
+  }
+  const last = out[out.length - 1]
+  if (head && last && head.t > last.t) out.push(head)
+  return out
+}
+
+function latestIndex(points: TapePoint[], t: number): number {
+  let lo = 0
+  let hi = points.length - 1
+  let found = -1
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1
+    const point = points[mid]
+    if (!point) break
+    if (point.t <= t) {
+      found = mid
+      lo = mid + 1
+    } else {
+      hi = mid - 1
+    }
+  }
+  return found
 }
 
 function priceTicks(min: number, max: number): { price: number; label: string }[] {
@@ -305,6 +377,7 @@ function marketAt(markets: MarketSpan[], t: number): MarketSpan | null {
 }
 
 function strokePair(ctx: CanvasRenderingContext2D, a: XY, b: XY, markets: MarketSpan[]) {
+  if (a.t === b.t && a.price === b.price) return
   const cuts: number[] = []
   for (const market of markets) {
     if (market.strikeAt > a.t && market.strikeAt < b.t) cuts.push(market.strikeAt)
@@ -320,7 +393,7 @@ function strokePair(ctx: CanvasRenderingContext2D, a: XY, b: XY, markets: Market
       return
     }
   }
-  const market = marketAt(markets, (a.t + b.t) / 2)
+  const market = marketAt(markets, a.t === b.t ? a.t : (a.t + b.t) / 2)
   if (!market || market.strike === null) {
     ctx.strokeStyle = NEUTRAL
     trace(ctx, a, b)
@@ -361,6 +434,7 @@ function splitAt(a: XY, b: XY, t: number): XY | null {
 }
 
 function fillSegment(ctx: CanvasRenderingContext2D, a: XY, b: XY, strike: number, strikeY: number) {
+  if (a.t === b.t) return
   if ((a.price - strike) * (b.price - strike) < 0) {
     const ratio = (strike - a.price) / (b.price - a.price)
     const mid: XY = {

@@ -1,7 +1,7 @@
-import { Fragment, useEffect, useRef, useState, useSyncExternalStore, type PointerEvent as ReactPointerEvent, type RefObject } from "react"
-import { getScale, mountChart, subscribeScale, type TapeChart } from "./chart"
-import { botLabel, formatCents, formatClock, formatMicros, formatPrice, microsToInput, moneyShare, quotePair, randomAddress, shortAddress, sourceLabel, takeMicros } from "./format"
-import type { Band, Board, HistoryRound, OpenBet, Side } from "./types"
+import { useEffect, useRef, useState, useSyncExternalStore, type PointerEvent as ReactPointerEvent, type RefObject } from "react"
+import { mountChart, type ChartScale, type TapeChart, type TapeSample } from "./chart"
+import { botLabel, formatCents, formatClock, formatMicros, formatPrice, formatSigned, microsToInput, moneyShare, quotePair, randomAddress, shortAddress, sourceLabel, takeMicros } from "./format"
+import type { Band, Board, HistoryRound, OpenBet, SettledMessage, Side } from "./types"
 import { useMarket } from "./useMarket"
 
 export function App() {
@@ -10,15 +10,17 @@ export function App() {
   const chartRef = useRef<TapeChart | null>(null)
   const viewRef = useRef({ follow: true, start: 0, end: 0 })
   const boardRef = useRef(market.board)
+  const [chart, setChart] = useState<TapeChart | null>(null)
   const [stake, setStake] = useState("10")
   const [withdrawAmount, setWithdrawAmount] = useState("")
   const [following, setFollowing] = useState(true)
+  const scrub = useScrub(chart)
   boardRef.current = market.board
 
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
-    const chart = mountChart(canvas, {
+    const next = mountChart(canvas, {
       getNow: () => Date.now() + market.offsetRef.current,
       getView: () => viewRef.current,
       getClock: () => {
@@ -33,12 +35,16 @@ export function App() {
           settlesAt: band.settlesAt,
           strike: band.strike === null ? null : Number(band.strike),
         })),
+      getBaseline: () => baselineOf(boardRef.current),
+      extendLive: () => true,
     })
-    chartRef.current = chart
-    market.bindChart(chart)
+    chartRef.current = next
+    setChart(next)
+    market.bindChart(next)
     return () => {
-      chart.destroy()
+      next.destroy()
       chartRef.current = null
+      setChart(null)
       market.bindChart(null)
     }
   }, [market.bindChart, market.offsetRef])
@@ -56,8 +62,9 @@ export function App() {
   }
 
   function onPointerDown(event: ReactPointerEvent<HTMLElement>) {
-    const current = getScale()
+    const current = chartRef.current?.getScale()
     if (!current || event.button !== 0) return
+    scrub.clear()
     const originX = event.clientX
     const origin = { start: current.viewStart, end: current.viewEnd, width: current.plotWidth }
     const target = event.currentTarget
@@ -107,9 +114,18 @@ export function App() {
         </div>
       </header>
 
-      <section className="chart-wrap" onPointerDown={onPointerDown}>
+      <section className="chart-wrap" onPointerDown={onPointerDown} onPointerMove={scrub.move} onPointerLeave={scrub.clear}>
         <canvas ref={canvasRef} />
-        <ChartOverlay board={board} openBets={you?.openBets ?? []} feeBps={market.config.feeBps} />
+        {chart && (
+          <ChartOverlay
+            chart={chart}
+            board={board}
+            halves
+            openBets={you?.openBets ?? []}
+            feeBps={market.config.feeBps}
+            hover={scrub.hover}
+          />
+        )}
         {market.feed === "stale" && <p className="feed-flag">Price delayed</p>}
         {!following && (
           <button
@@ -200,7 +216,8 @@ export function App() {
         )}
       </section>
 
-      <History address={market.address} version={market.historyVersion} />
+      <History address={market.address} version={market.historyVersion} windowMs={market.config.windowSeconds * 1000} />
+      {market.notice && <Reveal event={market.notice} address={market.address} onDone={market.dismissNotice} />}
 
       <footer className="footer">
         <p>{(market.config.feeBps / 100).toFixed(2)}% fee on a paid pool.</p>
@@ -225,12 +242,25 @@ export function App() {
   )
 }
 
-function ChartOverlay({ board, openBets, feeBps }: { board: Board | null; openBets: OpenBet[]; feeBps: number }) {
-  const current = useSyncExternalStore(subscribeScale, getScale, getScale)
+function ChartOverlay({
+  chart,
+  board,
+  halves,
+  openBets,
+  feeBps,
+  hover,
+}: {
+  chart: TapeChart
+  board: Board | null
+  halves: boolean
+  openBets: OpenBet[]
+  feeBps: number
+  hover: { t: number } | null
+}) {
+  const current = useSyncExternalStore(chart.subscribe, chart.getScale, chart.getScale)
   if (!current || !board) return null
   const span = Math.max(1, current.viewEnd - current.viewStart)
   const xAt = (t: number) => current.plotLeft + ((t - current.viewStart) / span) * current.plotWidth
-  const featured = new Set([board.live?.id, board.join?.id].filter((id): id is number => id !== undefined))
 
   return (
     <div className="chart-overlay">
@@ -249,20 +279,7 @@ function ChartOverlay({ board, openBets, feeBps }: { board: Board | null; openBe
           </div>
         )
       })}
-      {board.bands.map((band) => {
-        if (!featured.has(band.id)) return null
-        const left = xAt(Math.max(band.strikeAt, current.viewStart))
-        const right = xAt(Math.min(band.settlesAt, current.viewEnd))
-        if (right - left < 8) return null
-        const room = right - left - 16
-        if (room < 36) return null
-        return (
-          <p className="pots" key={`p-${band.id}`} style={{ left: left + 8, top: current.plotTop + 8, maxWidth: room }}>
-            <span>Up {formatMicros(band.poolUpMicros)}</span>
-            <span>Down {formatMicros(band.poolDownMicros)}</span>
-          </p>
-        )
-      })}
+      {halves && <HalfLabels board={board} scale={current} xAt={xAt} />}
       {openBets.map((bet) => {
         const band = board.bands.find((row) => row.id === bet.roundId) ?? (board.join?.id === bet.roundId ? board.join : null)
         if (!band) return null
@@ -278,11 +295,95 @@ function ChartOverlay({ board, openBets, feeBps }: { board: Board | null; openBe
         )
       })}
       {current.ticks.map((tick) => (
-        <span key={tick.label} className="ytick" style={{ top: tick.y, right: 8 }}>
+        <span key={`${tick.price}`} className="ytick" style={{ top: tick.y, right: 8 }}>
           {tick.label}
         </span>
       ))}
+      {hover && <Scrub scale={current} xAt={xAt} hover={hover} sample={chart.sample(hover.t)} bands={board.bands} />}
     </div>
+  )
+}
+
+function HalfLabels({
+  board,
+  scale,
+  xAt,
+}: {
+  board: Board
+  scale: ChartScale
+  xAt: (t: number) => number
+}) {
+  const plotRight = scale.plotLeft + scale.plotWidth
+  const plotBottom = scale.plotTop + scale.plotHeight
+  const left = xAt(board.blockStart)
+  const mid = xAt(board.windowEndsAt)
+  const right = xAt(board.blockEnd)
+  const completing = marketSettlingAt(board, board.windowEndsAt)
+  const current = marketStrikingAt(board, board.windowEndsAt)
+  const leftVisL = Math.max(left, scale.plotLeft)
+  const leftVisR = Math.min(mid, plotRight)
+  const rightVisL = Math.max(mid, scale.plotLeft)
+  const rightVisR = Math.min(right, plotRight)
+
+  return (
+    <>
+      {completing && leftVisR - leftVisL >= 48 && (
+        <p className="market-tag" style={{ left: leftVisL + 8, top: scale.plotTop + 8, maxWidth: plotRight - leftVisL - 16 }}>
+          <span>Last market completing</span>
+          <b className="up">Up {formatMicros(completing.poolUpMicros)}</b>
+          <b className="down">Down {formatMicros(completing.poolDownMicros)}</b>
+        </p>
+      )}
+      {current && rightVisR - rightVisL >= 48 && (
+        <p className="market-tag" style={{ left: rightVisL + 8, top: plotBottom - 28, maxWidth: rightVisR - rightVisL - 16 }}>
+          <span>Current market</span>
+          {(current.poolUpMicros > 0 || current.poolDownMicros > 0) && (
+            <>
+              <b className="up">Up {formatMicros(current.poolUpMicros)}</b>
+              <b className="down">Down {formatMicros(current.poolDownMicros)}</b>
+            </>
+          )}
+        </p>
+      )}
+    </>
+  )
+}
+
+function Scrub({
+  scale,
+  xAt,
+  hover,
+  sample,
+  bands,
+}: {
+  scale: ChartScale
+  xAt: (t: number) => number
+  hover: { t: number }
+  sample: TapeSample | null
+  bands: Band[]
+}) {
+  if (!sample) return null
+  const x = xAt(hover.t)
+  if (x < scale.plotLeft || x > scale.plotLeft + scale.plotWidth) return null
+  const market = bands.find((band) => band.strike !== null && hover.t >= band.strikeAt && hover.t < band.settlesAt) ?? null
+  const strike = market?.strike != null ? Number(market.strike) : null
+  const fromOpen = strike == null ? null : sample.price - strike
+  const side = fromOpen == null ? null : fromOpen > 0 ? "up" : fromOpen < 0 ? "down" : "flat"
+  const cardLeft = x > scale.plotLeft + scale.plotWidth - 150 ? x - 140 : x + 8
+  return (
+    <>
+      <div className="scrub-line" style={{ left: x, top: scale.plotTop, height: scale.plotHeight }} />
+      <p className="scrub" style={{ left: cardLeft, top: scale.plotTop + 8 }}>
+        <span>{formatClock(hover.t)}</span>
+        <strong>{formatPrice(String(sample.price))}</strong>
+        {sample.previous != null && <span>{formatSigned(sample.price - sample.previous)} from last</span>}
+        {fromOpen != null && side && (
+          <span className={side === "flat" ? "" : side}>
+            {formatSigned(fromOpen)} {side === "up" ? "Up" : side === "down" ? "Down" : "Push"}
+          </span>
+        )}
+      </p>
+    </>
   )
 }
 
@@ -396,13 +497,10 @@ function SideCard(props: {
   )
 }
 
-function History({ address, version }: { address: string | null; version: number }) {
+function History({ address, version, windowMs }: { address: string | null; version: number; windowMs: number }) {
   const [mine, setMine] = useState(false)
   const [rows, setRows] = useState<HistoryRound[]>([])
-  const [openId, setOpenId] = useState<number | null>(null)
-  const [detail, setDetail] = useState<
-    { address: string; side: Side; stakeMicros: number; payoutMicros: number | null; bot: boolean }[]
-  >([])
+  const [replay, setReplay] = useState<HistoryRound | null>(null)
 
   useEffect(() => {
     const params = new URLSearchParams({ limit: "30" })
@@ -421,17 +519,6 @@ function History({ address, version }: { address: string | null; version: number
       cancel = true
     }
   }, [address, mine, version])
-
-  async function toggle(id: number) {
-    if (openId === id) {
-      setOpenId(null)
-      return
-    }
-    setOpenId(id)
-    const response = await fetch(`/api/rounds/${id}`)
-    const body = await response.json()
-    setDetail(body.bets ?? [])
-  }
 
   return (
     <section className="history">
@@ -470,52 +557,274 @@ function History({ address, version }: { address: string | null; version: number
           </thead>
           <tbody>
             {rows.map((row) => (
-              <Fragment key={row.id}>
-                <tr onClick={() => toggle(row.id)} className={openId === row.id ? "open" : ""}>
-                  <td>{formatClock(row.startsAt)}</td>
-                  <td>{resultLabel(row)}</td>
-                  <td>{row.strike ? formatPrice(row.strike) : "—"}</td>
-                  <td>{row.settle ? formatPrice(row.settle) : "—"}</td>
-                  <td>{formatMicros(row.poolUpMicros)}</td>
-                  <td>{formatMicros(row.poolDownMicros)}</td>
-                  <td>{formatMicros(row.feeMicros)}</td>
-                  {mine && (
-                    <>
-                      <td>{row.mySide === "up" ? "Up" : row.mySide === "down" ? "Down" : "—"}</td>
-                      <td>{row.myStakeMicros !== undefined ? formatMicros(row.myStakeMicros) : "—"}</td>
-                      <td>
-                        {row.myPayoutMicros !== undefined && row.myPayoutMicros !== null ? formatMicros(row.myPayoutMicros) : "—"}
-                      </td>
-                    </>
-                  )}
-                </tr>
-                {openId === row.id && (
-                  <tr className="detail">
-                    <td colSpan={mine ? 10 : 7}>
-                      {detail.length === 0 ? (
-                        <span>No bets in this pool.</span>
-                      ) : (
-                        <ul>
-                          {detail.map((bet) => (
-                            <li key={bet.address}>
-                              <span className={bet.bot ? "bot" : ""}>{bet.bot ? botLabel(bet.address) : shortAddress(bet.address)}</span>
-                              <span className={bet.side}>{bet.side === "up" ? "Up" : "Down"}</span>
-                              <span>{formatMicros(bet.stakeMicros)}</span>
-                              <span>{bet.payoutMicros === null ? "—" : formatMicros(bet.payoutMicros)}</span>
-                            </li>
-                          ))}
-                        </ul>
-                      )}
+              <tr key={row.id} onClick={() => setReplay(row)} className={replay?.id === row.id ? "open" : ""}>
+                <td>{formatClock(row.startsAt)}</td>
+                <td>{resultLabel(row)}</td>
+                <td>{row.strike ? formatPrice(row.strike) : "—"}</td>
+                <td>{row.settle ? formatPrice(row.settle) : "—"}</td>
+                <td>{formatMicros(row.poolUpMicros)}</td>
+                <td>{formatMicros(row.poolDownMicros)}</td>
+                <td>{formatMicros(row.feeMicros)}</td>
+                {mine && (
+                  <>
+                    <td>{row.mySide === "up" ? "Up" : row.mySide === "down" ? "Down" : "—"}</td>
+                    <td>{row.myStakeMicros !== undefined ? formatMicros(row.myStakeMicros) : "—"}</td>
+                    <td>
+                      {row.myPayoutMicros !== undefined && row.myPayoutMicros !== null ? formatMicros(row.myPayoutMicros) : "—"}
                     </td>
-                  </tr>
+                  </>
                 )}
-              </Fragment>
+              </tr>
             ))}
           </tbody>
         </table>
       )}
+      {replay && <Replay row={replay} windowMs={windowMs} onClose={() => setReplay(null)} />}
     </section>
   )
+}
+
+type RoundBet = { address: string; side: Side; stakeMicros: number; payoutMicros: number | null; bot: boolean }
+
+function Replay({ row, windowMs, onClose }: { row: HistoryRound; windowMs: number; onClose: () => void }) {
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const [chart, setChart] = useState<TapeChart | null>(null)
+  const [bets, setBets] = useState<RoundBet[] | null>(null)
+  const [failed, setFailed] = useState(false)
+  const scrub = useScrub(chart)
+  const viewRef = useRef({ follow: false, start: row.startsAt - windowMs, end: row.endsAt })
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose()
+    }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [onClose])
+
+  useEffect(() => {
+    let cancel = false
+    let spawned: TapeChart | null = null
+    fetch(`/api/rounds/${row.id}`)
+      .then((response) => {
+        if (!response.ok) throw new Error("missing")
+        return response.json()
+      })
+      .then((body) => {
+        if (cancel) return
+        const tape = (body.tape ?? []) as { t: number; price: string }[]
+        const canvas = canvasRef.current
+        if (!canvas) return
+        const strike = row.strike == null ? null : Number(row.strike)
+        const betsOpen = row.startsAt - windowMs
+        viewRef.current = { follow: false, start: betsOpen, end: row.endsAt }
+        spawned = mountChart(canvas, {
+          getNow: () => row.endsAt + 1,
+          getView: () => viewRef.current,
+          getClock: () => null,
+          getMarkets: () => [
+            {
+              id: row.id,
+              betsOpen,
+              strikeAt: row.startsAt,
+              settlesAt: row.endsAt,
+              strike,
+            },
+          ],
+          getBaseline: () => strike,
+          extendLive: () => false,
+        })
+        spawned.reset(tape.map((point) => ({ t: point.t, price: Number(point.price) })))
+        setChart(spawned)
+        setBets(body.bets ?? [])
+      })
+      .catch(() => {
+        if (!cancel) setFailed(true)
+      })
+    return () => {
+      cancel = true
+      spawned?.destroy()
+    }
+  }, [row, windowMs])
+
+  const board: Board = {
+    blockStart: row.startsAt - windowMs,
+    blockEnd: row.endsAt,
+    windowEndsAt: row.startsAt,
+    phase: "market",
+    join: null,
+    live: null,
+    bands: [
+      {
+        id: row.id,
+        betsOpen: row.startsAt - windowMs,
+        strikeAt: row.startsAt,
+        settlesAt: row.endsAt,
+        strike: row.strike,
+        status: row.status,
+        poolUpMicros: row.poolUpMicros,
+        poolDownMicros: row.poolDownMicros,
+        playersUp: 0,
+        playersDown: 0,
+      },
+    ],
+  }
+
+  return (
+    <div className="modal-back" onClick={onClose}>
+      <div
+        className="modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Market replay"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <header>
+          <div>
+            <h2>{formatClock(row.startsAt)}</h2>
+            <p>
+              {resultLabel(row)}
+              {row.strike && row.settle ? ` · ${formatPrice(row.strike)} → ${formatPrice(row.settle)}` : ""}
+              {` · Up ${formatMicros(row.poolUpMicros)} · Down ${formatMicros(row.poolDownMicros)}`}
+            </p>
+          </div>
+          <button type="button" onClick={onClose}>
+            Close
+          </button>
+        </header>
+        <section className="chart-wrap still" onPointerMove={scrub.move} onPointerLeave={scrub.clear}>
+          <canvas ref={canvasRef} />
+          {chart && <ChartOverlay chart={chart} board={board} halves={false} openBets={[]} feeBps={0} hover={scrub.hover} />}
+        </section>
+        {failed && <p className="empty">Couldn't load this market.</p>}
+        {bets && bets.length === 0 && <p className="empty">No bets in this pool.</p>}
+        {bets && bets.length > 0 && (
+          <div className="detail">
+            <ul>
+              {bets.map((bet) => (
+                <li key={bet.address}>
+                  <span className={bet.bot ? "bot" : ""}>{bet.bot ? botLabel(bet.address) : shortAddress(bet.address)}</span>
+                  <span className={bet.side}>{bet.side === "up" ? "Up" : "Down"}</span>
+                  <span>{formatMicros(bet.stakeMicros)}</span>
+                  <span>{bet.payoutMicros === null ? "—" : formatMicros(bet.payoutMicros)}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function Reveal({ event, address, onDone }: { event: SettledMessage; address: string | null; onDone: () => void }) {
+  const mine = address ? (event.payouts.find((payout) => payout.address === address) ?? null) : null
+  useEffect(() => {
+    const id = window.setTimeout(onDone, mine ? 4_500 : 3_200)
+    const onKey = (keyEvent: KeyboardEvent) => {
+      if (keyEvent.key === "Escape") onDone()
+    }
+    window.addEventListener("keydown", onKey)
+    return () => {
+      window.clearTimeout(id)
+      window.removeEventListener("keydown", onKey)
+    }
+  }, [event, mine, onDone])
+
+  const result = marketWord(event)
+  if (!mine) {
+    const move = event.strike && event.settle ? `${formatPrice(event.strike)} → ${formatPrice(event.settle)}` : null
+    return (
+      <button type="button" className="reveal-banner" onClick={onDone}>
+        <strong>{result}</strong>
+        {move && <span>{move}</span>}
+      </button>
+    )
+  }
+
+  const profit = mine.payoutMicros - mine.stakeMicros
+  const back = event.resolution === "void" || event.resolution === "refund" || event.winningSide === "push" || profit === 0
+  const title = event.resolution === "void" ? "Void" : back ? "Push" : profit > 0 ? "You win" : "Lost"
+  const tone = profit > 0 ? "win" : profit < 0 ? "loss" : "flat"
+  const move = event.strike && event.settle ? `${formatPrice(event.strike)} → ${formatPrice(event.settle)}` : null
+  return (
+    <div className="reveal-back" onClick={onDone}>
+      <div className={`reveal-card ${tone}`} role="dialog" aria-label={title}>
+        {tone === "win" && (
+          <span className="motes" aria-hidden="true">
+            {Array.from({ length: 10 }, (_, index) => (
+              <i key={index} style={{ ["--i" as string]: index }} />
+            ))}
+          </span>
+        )}
+        <p className="reveal-kicker">{result}</p>
+        <h2>{title}</h2>
+        <p className="take">{back && profit === 0 ? "Stakes back" : signedMicros(profit)}</p>
+        <p className="reveal-sub">
+          Stake {formatMicros(mine.stakeMicros)}
+          {move ? ` · ${move}` : ""}
+        </p>
+      </div>
+    </div>
+  )
+}
+
+function useScrub(chart: TapeChart | null) {
+  const [hover, setHover] = useState<{ t: number } | null>(null)
+  function move(event: ReactPointerEvent<HTMLElement>) {
+    if (!chart || event.buttons !== 0) return
+    const current = chart.getScale()
+    if (!current) return
+    const rect = event.currentTarget.getBoundingClientRect()
+    const x = event.clientX - rect.left
+    if (x < current.plotLeft || x > current.plotLeft + current.plotWidth) {
+      setHover(null)
+      return
+    }
+    const span = Math.max(1, current.viewEnd - current.viewStart)
+    setHover({ t: current.viewStart + ((x - current.plotLeft) / current.plotWidth) * span })
+  }
+  function clear() {
+    setHover(null)
+  }
+  return { hover, move, clear }
+}
+
+function baselineOf(board: Board | null): number | null {
+  if (!board) return null
+  if (board.live?.strike != null) return Number(board.live.strike)
+  for (let index = board.bands.length - 1; index >= 0; index--) {
+    const strike = board.bands[index]?.strike
+    if (strike != null) return Number(strike)
+  }
+  return null
+}
+
+function marketSettlingAt(board: Board, at: number): Band | null {
+  const band = board.bands.find((row) => row.settlesAt === at && row.status === "open")
+  if (band) return band
+  if (board.live && board.live.settlesAt === at && board.live.status === "open") return board.live
+  return null
+}
+
+function marketStrikingAt(board: Board, at: number): Band | null {
+  return (
+    board.bands.find((row) => row.strikeAt === at) ??
+    (board.live?.strikeAt === at ? board.live : null) ??
+    (board.join?.strikeAt === at ? board.join : null)
+  )
+}
+
+function marketWord(event: SettledMessage): string {
+  if (event.resolution === "void") return "Void"
+  if (event.winningSide === "push" || !event.winningSide) return "Push"
+  if (event.winningSide === "up") return "Up"
+  return "Down"
+}
+
+function signedMicros(micros: number): string {
+  if (micros > 0) return `+${formatMicros(micros)}`
+  return formatMicros(micros)
 }
 
 function resultLabel(row: HistoryRound): string {

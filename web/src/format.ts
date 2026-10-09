@@ -25,6 +25,16 @@ export function microsToInput(micros: number): string {
   return frac ? `${whole}.${frac}` : String(whole)
 }
 
+export function formatSigned(value: number): string {
+  if (!Number.isFinite(value)) return "—"
+  const abs = Math.abs(value)
+  const digits = abs > 0 && abs < 0.01 ? 4 : 2
+  const text = abs.toLocaleString("en-US", { minimumFractionDigits: digits, maximumFractionDigits: digits })
+  if (value > 0) return `+${text}`
+  if (value < 0) return `−${text}`
+  return text
+}
+
 export function formatPrice(price: string): string {
   const value = Number(price)
   if (!Number.isFinite(value)) return price

@@ -24,6 +24,7 @@ export function useMarket() {
   const [error, setError] = useState<string | null>(null)
   const [pending, setPending] = useState(false)
   const [historyVersion, setHistoryVersion] = useState(0)
+  const [notice, setNotice] = useState<SettledMessage | null>(null)
   const [pulse, setPulse] = useState(0)
 
   const offsetRef = useRef(0)
@@ -132,6 +133,7 @@ export function useMarket() {
               : current,
           )
           if (mine) setResult(describeResult(message, mine))
+          setNotice(message)
           setHistoryVersion((value) => value + 1)
         }
       }
@@ -178,6 +180,7 @@ export function useMarket() {
     localStorage.setItem(ADDRESS_KEY, nextAddress)
     setAddress(nextAddress)
     setResult(null)
+    setNotice(null)
     setError(null)
   }, [])
 
@@ -257,6 +260,8 @@ export function useMarket() {
     error,
     pending,
     historyVersion,
+    notice,
+    dismissNotice: useCallback(() => setNotice(null), []),
     now,
     offsetRef,
     priceRef,
