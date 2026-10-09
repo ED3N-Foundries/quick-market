@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { formatGainLoss, formatMoney, formatPrice, formatPriceDelta, parseAmountMicros } from "./format"
+import { formatGainLoss, formatMoney, formatPrice, formatPriceDelta, parseAmountMicros, payoutMicros, quoteDollar } from "./format"
 import { priceTone } from "./chart"
 
 test("formatMoney rounds half-up to cents for display", () => {
@@ -28,7 +28,19 @@ test("formatPrice keeps the feed decimals", () => {
 test("formatPriceDelta subtracts without rounding away decimals", () => {
   expect(formatPriceDelta("100.1234", "100.0000")).toEqual({ text: "+0.1234", side: "up" })
   expect(formatPriceDelta("99.9", "100.0")).toEqual({ text: "−0.10", side: "down" })
-  expect(formatPriceDelta("100.00", "100.00")).toEqual({ text: "0.00", side: "flat" })
+  expect(formatPriceDelta("100.00", "100.00")).toEqual({ text: "=", side: "push" })
+})
+
+test("payoutMicros matches a paid pool and refunds a one-sided pool", () => {
+  expect(payoutMicros(50_000_000, "up", 50_000_000, 100_000_000, 25)).toBe(149_625_000)
+  expect(payoutMicros(10_000_000, "up", 10_000_000, 0, 25)).toBe(10_000_000)
+  expect(payoutMicros(10_000_000, "down", 0, 0, 25)).toBe(10_000_000)
+})
+
+test("quoteDollar prices one dollar and says when it only comes back", () => {
+  expect(quoteDollar("up", 0, 0, 25)).toBe("$1 back")
+  expect(quoteDollar("up", 50_000_000, 0, 25)).toBe("$1 back")
+  expect(quoteDollar("up", 50_000_000, 100_000_000, 25)).toBe("$1 = $2.95")
 })
 
 test("parseAmountMicros rejects empty and non-positive amounts", () => {

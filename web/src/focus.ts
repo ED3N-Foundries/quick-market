@@ -19,32 +19,35 @@ export function heldMarket(board: Board, openBets: OpenBet[], now: number): Band
   return best
 }
 
-/** Follow span for the chart. A held market stays fixed until it settles. */
+function betWindowMs(board: Board): number {
+  return Math.max(1, board.windowEndsAt - board.blockStart)
+}
+
+/** Follow span for the chart. A held market stays fixed until it settles.
+ *  With no bet, the chart rolls from one betting window to the next.
+ */
 export function followWindow(board: Board, openBets: OpenBet[], now: number): { start: number; end: number } {
   const held = heldMarket(board, openBets, now)
   if (held) return { start: held.betsOpen, end: held.settlesAt }
-  return { start: board.blockStart, end: board.blockEnd }
+  if (board.phase === "bets") return { start: board.blockStart, end: board.windowEndsAt }
+  const span = betWindowMs(board)
+  return { start: board.blockEnd, end: board.blockEnd + span }
 }
 
-/** Pool shown in the trade panel. A held market wins over the phase pool. */
+/** Pool shown in the trade panel. A held market wins. Otherwise only the bet window. */
 export function focusPool(board: Board | null, openBets: OpenBet[], now: number): PoolCard | null {
   if (!board) return null
   const held = heldMarket(board, openBets, now)
-  if (!held) return board.phase === "bets" ? board.join : board.live
+  if (!held) return board.phase === "bets" ? board.join : null
   if (board.live?.id === held.id) return board.live
   if (board.join?.id === held.id) return board.join
   return { ...held, tray: [] }
 }
 
-/** Vertical center. A held market uses its own strike, including no strike yet. */
+/** Vertical center. Only a held market has a strike. No bet leaves the tape on the last price. */
 export function chartBaseline(board: Board | null, openBets: OpenBet[], now: number): number | null {
   if (!board) return null
   const held = heldMarket(board, openBets, now)
-  if (held) return held.strike == null ? null : Number(held.strike)
-  if (board.live?.strike != null) return Number(board.live.strike)
-  for (let index = board.bands.length - 1; index >= 0; index--) {
-    const strike = board.bands[index]?.strike
-    if (strike != null) return Number(strike)
-  }
-  return null
+  if (!held || held.strike == null) return null
+  return Number(held.strike)
 }

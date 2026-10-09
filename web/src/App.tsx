@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type PointerEvent as ReactPointerEvent, type RefObject } from "react"
 import { mountChart, type ChartScale, type TapeChart, type TapeSample } from "./chart"
 import { chartBaseline, focusPool, followWindow, heldMarket } from "./focus"
-import { botLabel, formatClock, formatGainLoss, formatMoney, formatPrice, formatPriceDelta, formatSigned, microsToInput, moneyShare, parseAmountMicros, quotePair, randomAddress, shortAddress, sourceLabel, takeMicros } from "./format"
+import { botLabel, formatClock, formatGainLoss, formatMoney, formatPrice, formatPriceDelta, formatSigned, microsToInput, moneyShare, parseAmountMicros, payoutMicros, quoteDollar, quotePair, randomAddress, shortAddress, sourceLabel } from "./format"
 import type { Band, Board, HistoryRound, OpenBet, SettledMessage, Side } from "./types"
 import { useMarket } from "./useMarket"
 
@@ -16,6 +16,7 @@ export function App() {
   const [stake, setStake] = useState("10")
   const [fundAmount, setFundAmount] = useState("")
   const [withdrawAmount, setWithdrawAmount] = useState("")
+  const [withdrawError, setWithdrawError] = useState<string | null>(null)
   const [following, setFollowing] = useState(true)
   const scrub = useScrub(chart)
   boardRef.current = market.board
@@ -34,14 +35,21 @@ export function App() {
         const frame = followWindow(board, openBetsRef.current, now)
         return { blockStart: frame.start, blockEnd: frame.end }
       },
-      getMarkets: () =>
-        (boardRef.current?.bands ?? []).map((band) => ({
-          id: band.id,
-          betsOpen: band.betsOpen,
-          strikeAt: band.strikeAt,
-          settlesAt: band.settlesAt,
-          strike: band.strike === null ? null : Number(band.strike),
-        })),
+      getMarkets: () => {
+        const board = boardRef.current
+        if (!board) return []
+        const held = heldMarket(board, openBetsRef.current, Date.now() + market.offsetRef.current)
+        if (!held) return []
+        return [
+          {
+            id: held.id,
+            betsOpen: held.betsOpen,
+            strikeAt: held.strikeAt,
+            settlesAt: held.settlesAt,
+            strike: held.strike === null ? null : Number(held.strike),
+          },
+        ]
+      },
       getBaseline: () => chartBaseline(boardRef.current, openBetsRef.current, Date.now() + market.offsetRef.current),
       extendLive: () => true,
     })
@@ -65,10 +73,20 @@ export function App() {
   const canBet = !!you && !heldSpan && board?.phase === "bets" && !!board.join && market.feed === "live" && !market.pending
   const total = (focus?.poolUpMicros ?? 0) + (focus?.poolDownMicros ?? 0)
   const held = openBets.find((bet) => bet.roundId === focus?.id) ?? null
-  const accepting = !heldSpan && board?.phase === "bets"
-  const upWin = winnings(stake, "up", focus?.poolUpMicros ?? 0, focus?.poolDownMicros ?? 0, market.config.feeBps, held, accepting)
-  const downWin = winnings(stake, "down", focus?.poolUpMicros ?? 0, focus?.poolDownMicros ?? 0, market.config.feeBps, held, accepting)
+  const upQuote = focus ? quoteDollar("up", focus.poolUpMicros, focus.poolDownMicros, market.config.feeBps) : "—"
+  const downQuote = focus ? quoteDollar("down", focus.poolUpMicros, focus.poolDownMicros, market.config.feeBps) : "—"
+  const ticketWin = held ? payoutMicros(held.stakeMicros, held.side, focus?.poolUpMicros ?? 0, focus?.poolDownMicros ?? 0, market.config.feeBps) : 0
   const fundMicros = parseAmountMicros(fundAmount)
+
+  async function onWithdraw() {
+    const message = await market.withdrawWallet(withdrawAmount)
+    if (message) {
+      setWithdrawError(message)
+      return
+    }
+    setWithdrawError(null)
+    setWithdrawAmount("")
+  }
 
   function chip(percent: number) {
     if (!you) return
@@ -104,13 +122,9 @@ export function App() {
           <span className="mark">Quick</span>
           <span className="pair">BTC</span>
         </div>
-        <PriceReadout
-          priceRef={market.priceRef}
-          strike={heldSpan ? heldSpan.strike : (board?.live?.strike ?? null)}
-          source={market.config.source}
-        />
+        <PriceReadout priceRef={market.priceRef} strike={heldSpan?.strike ?? null} source={market.config.source} />
         <div className="clock-block">
-          <span className="clock-label">{heldSpan ? "Settles" : board?.phase === "market" ? "Market" : "Bets"}</span>
+          <span className="clock-label">{heldSpan ? "Settles" : "Bets"}</span>
           {board ? (
             <Countdown
               endsAt={heldSpan ? heldSpan.settlesAt : board.phase === "bets" ? board.windowEndsAt : board.blockEnd}
@@ -129,7 +143,7 @@ export function App() {
           <ChartOverlay
             chart={chart}
             board={board}
-            locked={board?.phase === "market"}
+            shade={heldSpan && now >= heldSpan.strikeAt ? { betsOpen: heldSpan.betsOpen, strikeAt: heldSpan.strikeAt } : null}
             heldId={heldSpan?.id ?? null}
             openBets={openBets}
             feeBps={market.config.feeBps}
@@ -157,7 +171,7 @@ export function App() {
           side="up"
           share={moneyShare(focus?.poolUpMicros ?? 0, total)}
           pool={focus?.poolUpMicros ?? 0}
-          toWin={upWin}
+          quote={upQuote}
           players={focus?.playersUp ?? 0}
           disabled={!canBet}
           onBet={() => market.place("up", stake)}
@@ -176,12 +190,14 @@ export function App() {
               </button>
             )}
           </div>
-          <p className="balance">{you ? formatMoney(you.balanceMicros) : "—"}</p>
-          {you?.openBets.map((bet) => (
-            <p className={`in-play ${bet.side}`} key={bet.roundId}>
-              In play {formatMoney(bet.stakeMicros)} on {bet.side === "up" ? "▲ Up" : "▼ Down"}
-            </p>
-          ))}
+          <BalanceFigure micros={you?.balanceMicros ?? null} />
+          {held && (
+            <div className="ticket">
+              <p className={held.side}>{held.side === "up" ? "▲ Up" : "▼ Down"}</p>
+              <p>Staked {formatMoney(held.stakeMicros)}</p>
+              <p>To win {formatMoney(ticketWin)}</p>
+            </div>
+          )}
           <label className="stake-field">
             <span>Stake</span>
             <input
@@ -202,6 +218,18 @@ export function App() {
               100%
             </button>
           </div>
+          {market.error && <p className="note bad">{market.error}</p>}
+        </div>
+        <SideCard
+          side="down"
+          share={moneyShare(focus?.poolDownMicros ?? 0, total)}
+          pool={focus?.poolDownMicros ?? 0}
+          quote={downQuote}
+          players={focus?.playersDown ?? 0}
+          disabled={!canBet}
+          onBet={() => market.place("down", stake)}
+        />
+        <div className="funding">
           <div className="funds">
             <button type="button" onClick={() => market.fundWallet("10")} disabled={!you}>
               +$10
@@ -223,17 +251,7 @@ export function App() {
               Fund
             </button>
           </div>
-          {market.error && <p className="note bad">{market.error}</p>}
         </div>
-        <SideCard
-          side="down"
-          share={moneyShare(focus?.poolDownMicros ?? 0, total)}
-          pool={focus?.poolDownMicros ?? 0}
-          toWin={downWin}
-          players={focus?.playersDown ?? 0}
-          disabled={!canBet}
-          onBet={() => market.place("down", stake)}
-        />
       </section>
 
       <details className="tray">
@@ -289,13 +307,17 @@ export function App() {
               inputMode="decimal"
               placeholder="Amount"
               value={withdrawAmount}
-              onChange={(event) => setWithdrawAmount(event.target.value)}
+              onChange={(event) => {
+                setWithdrawAmount(event.target.value)
+                setWithdrawError(null)
+              }}
               disabled={!you}
             />
           </label>
-          <button type="button" onClick={() => market.withdrawWallet(withdrawAmount)} disabled={!you || !withdrawAmount.trim()}>
+          <button type="button" onClick={() => void onWithdraw()} disabled={!you || !withdrawAmount.trim()}>
             Withdraw
           </button>
+          {withdrawError && <p className="note bad">{withdrawError}</p>}
         </div>
       </footer>
     </div>
@@ -305,7 +327,7 @@ export function App() {
 function ChartOverlay({
   chart,
   board,
-  locked,
+  shade,
   heldId,
   openBets,
   feeBps,
@@ -313,7 +335,7 @@ function ChartOverlay({
 }: {
   chart: TapeChart
   board: Board | null
-  locked: boolean
+  shade: { betsOpen: number; strikeAt: number } | null
   heldId: number | null
   openBets: OpenBet[]
   feeBps: number
@@ -342,7 +364,7 @@ function ChartOverlay({
           </div>
         )
       })}
-      {locked && heldId == null && <LockShade board={board} scale={current} xAt={xAt} />}
+      {shade && <LockShade betsOpen={shade.betsOpen} strikeAt={shade.strikeAt} scale={current} xAt={xAt} />}
       {openBets.map((bet) => {
         const band = board.bands.find((row) => row.id === bet.roundId) ?? (board.join?.id === bet.roundId ? board.join : null)
         if (!band) return null
@@ -368,17 +390,19 @@ function ChartOverlay({
 }
 
 function LockShade({
-  board,
+  betsOpen,
+  strikeAt,
   scale,
   xAt,
 }: {
-  board: Board
+  betsOpen: number
+  strikeAt: number
   scale: ChartScale
   xAt: (t: number) => number
 }) {
   const plotRight = scale.plotLeft + scale.plotWidth
-  const left = Math.max(xAt(board.blockStart), scale.plotLeft)
-  const right = Math.min(xAt(board.windowEndsAt), plotRight)
+  const left = Math.max(xAt(betsOpen), scale.plotLeft)
+  const right = Math.min(xAt(strikeAt), plotRight)
   if (right - left < 8) return null
   return (
     <div className="lock-shade" style={{ left, width: right - left, top: scale.plotTop, height: scale.plotHeight }}>
@@ -422,8 +446,8 @@ function Scrub({
         <strong>{formatPrice(String(sample.price))}</strong>
         {sample.previous != null && <span>{formatSigned(sample.price - sample.previous)} from last</span>}
         {fromOpen != null && side && (
-          <span className={side === "flat" ? "" : side}>
-            {formatSigned(fromOpen)} {side === "up" ? "Up" : side === "down" ? "Down" : "Push"}
+          <span className={side === "flat" ? "push" : side}>
+            {side === "flat" ? "= Push" : `${formatSigned(fromOpen)} ${side === "up" ? "Up" : "Down"}`}
           </span>
         )}
       </p>
@@ -444,13 +468,64 @@ function BetChip({
   top: number
   feeBps: number
 }) {
-  const takes = takeMicros(bet.stakeMicros, bet.side, band.poolUpMicros, band.poolDownMicros, feeBps)
+  const payout = payoutMicros(bet.stakeMicros, bet.side, band.poolUpMicros, band.poolDownMicros, feeBps)
   return (
     <p className={`chip ${bet.side}`} style={{ left, top: top + 52 }}>
       <strong>
         {bet.side === "up" ? "▲ Up" : "▼ Down"} {formatMoney(bet.stakeMicros)}
       </strong>
-      <span>takes {formatMoney(takes)}</span>
+      <span>To win {formatMoney(payout)}</span>
+    </p>
+  )
+}
+
+function BalanceFigure({ micros }: { micros: number | null }) {
+  const [shown, setShown] = useState<number | null>(micros)
+  const [dir, setDir] = useState<"" | "up" | "down">("")
+  const shownRef = useRef(shown)
+  const readyRef = useRef(false)
+  shownRef.current = shown
+
+  useEffect(() => {
+    if (micros == null) {
+      readyRef.current = false
+      setShown(null)
+      setDir("")
+      return
+    }
+    const previous = shownRef.current
+    if (!readyRef.current || previous == null) {
+      readyRef.current = true
+      setShown(micros)
+      return
+    }
+    if (previous === micros) return
+    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    setDir(micros > previous ? "up" : "down")
+    const clearDir = window.setTimeout(() => setDir(""), 730)
+    if (reduce) {
+      setShown(micros)
+      return () => window.clearTimeout(clearDir)
+    }
+    const from = previous
+    const started = performance.now()
+    let frame = 0
+    const step = (stamp: number) => {
+      const t = Math.min(1, (stamp - started) / 450)
+      const eased = 1 - (1 - t) * (1 - t)
+      setShown(Math.round(from + (micros - from) * eased))
+      if (t < 1) frame = requestAnimationFrame(step)
+    }
+    frame = requestAnimationFrame(step)
+    return () => {
+      window.cancelAnimationFrame(frame)
+      window.clearTimeout(clearDir)
+    }
+  }, [micros])
+
+  return (
+    <p className="balance" data-dir={dir}>
+      {shown == null ? "—" : formatMoney(shown)}
     </p>
   )
 }
@@ -522,7 +597,7 @@ function SideCard(props: {
   side: Side
   share: string
   pool: number
-  toWin: number
+  quote: string
   players: number
   disabled: boolean
   onBet: () => void
@@ -535,7 +610,7 @@ function SideCard(props: {
       <p className="pool">
         {formatMoney(props.pool)} · {props.players} {props.players === 1 ? "player" : "players"}
       </p>
-      <p className="to-win">To win {formatMoney(props.toWin)}</p>
+      <p className="to-win">{props.quote}</p>
       <button type="button" disabled={props.disabled} onClick={props.onBet}>
         {up ? "Bet up" : "Bet down"}
       </button>
@@ -742,7 +817,7 @@ function Replay({ row, windowMs, onClose }: { row: HistoryRound; windowMs: numbe
         </header>
         <section className="chart-wrap still" onPointerMove={scrub.move} onPointerLeave={scrub.clear}>
           <canvas ref={canvasRef} />
-          {chart && <ChartOverlay chart={chart} board={board} locked={false} heldId={null} openBets={[]} feeBps={0} hover={scrub.hover} />}
+          {chart && <ChartOverlay chart={chart} board={board} shade={null} heldId={null} openBets={[]} feeBps={0} hover={scrub.hover} />}
         </section>
         {failed && <p className="empty">Couldn't load this market.</p>}
         {bets && bets.length === 0 && <p className="empty">No bets in this pool.</p>}
@@ -778,7 +853,7 @@ function ResultToast({ event, address, onDone }: { event: SettledMessage; addres
   if (!mine) return null
 
   const tone = toastTone(event, mine.stakeMicros, mine.payoutMicros)
-  const title = event.resolution === "void" ? "Void" : tone === "win" ? "You win" : tone === "loss" ? "Lost" : "Push"
+  const title = event.resolution === "void" ? "Void" : tone === "win" ? "You win" : tone === "loss" ? "Lost" : "= Push"
   const move = event.strike && event.settle ? `${formatPrice(event.strike)} → ${formatPrice(event.settle)}` : null
   return (
     <button type="button" className={`toast ${tone}`} onClick={onDone}>
@@ -812,27 +887,6 @@ function useScrub(chart: TapeChart | null) {
   return { hover, move, clear }
 }
 
-function winnings(
-  stakeText: string,
-  side: Side,
-  up: number,
-  down: number,
-  feeBps: number,
-  held: OpenBet | null,
-  accepting: boolean,
-): number {
-  if (held) {
-    if (held.side !== side) return 0
-    return takeMicros(held.stakeMicros, side, up, down, feeBps)
-  }
-  if (!accepting) return 0
-  const stakeMicros = parseAmountMicros(stakeText)
-  if (stakeMicros === null) return 0
-  const nextUp = up + (side === "up" ? stakeMicros : 0)
-  const nextDown = down + (side === "down" ? stakeMicros : 0)
-  return takeMicros(stakeMicros, side, nextUp, nextDown, feeBps)
-}
-
 function resultTone(row: HistoryRound): string {
   if (row.status === "void" || row.resolution === "void") return "void"
   if (row.winningSide === "push") return "push"
@@ -842,7 +896,7 @@ function resultTone(row: HistoryRound): string {
 
 function resultText(row: HistoryRound): string {
   if (row.status === "void" || row.resolution === "void") return "Void"
-  if (row.winningSide === "push") return "Push"
+  if (row.winningSide === "push") return "= Push"
   if (row.winningSide === "up") return "▲ Up"
   if (row.winningSide === "down") return "▼ Down"
   return "—"

@@ -56,13 +56,13 @@ export function formatPrice(price: string): string {
   return `${Number(whole).toLocaleString("en-US")}.${decimals}`
 }
 
-export function formatPriceDelta(price: string, baseline: string): { text: string; side: "up" | "down" | "flat" } | null {
+export function formatPriceDelta(price: string, baseline: string): { text: string; side: "up" | "down" | "push" } | null {
   const left = decimalParts(price)
   const right = decimalParts(baseline)
   if (!left || !right) return null
   const scale = Math.max(left.frac.length, right.frac.length)
   const diff = BigInt(left.whole + left.frac.padEnd(scale, "0")) - BigInt(right.whole + right.frac.padEnd(scale, "0"))
-  if (diff === 0n) return { text: "0.00", side: "flat" }
+  if (diff === 0n) return { text: "=", side: "push" }
   const negative = diff < 0n
   const abs = negative ? -diff : diff
   const digits = abs.toString().padStart(scale + 1, "0")
@@ -113,6 +113,25 @@ export function takeMicros(stake: number, side: "up" | "down", up: number, down:
   const fee = Number((BigInt(pot) * BigInt(feeBps)) / 10_000n)
   const payout = Number((BigInt(stake) * BigInt(pot - fee)) / BigInt(mine))
   return Math.max(0, payout - stake)
+}
+
+/** What comes back if `side` wins. A one-sided pool returns the stake, with no fee. */
+export function payoutMicros(stake: number, side: "up" | "down", up: number, down: number, feeBps: number): number {
+  if (stake <= 0) return 0
+  const other = side === "up" ? down : up
+  const mine = side === "up" ? up : down
+  if (other <= 0 || mine <= 0) return stake
+  return stake + takeMicros(stake, side, up, down, feeBps)
+}
+
+/** Price of one dollar added to `side`. A refund is stake back, not a win. */
+export function quoteDollar(side: "up" | "down", up: number, down: number, feeBps: number): string {
+  const stake = 1_000_000
+  const nextUp = up + (side === "up" ? stake : 0)
+  const nextDown = down + (side === "down" ? stake : 0)
+  const other = side === "up" ? nextDown : nextUp
+  if (other <= 0) return "$1 back"
+  return `$1 = ${formatMoney(payoutMicros(stake, side, nextUp, nextDown, feeBps))}`
 }
 
 export function moneyShare(side: number, total: number): string {

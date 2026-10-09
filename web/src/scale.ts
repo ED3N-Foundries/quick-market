@@ -51,16 +51,14 @@ export function contentHalf(points: PricePoint[], baseline: number, now: number)
 
 /**
  * Half-range actually drawn.
- * A print that no longer fits snaps to the padded target so a wider swing
- * lands in one jump. A larger target that still fits holds, so the live
- * scale does not glide outward. A smaller target eases by `k` in `[0, 1]`.
- * `reset` snaps to a range that fits.
+ * A print that no longer fits snaps wider in one jump. A larger target that
+ * still fits holds, so the scale does not jitter outward. A smaller target
+ * snaps to a range that still fits every print. `reset` snaps too.
  */
-export function shownHalf(current: number, target: number, content: number, k: number, reset: boolean): number {
+export function shownHalf(current: number, target: number, content: number, reset: boolean): number {
   const fit = Math.max(target, Number.isFinite(content) ? content : 0)
   if (reset || !Number.isFinite(current)) return fit
   if (content > current) return fit
   if (target >= current) return current
-  const gain = Number.isFinite(k) ? Math.min(1, Math.max(0, k)) : 0
-  return current + (target - current) * gain
+  return fit
 }

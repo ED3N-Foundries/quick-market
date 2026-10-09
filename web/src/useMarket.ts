@@ -235,24 +235,22 @@ export function useMarket() {
     [address],
   )
 
-  const withdrawWallet = useCallback(
-    async (amount: string) => {
-      if (!address) return
-      setError(null)
+  const withdrawWallet = useCallback(async (amount: string): Promise<string | null> => {
+    if (!address) return "Connect a wallet first"
+    try {
       const response = await fetch("/api/withdraw", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ address, amount }),
       })
       const body = await response.json()
-      if (!response.ok) {
-        setError(body.error ?? "Withdraw failed")
-        return
-      }
+      if (!response.ok) return body.error ?? "Withdraw failed"
       setYou(body.you)
-    },
-    [address],
-  )
+      return null
+    } catch {
+      return "Can't reach the market server"
+    }
+  }, [address])
 
   const now = Date.now() + offsetRef.current
   void pulse
@@ -284,7 +282,7 @@ export function useMarket() {
 
 function describeResult(event: SettledMessage, mine: SettledMessage["payouts"][number]): string {
   if (event.resolution === "void") return "Void"
-  if (event.winningSide === "push") return "Push"
+  if (event.winningSide === "push") return "= Push"
   const label = mine.side === "up" ? "▲ Up" : "▼ Down"
   return `${label} ${formatGainLoss(mine.stakeMicros, mine.payoutMicros)}`
 }

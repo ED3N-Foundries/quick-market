@@ -36,12 +36,15 @@ function board(over: Partial<Board> = {}): Board {
   }
 }
 
-test("with no open bet the chart follows the clock block", () => {
+test("with no open bet the chart rolls from one betting window to the next", () => {
   const current = board()
-  expect(followWindow(current, [], 12_000)).toEqual({ start: 10_000, end: 20_000 })
+  expect(followWindow(current, [], 12_000)).toEqual({ start: 10_000, end: 15_000 })
   expect(heldMarket(current, [], 12_000)).toBeNull()
   expect(focusPool(current, [], 12_000)?.id).toBe(2)
-  expect(focusPool(board({ phase: "market", join: null }), [], 16_000)?.id).toBe(1)
+  const closed = board({ phase: "market", join: null })
+  expect(followWindow(closed, [], 16_000)).toEqual({ start: 20_000, end: 25_000 })
+  expect(focusPool(closed, [], 16_000)).toBeNull()
+  expect(chartBaseline(closed, [], 16_000)).toBeNull()
 })
 
 test("an open bet freezes the chart on that market until it settles", () => {
@@ -51,7 +54,7 @@ test("an open bet freezes the chart on that market until it settles", () => {
   expect(followWindow(current, bet, 12_000)).toEqual({ start: 0, end: 15_000 })
   expect(focusPool(current, bet, 12_000)?.id).toBe(1)
   expect(chartBaseline(current, bet, 12_000)).toBe(100)
-  expect(followWindow(current, bet, 15_000)).toEqual({ start: 10_000, end: 20_000 })
+  expect(followWindow(current, bet, 15_000)).toEqual({ start: 10_000, end: 15_000 })
   expect(heldMarket(current, bet, 15_000)).toBeNull()
 })
 
@@ -79,8 +82,8 @@ test("two open bets stay on the one that settles first", () => {
   expect(followWindow(current, bets, 12_000)).toEqual({ start: 0, end: 15_000 })
 })
 
-test("with nothing held the baseline falls back to the latest strike", () => {
+test("with nothing held the baseline stays unset", () => {
   const current = board({ live: null, join: null, bands: [band(4, 30_000, "88")] })
-  expect(chartBaseline(current, [], 1)).toBe(88)
+  expect(chartBaseline(current, [], 1)).toBeNull()
   expect(chartBaseline(null, [], 1)).toBeNull()
 })
