@@ -1,18 +1,30 @@
-export function formatMicros(micros: number): string {
+/** Display only. Half-up to cents. The ledger stays in integer micros. */
+export function formatMoney(micros: number, signed = false): string {
   const negative = micros < 0
   const abs = Math.abs(Math.trunc(micros))
-  const whole = Math.floor(abs / 1_000_000)
-  let frac = String(abs % 1_000_000).padStart(6, "0").replace(/0+$/, "")
-  if (frac.length < 2) frac = frac.padEnd(2, "0")
+  const cents = Math.floor((abs + 5_000) / 10_000)
+  const whole = Math.floor(cents / 100)
+  const frac = String(cents % 100).padStart(2, "0")
   const text = `${whole.toLocaleString("en-US")}.${frac}`
-  return negative ? `−${text}` : text
+  if (negative && cents > 0) return `-$${text}`
+  if (signed && cents > 0) return `+$${text}`
+  return `$${text}`
 }
 
-export function formatCents(micros: number): string {
-  return (Math.abs(micros) / 1_000_000).toLocaleString("en-US", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })
+/** Loss is the stake. A win is the stake plus the winnings, which is the payout. */
+export function formatGainLoss(stakeMicros: number, payoutMicros: number): string {
+  if (payoutMicros <= 0) return formatMoney(-Math.abs(Math.trunc(stakeMicros)))
+  if (payoutMicros > stakeMicros) return formatMoney(payoutMicros, true)
+  return formatMoney(0)
+}
+
+export function parseAmountMicros(input: string): number | null {
+  const text = input.trim()
+  if (!/^\d+(\.\d{1,6})?$/.test(text)) return null
+  const [whole, frac = ""] = text.split(".")
+  const micros = Number(whole) * 1_000_000 + Number(frac.padEnd(6, "0"))
+  if (!Number.isSafeInteger(micros) || micros <= 0) return null
+  return micros
 }
 
 export function quotePair(source: string): string {
@@ -28,17 +40,47 @@ export function microsToInput(micros: number): string {
 export function formatSigned(value: number): string {
   if (!Number.isFinite(value)) return "—"
   const abs = Math.abs(value)
-  const digits = abs > 0 && abs < 0.01 ? 4 : 2
-  const text = abs.toLocaleString("en-US", { minimumFractionDigits: digits, maximumFractionDigits: digits })
+  const text = abs.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 8 })
   if (value > 0) return `+${text}`
   if (value < 0) return `−${text}`
   return text
 }
 
+/** Keep the feed's fractional digits. At least two places, and no rounding. */
 export function formatPrice(price: string): string {
-  const value = Number(price)
-  if (!Number.isFinite(value)) return price
-  return value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  const text = price.trim()
+  if (!/^\d+(\.\d+)?$/.test(text)) return price
+  const [whole, frac = ""] = text.split(".")
+  const digits = frac.replace(/0+$/, "")
+  const decimals = digits.length < 2 ? digits.padEnd(2, "0") : digits
+  return `${Number(whole).toLocaleString("en-US")}.${decimals}`
+}
+
+export function formatPriceDelta(price: string, baseline: string): { text: string; side: "up" | "down" | "flat" } | null {
+  const left = decimalParts(price)
+  const right = decimalParts(baseline)
+  if (!left || !right) return null
+  const scale = Math.max(left.frac.length, right.frac.length)
+  const diff = BigInt(left.whole + left.frac.padEnd(scale, "0")) - BigInt(right.whole + right.frac.padEnd(scale, "0"))
+  if (diff === 0n) return { text: "0.00", side: "flat" }
+  const negative = diff < 0n
+  const abs = negative ? -diff : diff
+  const digits = abs.toString().padStart(scale + 1, "0")
+  const cut = Math.max(digits.length - scale, 1)
+  const whole = digits.slice(0, cut)
+  let frac = scale > 0 ? digits.slice(cut) : ""
+  frac = frac.replace(/0+$/, "")
+  if (frac.length < 2) frac = frac.padEnd(2, "0")
+  const text = `${Number(whole).toLocaleString("en-US")}.${frac}`
+  if (negative) return { text: `−${text}`, side: "down" }
+  return { text: `+${text}`, side: "up" }
+}
+
+function decimalParts(value: string): { whole: string; frac: string } | null {
+  const text = value.trim()
+  if (!/^\d+(\.\d+)?$/.test(text)) return null
+  const [whole, frac = ""] = text.split(".")
+  return { whole, frac }
 }
 
 export function shortAddress(address: string): string {

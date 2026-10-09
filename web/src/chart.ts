@@ -39,10 +39,17 @@ type View = { follow: boolean; start: number; end: number }
 
 const UP = "#2fce86"
 const DOWN = "#ff5a4f"
+const PUSH = "#4c8dff"
 const UP_FILL = "rgba(47, 206, 134, 0.22)"
 const DOWN_FILL = "rgba(255, 90, 79, 0.2)"
 const NEUTRAL = "rgba(243,240,232,0.7)"
 const STRIKE = "rgba(243,240,232,0.55)"
+const PUSH_EPS = 1e-8
+
+export function priceTone(price: number, baseline: number): "up" | "down" | "push" {
+  if (Math.abs(price - baseline) <= PUSH_EPS) return "push"
+  return price > baseline ? "up" : "down"
+}
 const PAD = { l: 12, r: 68, t: 16, b: 22 }
 const TAPE_MS = 15 * 60 * 1000
 const EASE_MS = 1_000
@@ -245,7 +252,8 @@ export function mountChart(
     const last = series.length ? series[series.length - 1] : null
     if (last) {
       const market = marketAt(markets, last.t)
-      const color = market?.strike == null ? NEUTRAL : last.price >= market.strike ? UP : DOWN
+      const tone = market?.strike == null ? null : priceTone(last.price, market.strike)
+      const color = tone === "push" ? PUSH : tone === "up" ? UP : tone === "down" ? DOWN : NEUTRAL
       ctx.fillStyle = color
       ctx.beginPath()
       ctx.arc(xAt(last.t), yAt(last.price), 3.5, 0, Math.PI * 2)
@@ -393,6 +401,13 @@ function strokePair(ctx: CanvasRenderingContext2D, a: XY, b: XY, markets: Market
     trace(ctx, a, b)
     return
   }
+  if (priceTone(a.price, market.strike) === "push" && priceTone(b.price, market.strike) === "push") {
+    ctx.strokeStyle = PUSH
+    ctx.setLineDash([5, 4])
+    trace(ctx, a, b)
+    ctx.setLineDash([])
+    return
+  }
   if ((a.price - market.strike) * (b.price - market.strike) < 0) {
     const ratio = (market.strike - a.price) / (b.price - a.price)
     const mid: XY = {
@@ -441,7 +456,7 @@ function fillSegment(ctx: CanvasRenderingContext2D, a: XY, b: XY, strike: number
     fillSegment(ctx, mid, b, strike, strikeY)
     return
   }
-  if (a.price === strike && b.price === strike) return
+  if (priceTone(a.price, strike) === "push" && priceTone(b.price, strike) === "push") return
   ctx.fillStyle = a.price >= strike && b.price >= strike ? UP_FILL : DOWN_FILL
   ctx.beginPath()
   ctx.moveTo(a.x, a.y)

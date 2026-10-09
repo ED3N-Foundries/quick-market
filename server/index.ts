@@ -40,7 +40,9 @@ function publishRound(now = Date.now()) {
   hub.broadcast({ type: "round", serverNow: now, feed, source: priceSource(), board: board(now) })
 }
 
-setInterval(() => {
+const runtime = globalThis as unknown as { quickMarketTimer?: ReturnType<typeof setInterval> }
+if (runtime.quickMarketTimer) clearInterval(runtime.quickMarketTimer)
+runtime.quickMarketTimer = setInterval(() => {
   try {
     const now = Date.now()
     const { settled, broadcastRound } = advance(now)
@@ -111,8 +113,12 @@ async function handle(req: Request): Promise<Response> {
   if (req.method === "POST" && url.pathname === "/api/fund") {
     const body = await readJson(req)
     const address = normalizeAddress(body?.address)
+    const amount = parseMicros(body?.amount)
     if (!address) return json({ error: "Address is invalid" }, 400)
-    return json({ you: fund(address) })
+    if (amount === null || amount <= 0) return json({ error: "Amount is invalid" }, 400)
+    const result = fund(address, amount)
+    if (!result.ok) return json({ error: result.error }, 400)
+    return json({ you: result.you })
   }
 
   if (req.method === "POST" && url.pathname === "/api/withdraw") {

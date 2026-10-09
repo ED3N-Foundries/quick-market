@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type PointerEvent as ReactPointerEvent, type RefObject } from "react"
 import { mountChart, type ChartScale, type TapeChart, type TapeSample } from "./chart"
-import { botLabel, formatCents, formatClock, formatMicros, formatPrice, formatSigned, microsToInput, moneyShare, quotePair, randomAddress, shortAddress, sourceLabel, takeMicros } from "./format"
+import { botLabel, formatClock, formatGainLoss, formatMoney, formatPrice, formatPriceDelta, formatSigned, microsToInput, moneyShare, parseAmountMicros, quotePair, randomAddress, shortAddress, sourceLabel, takeMicros } from "./format"
 import type { Band, Board, HistoryRound, OpenBet, SettledMessage, Side } from "./types"
 import { useMarket } from "./useMarket"
 
@@ -12,6 +12,7 @@ export function App() {
   const boardRef = useRef(market.board)
   const [chart, setChart] = useState<TapeChart | null>(null)
   const [stake, setStake] = useState("10")
+  const [fundAmount, setFundAmount] = useState("")
   const [withdrawAmount, setWithdrawAmount] = useState("")
   const [following, setFollowing] = useState(true)
   const scrub = useScrub(chart)
@@ -55,6 +56,10 @@ export function App() {
   const joined = !!board?.join && !!you?.openBets.some((bet) => bet.roundId === board.join?.id)
   const canBet = !!you && board?.phase === "bets" && !!board.join && market.feed === "live" && !joined && !market.pending
   const total = (focus?.poolUpMicros ?? 0) + (focus?.poolDownMicros ?? 0)
+  const held = you?.openBets.find((bet) => bet.roundId === focus?.id) ?? null
+  const upWin = winnings(stake, "up", focus?.poolUpMicros ?? 0, focus?.poolDownMicros ?? 0, market.config.feeBps, held, board?.phase === "bets")
+  const downWin = winnings(stake, "down", focus?.poolUpMicros ?? 0, focus?.poolDownMicros ?? 0, market.config.feeBps, held, board?.phase === "bets")
+  const fundMicros = parseAmountMicros(fundAmount)
 
   function chip(percent: number) {
     if (!you) return
@@ -100,18 +105,6 @@ export function App() {
           )}
           {market.result && <span className="last-result">{market.result}</span>}
         </div>
-        <div className="wallet">
-          {market.address ? (
-            <span className="who">
-              {shortAddress(market.address)}
-              <small>Demo</small>
-            </span>
-          ) : (
-            <button type="button" className="primary" onClick={() => market.connect(randomAddress())}>
-              Connect
-            </button>
-          )}
-        </div>
       </header>
 
       <section className="chart-wrap" onPointerDown={onPointerDown} onPointerMove={scrub.move} onPointerLeave={scrub.clear}>
@@ -120,7 +113,7 @@ export function App() {
           <ChartOverlay
             chart={chart}
             board={board}
-            halves
+            locked={board?.phase === "market"}
             openBets={you?.openBets ?? []}
             feeBps={market.config.feeBps}
             hover={scrub.hover}
@@ -147,18 +140,29 @@ export function App() {
           side="up"
           share={moneyShare(focus?.poolUpMicros ?? 0, total)}
           pool={focus?.poolUpMicros ?? 0}
+          toWin={upWin}
           players={focus?.playersUp ?? 0}
           disabled={!canBet}
           onBet={() => market.place("up", stake)}
         />
         <div className="stake">
-          <p className="balance-label">
-            Spendable <span>Demo</span>
-          </p>
-          <p className="balance">{you ? formatMicros(you.balanceMicros) : "—"}</p>
+          <div className="balance-label">
+            <span>Spendable</span>
+            {market.address ? (
+              <span className="who">
+                {shortAddress(market.address)}
+                <small>Demo</small>
+              </span>
+            ) : (
+              <button type="button" className="primary" onClick={() => market.connect(randomAddress())}>
+                Connect
+              </button>
+            )}
+          </div>
+          <p className="balance">{you ? formatMoney(you.balanceMicros) : "—"}</p>
           {you?.openBets.map((bet) => (
-            <p className="in-play" key={bet.roundId}>
-              In play {formatMicros(bet.stakeMicros)} on {bet.side === "up" ? "Up" : "Down"}
+            <p className={`in-play ${bet.side}`} key={bet.roundId}>
+              In play {formatMoney(bet.stakeMicros)} on {bet.side === "up" ? "▲ Up" : "▼ Down"}
             </p>
           ))}
           <label className="stake-field">
@@ -181,59 +185,98 @@ export function App() {
               100%
             </button>
           </div>
-          <button type="button" className="fund" onClick={() => market.fundWallet()} disabled={!you}>
-            Fund +1,000
-          </button>
+          <div className="funds">
+            <button type="button" onClick={() => market.fundWallet("10")} disabled={!you}>
+              +$10
+            </button>
+            <button type="button" onClick={() => market.fundWallet("1000")} disabled={!you}>
+              +$1,000
+            </button>
+          </div>
+          <div className="fund-custom">
+            <input
+              aria-label="Fund amount"
+              inputMode="decimal"
+              placeholder="Amount"
+              value={fundAmount}
+              onChange={(event) => setFundAmount(event.target.value)}
+              disabled={!you}
+            />
+            <button type="button" onClick={() => market.fundWallet(fundAmount)} disabled={!you || fundMicros === null}>
+              Fund
+            </button>
+          </div>
           {market.error && <p className="note bad">{market.error}</p>}
         </div>
         <SideCard
           side="down"
           share={moneyShare(focus?.poolDownMicros ?? 0, total)}
           pool={focus?.poolDownMicros ?? 0}
+          toWin={downWin}
           players={focus?.playersDown ?? 0}
           disabled={!canBet}
           onBet={() => market.place("down", stake)}
         />
       </section>
 
-      <section className="tray">
-        <header>
+      <details className="tray">
+        <summary>
           <h2>This pool</h2>
-          <span>{focus ? `${focus.tray.length} playing` : ""}</span>
-        </header>
+          <span>{focus && focus.tray.length > 0 ? `${focus.tray.length} playing` : ""}</span>
+        </summary>
         {focus && focus.tray.length > 0 ? (
           <ul>
             {focus.tray.map((row) => (
               <li key={row.address}>
                 <span className={row.bot ? "bot" : "addr"}>{row.bot ? botLabel(row.address) : shortAddress(row.address)}</span>
-                <span className={row.side}>{row.side === "up" ? "Up" : "Down"}</span>
-                <span className="amt">{formatMicros(row.stakeMicros)}</span>
+                <span className={row.side}>{row.side === "up" ? "▲ Up" : "▼ Down"}</span>
+                <span className="amt">{formatMoney(row.stakeMicros)}</span>
               </li>
             ))}
           </ul>
         ) : (
           <p className="empty">No one in this pool yet.</p>
         )}
-      </section>
+      </details>
 
       <History address={market.address} version={market.historyVersion} windowMs={market.config.windowSeconds * 1000} />
-      {market.notice && <Reveal event={market.notice} address={market.address} onDone={market.dismissNotice} />}
+      {market.notices.length > 0 && (
+        <div className="toasts">
+          {market.notices.map((event) => (
+            <ResultToast
+              key={event.roundId}
+              event={event}
+              address={market.address}
+              onDone={() => market.dismissNotice(event.roundId)}
+            />
+          ))}
+        </div>
+      )}
 
       <footer className="footer">
-        <p>{(market.config.feeBps / 100).toFixed(2)}% fee on a paid pool.</p>
-        <p>Up finishes above the open. Down finishes below. Push is a tie, and stakes return.</p>
-        <p>If a market never gets a price, it is void and stakes return.</p>
-        <p>Price from {sourceLabel(market.config.source)}.</p>
+        <div className="rules">
+          <p className="periods">
+            Bets {market.config.windowSeconds}s · Market {market.config.marketSeconds}s
+          </p>
+          <p>Up finishes above the open. Down finishes below. Push is a tie, and stakes return.</p>
+          <p>If a market never gets a price, it is void and stakes return.</p>
+          <p>
+            {(market.config.feeBps / 100).toFixed(2)}% fee on a paid pool. Price from {sourceLabel(market.config.source)}.
+          </p>
+        </div>
         <div className="withdraw">
-          <input
-            aria-label="Withdraw amount"
-            inputMode="decimal"
-            placeholder="Amount"
-            value={withdrawAmount}
-            onChange={(event) => setWithdrawAmount(event.target.value)}
-            disabled={!you}
-          />
-          <button type="button" onClick={() => market.withdrawWallet(withdrawAmount)} disabled={!you}>
+          <label>
+            <span>Withdraw</span>
+            <input
+              aria-label="Withdraw amount"
+              inputMode="decimal"
+              placeholder="Amount"
+              value={withdrawAmount}
+              onChange={(event) => setWithdrawAmount(event.target.value)}
+              disabled={!you}
+            />
+          </label>
+          <button type="button" onClick={() => market.withdrawWallet(withdrawAmount)} disabled={!you || !withdrawAmount.trim()}>
             Withdraw
           </button>
         </div>
@@ -245,14 +288,14 @@ export function App() {
 function ChartOverlay({
   chart,
   board,
-  halves,
+  locked,
   openBets,
   feeBps,
   hover,
 }: {
   chart: TapeChart
   board: Board | null
-  halves: boolean
+  locked: boolean
   openBets: OpenBet[]
   feeBps: number
   hover: { t: number } | null
@@ -279,7 +322,7 @@ function ChartOverlay({
           </div>
         )
       })}
-      {halves && <HalfLabels board={board} scale={current} xAt={xAt} />}
+      {locked && <LockShade board={board} scale={current} xAt={xAt} />}
       {openBets.map((bet) => {
         const band = board.bands.find((row) => row.id === bet.roundId) ?? (board.join?.id === bet.roundId ? board.join : null)
         if (!band) return null
@@ -304,7 +347,7 @@ function ChartOverlay({
   )
 }
 
-function HalfLabels({
+function LockShade({
   board,
   scale,
   xAt,
@@ -314,38 +357,19 @@ function HalfLabels({
   xAt: (t: number) => number
 }) {
   const plotRight = scale.plotLeft + scale.plotWidth
-  const plotBottom = scale.plotTop + scale.plotHeight
-  const left = xAt(board.blockStart)
-  const mid = xAt(board.windowEndsAt)
-  const right = xAt(board.blockEnd)
-  const completing = marketSettlingAt(board, board.windowEndsAt)
-  const current = marketStrikingAt(board, board.windowEndsAt)
-  const leftVisL = Math.max(left, scale.plotLeft)
-  const leftVisR = Math.min(mid, plotRight)
-  const rightVisL = Math.max(mid, scale.plotLeft)
-  const rightVisR = Math.min(right, plotRight)
-
+  const left = Math.max(xAt(board.blockStart), scale.plotLeft)
+  const right = Math.min(xAt(board.windowEndsAt), plotRight)
+  if (right - left < 8) return null
   return (
-    <>
-      {completing && leftVisR - leftVisL >= 48 && (
-        <p className="market-tag" style={{ left: leftVisL + 8, top: scale.plotTop + 8, maxWidth: plotRight - leftVisL - 16 }}>
-          <span>Last market completing</span>
-          <b className="up">Up {formatMicros(completing.poolUpMicros)}</b>
-          <b className="down">Down {formatMicros(completing.poolDownMicros)}</b>
-        </p>
-      )}
-      {current && rightVisR - rightVisL >= 48 && (
-        <p className="market-tag" style={{ left: rightVisL + 8, top: plotBottom - 28, maxWidth: rightVisR - rightVisL - 16 }}>
-          <span>Current market</span>
-          {(current.poolUpMicros > 0 || current.poolDownMicros > 0) && (
-            <>
-              <b className="up">Up {formatMicros(current.poolUpMicros)}</b>
-              <b className="down">Down {formatMicros(current.poolDownMicros)}</b>
-            </>
-          )}
-        </p>
-      )}
-    </>
+    <div className="lock-shade" style={{ left, width: right - left, top: scale.plotTop, height: scale.plotHeight }}>
+      <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+        <path
+          fill="currentColor"
+          d="M7 10V7a5 5 0 0 1 10 0v3h1a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V11a1 1 0 0 1 1-1h1zm2 0h6V7a3 3 0 0 0-6 0v3z"
+        />
+      </svg>
+      <span>Locked</span>
+    </div>
   )
 }
 
@@ -404,9 +428,9 @@ function BetChip({
   return (
     <p className={`chip ${bet.side}`} style={{ left, top: top + 52 }}>
       <strong>
-        {bet.side === "up" ? "Up" : "Down"} {formatMicros(bet.stakeMicros)}
+        {bet.side === "up" ? "▲ Up" : "▼ Down"} {formatMoney(bet.stakeMicros)}
       </strong>
-      <span>takes {formatCents(takes)}</span>
+      <span>takes {formatMoney(takes)}</span>
     </p>
   )
 }
@@ -428,10 +452,10 @@ function PriceReadout({
       const price = priceRef.current
       if (priceEl.current) priceEl.current.textContent = price ? formatPrice(price) : "—"
       if (deltaEl.current) {
-        if (price && strike) {
-          const delta = Number(price) - Number(strike)
-          deltaEl.current.textContent = `${delta > 0 ? "+" : delta < 0 ? "−" : ""}${Math.abs(delta).toFixed(2)}`
-          deltaEl.current.dataset.side = delta > 0 ? "up" : delta < 0 ? "down" : "flat"
+        const delta = price && strike ? formatPriceDelta(price, strike) : null
+        if (delta) {
+          deltaEl.current.textContent = delta.text
+          deltaEl.current.dataset.side = delta.side
         } else {
           deltaEl.current.textContent = ""
           deltaEl.current.dataset.side = "flat"
@@ -478,6 +502,7 @@ function SideCard(props: {
   side: Side
   share: string
   pool: number
+  toWin: number
   players: number
   disabled: boolean
   onBet: () => void
@@ -485,11 +510,12 @@ function SideCard(props: {
   const up = props.side === "up"
   return (
     <article className={up ? "side up" : "side down"}>
-      <p className="side-name">{up ? "Up" : "Down"}</p>
+      <p className="side-name">{up ? "▲ Up" : "▼ Down"}</p>
       <p className="share">{props.share}</p>
       <p className="pool">
-        {formatMicros(props.pool)} · {props.players} {props.players === 1 ? "player" : "players"}
+        {formatMoney(props.pool)} · {props.players} {props.players === 1 ? "player" : "players"}
       </p>
+      <p className="to-win">To win {formatMoney(props.toWin)}</p>
       <button type="button" disabled={props.disabled} onClick={props.onBet}>
         {up ? "Bet up" : "Bet down"}
       </button>
@@ -550,7 +576,7 @@ function History({ address, version, windowMs }: { address: string | null; versi
                 <>
                   <th>Side</th>
                   <th>Stake</th>
-                  <th>Payout</th>
+                  <th>Gain/loss</th>
                 </>
               )}
             </tr>
@@ -559,18 +585,20 @@ function History({ address, version, windowMs }: { address: string | null; versi
             {rows.map((row) => (
               <tr key={row.id} onClick={() => setReplay(row)} className={replay?.id === row.id ? "open" : ""}>
                 <td>{formatClock(row.startsAt)}</td>
-                <td>{resultLabel(row)}</td>
+                <td className={resultTone(row)}>{resultText(row)}</td>
                 <td>{row.strike ? formatPrice(row.strike) : "—"}</td>
                 <td>{row.settle ? formatPrice(row.settle) : "—"}</td>
-                <td>{formatMicros(row.poolUpMicros)}</td>
-                <td>{formatMicros(row.poolDownMicros)}</td>
-                <td>{formatMicros(row.feeMicros)}</td>
+                <td>{formatMoney(row.poolUpMicros)}</td>
+                <td>{formatMoney(row.poolDownMicros)}</td>
+                <td>{formatMoney(row.feeMicros)}</td>
                 {mine && (
                   <>
-                    <td>{row.mySide === "up" ? "Up" : row.mySide === "down" ? "Down" : "—"}</td>
-                    <td>{row.myStakeMicros !== undefined ? formatMicros(row.myStakeMicros) : "—"}</td>
-                    <td>
-                      {row.myPayoutMicros !== undefined && row.myPayoutMicros !== null ? formatMicros(row.myPayoutMicros) : "—"}
+                    <td className={row.mySide ?? ""}>{sideText(row.mySide)}</td>
+                    <td>{row.myStakeMicros !== undefined ? formatMoney(row.myStakeMicros) : "—"}</td>
+                    <td className={gainTone(row.myStakeMicros, row.myPayoutMicros)}>
+                      {row.myStakeMicros !== undefined && row.myPayoutMicros != null
+                        ? formatGainLoss(row.myStakeMicros, row.myPayoutMicros)
+                        : "—"}
                     </td>
                   </>
                 )}
@@ -683,9 +711,9 @@ function Replay({ row, windowMs, onClose }: { row: HistoryRound; windowMs: numbe
           <div>
             <h2>{formatClock(row.startsAt)}</h2>
             <p>
-              {resultLabel(row)}
+              {resultText(row)}
               {row.strike && row.settle ? ` · ${formatPrice(row.strike)} → ${formatPrice(row.settle)}` : ""}
-              {` · Up ${formatMicros(row.poolUpMicros)} · Down ${formatMicros(row.poolDownMicros)}`}
+              {` · Up ${formatMoney(row.poolUpMicros)} · Down ${formatMoney(row.poolDownMicros)}`}
             </p>
           </div>
           <button type="button" onClick={onClose}>
@@ -694,7 +722,7 @@ function Replay({ row, windowMs, onClose }: { row: HistoryRound; windowMs: numbe
         </header>
         <section className="chart-wrap still" onPointerMove={scrub.move} onPointerLeave={scrub.clear}>
           <canvas ref={canvasRef} />
-          {chart && <ChartOverlay chart={chart} board={board} halves={false} openBets={[]} feeBps={0} hover={scrub.hover} />}
+          {chart && <ChartOverlay chart={chart} board={board} locked={false} openBets={[]} feeBps={0} hover={scrub.hover} />}
         </section>
         {failed && <p className="empty">Couldn't load this market.</p>}
         {bets && bets.length === 0 && <p className="empty">No bets in this pool.</p>}
@@ -704,9 +732,11 @@ function Replay({ row, windowMs, onClose }: { row: HistoryRound; windowMs: numbe
               {bets.map((bet) => (
                 <li key={bet.address}>
                   <span className={bet.bot ? "bot" : ""}>{bet.bot ? botLabel(bet.address) : shortAddress(bet.address)}</span>
-                  <span className={bet.side}>{bet.side === "up" ? "Up" : "Down"}</span>
-                  <span>{formatMicros(bet.stakeMicros)}</span>
-                  <span>{bet.payoutMicros === null ? "—" : formatMicros(bet.payoutMicros)}</span>
+                  <span className={bet.side}>{bet.side === "up" ? "▲ Up" : "▼ Down"}</span>
+                  <span>{formatMoney(bet.stakeMicros)}</span>
+                  <span className={bet.payoutMicros === null ? "" : gainTone(bet.stakeMicros, bet.payoutMicros)}>
+                    {bet.payoutMicros === null ? "—" : formatGainLoss(bet.stakeMicros, bet.payoutMicros)}
+                  </span>
                 </li>
               ))}
             </ul>
@@ -717,55 +747,27 @@ function Replay({ row, windowMs, onClose }: { row: HistoryRound; windowMs: numbe
   )
 }
 
-function Reveal({ event, address, onDone }: { event: SettledMessage; address: string | null; onDone: () => void }) {
+function ResultToast({ event, address, onDone }: { event: SettledMessage; address: string | null; onDone: () => void }) {
   const mine = address ? (event.payouts.find((payout) => payout.address === address) ?? null) : null
+  const doneRef = useRef(onDone)
+  doneRef.current = onDone
   useEffect(() => {
-    const id = window.setTimeout(onDone, mine ? 4_500 : 3_200)
-    const onKey = (keyEvent: KeyboardEvent) => {
-      if (keyEvent.key === "Escape") onDone()
-    }
-    window.addEventListener("keydown", onKey)
-    return () => {
-      window.clearTimeout(id)
-      window.removeEventListener("keydown", onKey)
-    }
-  }, [event, mine, onDone])
+    const id = window.setTimeout(() => doneRef.current(), 4_500)
+    return () => window.clearTimeout(id)
+  }, [])
+  if (!mine) return null
 
-  const result = marketWord(event)
-  if (!mine) {
-    const move = event.strike && event.settle ? `${formatPrice(event.strike)} → ${formatPrice(event.settle)}` : null
-    return (
-      <button type="button" className="reveal-banner" onClick={onDone}>
-        <strong>{result}</strong>
-        {move && <span>{move}</span>}
-      </button>
-    )
-  }
-
-  const profit = mine.payoutMicros - mine.stakeMicros
-  const back = event.resolution === "void" || event.resolution === "refund" || event.winningSide === "push" || profit === 0
-  const title = event.resolution === "void" ? "Void" : back ? "Push" : profit > 0 ? "You win" : "Lost"
-  const tone = profit > 0 ? "win" : profit < 0 ? "loss" : "flat"
+  const tone = toastTone(event, mine.stakeMicros, mine.payoutMicros)
+  const title = event.resolution === "void" ? "Void" : tone === "win" ? "You win" : tone === "loss" ? "Lost" : "Push"
   const move = event.strike && event.settle ? `${formatPrice(event.strike)} → ${formatPrice(event.settle)}` : null
   return (
-    <div className="reveal-back" onClick={onDone}>
-      <div className={`reveal-card ${tone}`} role="dialog" aria-label={title}>
-        {tone === "win" && (
-          <span className="motes" aria-hidden="true">
-            {Array.from({ length: 10 }, (_, index) => (
-              <i key={index} style={{ ["--i" as string]: index }} />
-            ))}
-          </span>
-        )}
-        <p className="reveal-kicker">{result}</p>
-        <h2>{title}</h2>
-        <p className="take">{back && profit === 0 ? "Stakes back" : signedMicros(profit)}</p>
-        <p className="reveal-sub">
-          Stake {formatMicros(mine.stakeMicros)}
-          {move ? ` · ${move}` : ""}
-        </p>
-      </div>
-    </div>
+    <button type="button" className={`toast ${tone}`} onClick={onDone}>
+      <span>
+        <strong>{title}</strong>
+        {move && <small>{move}</small>}
+      </span>
+      <b>{formatGainLoss(mine.stakeMicros, mine.payoutMicros)}</b>
+    </button>
   )
 }
 
@@ -800,37 +802,58 @@ function baselineOf(board: Board | null): number | null {
   return null
 }
 
-function marketSettlingAt(board: Board, at: number): Band | null {
-  const band = board.bands.find((row) => row.settlesAt === at && row.status === "open")
-  if (band) return band
-  if (board.live && board.live.settlesAt === at && board.live.status === "open") return board.live
-  return null
+function winnings(
+  stakeText: string,
+  side: Side,
+  up: number,
+  down: number,
+  feeBps: number,
+  held: OpenBet | null,
+  accepting: boolean,
+): number {
+  if (held) {
+    if (held.side !== side) return 0
+    return takeMicros(held.stakeMicros, side, up, down, feeBps)
+  }
+  if (!accepting) return 0
+  const stakeMicros = parseAmountMicros(stakeText)
+  if (stakeMicros === null) return 0
+  const nextUp = up + (side === "up" ? stakeMicros : 0)
+  const nextDown = down + (side === "down" ? stakeMicros : 0)
+  return takeMicros(stakeMicros, side, nextUp, nextDown, feeBps)
 }
 
-function marketStrikingAt(board: Board, at: number): Band | null {
-  return (
-    board.bands.find((row) => row.strikeAt === at) ??
-    (board.live?.strikeAt === at ? board.live : null) ??
-    (board.join?.strikeAt === at ? board.join : null)
-  )
+function resultTone(row: HistoryRound): string {
+  if (row.status === "void" || row.resolution === "void") return "void"
+  if (row.winningSide === "push") return "push"
+  if (row.winningSide === "up" || row.winningSide === "down") return row.winningSide
+  return ""
 }
 
-function marketWord(event: SettledMessage): string {
-  if (event.resolution === "void") return "Void"
-  if (event.winningSide === "push" || !event.winningSide) return "Push"
-  if (event.winningSide === "up") return "Up"
-  return "Down"
-}
-
-function signedMicros(micros: number): string {
-  if (micros > 0) return `+${formatMicros(micros)}`
-  return formatMicros(micros)
-}
-
-function resultLabel(row: HistoryRound): string {
+function resultText(row: HistoryRound): string {
   if (row.status === "void" || row.resolution === "void") return "Void"
   if (row.winningSide === "push") return "Push"
-  if (row.winningSide === "up") return "Up"
-  if (row.winningSide === "down") return "Down"
+  if (row.winningSide === "up") return "▲ Up"
+  if (row.winningSide === "down") return "▼ Down"
   return "—"
+}
+
+function sideText(side: Side | undefined): string {
+  if (side === "up") return "▲ Up"
+  if (side === "down") return "▼ Down"
+  return "—"
+}
+
+function gainTone(stake: number | undefined, payout: number | null | undefined): string {
+  if (stake === undefined || payout == null) return ""
+  if (payout > stake) return "up"
+  if (payout === 0) return "down"
+  return "push"
+}
+
+function toastTone(event: SettledMessage, stake: number, payout: number): string {
+  if (event.resolution === "void") return "void"
+  if (payout > stake) return "win"
+  if (payout === 0) return "loss"
+  return "push"
 }

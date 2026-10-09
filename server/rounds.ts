@@ -2,7 +2,6 @@ import {
   botCount,
   clockAt,
   feeBps,
-  FUND_MICROS,
   LIVE_MS,
   marketBounds,
   MIN_STAKE_MICROS,
@@ -355,15 +354,19 @@ function ensureBot(address: string, now: number) {
   }
 }
 
-export function fund(address: string): You {
+export function fund(
+  address: string,
+  amountMicros: number,
+): { ok: true; you: You } | { ok: false; error: string } {
+  if (!Number.isSafeInteger(amountMicros) || amountMicros <= 0) return { ok: false, error: "Amount is invalid" }
   const tx = getDb().transaction(() => {
     ensureUser(address)
     getDb()
       .query("UPDATE users SET balance_micros = balance_micros + ? WHERE address = ?")
-      .run(FUND_MICROS, address)
+      .run(amountMicros, address)
   })
   tx()
-  return youFor(address)!
+  return { ok: true, you: youFor(address)! }
 }
 
 export function withdraw(

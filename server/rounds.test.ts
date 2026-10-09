@@ -1,7 +1,7 @@
 import { beforeEach, expect, test } from "bun:test"
 import { useDatabase } from "./db"
 import { parseMicros } from "./money"
-import { advance, board, ensureUser, feedStatus, notePrint, placeBet, resetRuntime, roundDetail, withdraw, youFor, type Print } from "./rounds"
+import { advance, board, ensureUser, feedStatus, fund, notePrint, placeBet, resetRuntime, roundDetail, withdraw, youFor, type Print } from "./rounds"
 
 const USDC = 1_000_000
 const T = 10_000_000_000_000
@@ -32,6 +32,17 @@ test("parseMicros keeps six decimal places", () => {
   expect(parseMicros("1.000001")).toBe(1_000_001)
   expect(parseMicros("1.0000001")).toBeNull()
   expect(parseMicros("10")).toBe(10_000_000)
+})
+
+test("fund adds the requested amount and rejects a non-positive one", () => {
+  const you = address(7)
+  ensureUser(you)
+  const before = youFor(you)!.balanceMicros
+  const funded = fund(you, 10 * USDC)
+  expect(funded.ok).toBe(true)
+  if (funded.ok) expect(funded.you.balanceMicros).toBe(before + 10 * USDC)
+  expect(fund(you, 0).ok).toBe(false)
+  expect(youFor(you)!.balanceMicros).toBe(before + 10 * USDC)
 })
 
 test("strike locks when the window closes and a winner is paid once", () => {

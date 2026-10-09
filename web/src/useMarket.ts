@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import type { TapeChart, TapePoint } from "./chart"
-import { formatCents } from "./format"
+import { formatGainLoss } from "./format"
 import type { Board, Config, SettledMessage, Side, You } from "./types"
 
 const ADDRESS_KEY = "qm.address"
@@ -24,7 +24,7 @@ export function useMarket() {
   const [error, setError] = useState<string | null>(null)
   const [pending, setPending] = useState(false)
   const [historyVersion, setHistoryVersion] = useState(0)
-  const [notice, setNotice] = useState<SettledMessage | null>(null)
+  const [notices, setNotices] = useState<SettledMessage[]>([])
   const [pulse, setPulse] = useState(0)
 
   const offsetRef = useRef(0)
@@ -132,8 +132,12 @@ export function useMarket() {
                 }
               : current,
           )
-          if (mine) setResult(describeResult(message, mine))
-          setNotice(message)
+          if (mine) {
+            setResult(describeResult(message, mine))
+            setNotices((current) =>
+              current.some((notice) => notice.roundId === message.roundId) ? current : [...current, message],
+            )
+          }
           setHistoryVersion((value) => value + 1)
         }
       }
@@ -180,7 +184,7 @@ export function useMarket() {
     localStorage.setItem(ADDRESS_KEY, nextAddress)
     setAddress(nextAddress)
     setResult(null)
-    setNotice(null)
+    setNotices([])
     setError(null)
   }, [])
 
@@ -212,21 +216,24 @@ export function useMarket() {
     [address],
   )
 
-  const fundWallet = useCallback(async () => {
-    if (!address) return
-    setError(null)
-    const response = await fetch("/api/fund", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ address }),
-    })
-    const body = await response.json()
-    if (!response.ok) {
-      setError(body.error ?? "Fund failed")
-      return
-    }
-    setYou(body.you)
-  }, [address])
+  const fundWallet = useCallback(
+    async (amount: string) => {
+      if (!address) return
+      setError(null)
+      const response = await fetch("/api/fund", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ address, amount }),
+      })
+      const body = await response.json()
+      if (!response.ok) {
+        setError(body.error ?? "Fund failed")
+        return
+      }
+      setYou(body.you)
+    },
+    [address],
+  )
 
   const withdrawWallet = useCallback(
     async (amount: string) => {
@@ -260,8 +267,10 @@ export function useMarket() {
     error,
     pending,
     historyVersion,
-    notice,
-    dismissNotice: useCallback(() => setNotice(null), []),
+    notices,
+    dismissNotice: useCallback((roundId: number) => {
+      setNotices((current) => current.filter((notice) => notice.roundId !== roundId))
+    }, []),
     now,
     offsetRef,
     priceRef,
@@ -273,13 +282,9 @@ export function useMarket() {
   }
 }
 
-function describeResult(event: SettledMessage, mine: SettledMessage["payouts"][number] | null): string {
+function describeResult(event: SettledMessage, mine: SettledMessage["payouts"][number]): string {
   if (event.resolution === "void") return "Void"
-  if (event.winningSide === "push" || !event.winningSide) return "Push"
-  if (!mine) return event.winningSide === "up" ? "Up" : "Down"
-  const profit = mine.payoutMicros - mine.stakeMicros
-  const label = mine.side === "up" ? "Up" : "Down"
-  if (profit === 0) return label
-  const sign = profit > 0 ? "+" : "−"
-  return `${label} ${sign}${formatCents(profit)}`
+  if (event.winningSide === "push") return "Push"
+  const label = mine.side === "up" ? "▲ Up" : "▼ Down"
+  return `${label} ${formatGainLoss(mine.stakeMicros, mine.payoutMicros)}`
 }

@@ -1,6 +1,5 @@
 export const MIN_STAKE_MICROS = 1_000_000
 export const STARTING_BALANCE_MICROS = 10_000_000_000
-export const FUND_MICROS = 1_000_000_000
 export const LIVE_MS = 5_000
 export const TAPE_MS = 15 * 60 * 1000
 
