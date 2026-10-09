@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs"
 import { join, normalize, sep } from "node:path"
-import { botCount, feeBps, marketMs, MIN_STAKE_MICROS, priceSource, windowMs } from "./config"
+import { botCount, feeBps, marketMs, MIN_STAKE_MICROS, priceSource, viewMs, windowMs } from "./config"
 import { getDb } from "./db"
 import { hub } from "./hub"
 import { normalizeAddress, parseMicros } from "./money"
@@ -78,6 +78,7 @@ function publicConfig() {
   return {
     windowSeconds: windowMs() / 1000,
     marketSeconds: marketMs() / 1000,
+    viewSeconds: viewMs() / 1000,
     feeBps: feeBps(),
     minStakeMicros: MIN_STAKE_MICROS,
     source: priceSource(),

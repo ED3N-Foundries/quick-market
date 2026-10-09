@@ -4,6 +4,7 @@ export type PriceSource = "binance" | "coinbase"
 export type Config = {
   windowSeconds: number
   marketSeconds: number
+  viewSeconds: number
   feeBps: number
   minStakeMicros: number
   source: PriceSource

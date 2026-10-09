@@ -20,12 +20,12 @@ bun run dev
 
 Open http://127.0.0.1:5173. The API listens on http://127.0.0.1:3001.
 
-`WINDOW_SECONDS` and `MARKET_SECONDS` both default to 5. `PRICE_SOURCE=binance` (or `coinbase`) picks the only price feed. `BOT_COUNT` defaults to 8.
+`WINDOW_SECONDS` and `MARKET_SECONDS` both default to 5. `VIEW_SECONDS` defaults to 5 and is how wide the scrolling market chart is. `PRICE_SOURCE=binance` (or `coinbase`) picks the only price feed. `BOT_COUNT` defaults to 8.
 
 ## Rules
 
 - Time is a UTC block of window plus market. The first part is the betting window, and the previous market is still live on that same stretch. The second part is the new market, with betting closed.
-- The open prints when the window closes. That market settles when the next window closes. A player stays on that market until it settles and cannot join the next window yet.
+- The open prints when the window closes. That market settles when the next window closes. A player stays on that market until it settles and cannot join the next window yet. The betting window stays a fixed frame. The market chart is `VIEW_SECONDS` wide and scrolls with now on the right edge. A held market keeps that scroll until it settles, two widths at the default block.
 - The line is one feed for the whole session: Binance `BTCUSDT` or Coinbase `BTC-USD`. The server does not switch between them. Green is above that market's open, red is below.
 - Stake is demo USDC. Your payout is your share of the winning side, after a 0.25% fee on the pot.
 - A tie is a push: stakes return, no fee. A market with no print across its whole life is void, and stakes return.

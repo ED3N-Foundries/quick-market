@@ -8,6 +8,7 @@ const ADDRESS_KEY = "qm.address"
 const defaultConfig: Config = {
   windowSeconds: 5,
   marketSeconds: 5,
+  viewSeconds: 5,
   feeBps: 25,
   minStakeMicros: 1_000_000,
   source: "binance",

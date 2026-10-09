@@ -1,17 +1,24 @@
 import { formatPrice } from "./format"
-import { HALF_FLOOR, contentHalf, halfSpan, shownHalf, type PricePoint } from "./scale"
+import { HALF_FLOOR, contentHalf, halfSpan, openPrice, shownHalf, type PricePoint } from "./scale"
 
 export type TapePoint = PricePoint & { text?: string }
 
 export type ChartStrike = { price: number; text: string }
 
-/** The price the chart is built around. A locked strike is the close of the bet
- *  window. Until that close, the latest price is the one in play.
+/** The price the chart is built around. A locked strike is the market open.
+ *  Until that open prints, `fallback` is the price the stage stays centered on.
  */
-export function priceInUse(strike: number | null, latest: number | null): number | null {
+export function priceInUse(strike: number | null, fallback: number | null): number | null {
   if (strike != null && Number.isFinite(strike)) return strike
-  if (latest != null && Number.isFinite(latest)) return latest
+  if (fallback != null && Number.isFinite(fallback)) return fallback
   return null
+}
+
+/** Baseline for one stage. A strike wins. Otherwise the price already printing
+ *  when `viewStart` opened, so later prints do not move the hills.
+ */
+export function stageBaseline(strike: number | null, points: PricePoint[], viewStart: number): number | null {
+  return priceInUse(strike, openPrice(points, viewStart))
 }
 
 export type ChartScale = {
@@ -72,8 +79,6 @@ export function mountChart(
   let scale: ChartScale | null = null
   let shown = HALF_FLOOR
   let scaled = false
-  let lastBaseline: number | null = null
-  let lastViewStart = 0
   const listeners = new Set<() => void>()
 
   const resize = () => {
@@ -103,15 +108,10 @@ export function mountChart(
     for (const listener of listeners) listener()
   }
 
-  function snapHalf(target: number, content: number, baseline: number | null, viewStart: number, viewEnd: number) {
-    const span = Math.max(1, viewEnd - viewStart)
-    const jumped = scaled && Math.abs(viewStart - lastViewStart) > span * 0.2
-    const baselineChanged = scaled && baseline !== lastBaseline
-    const next = shownHalf(shown, target, content, !scaled || jumped || baselineChanged)
+  function snapHalf(target: number, content: number) {
+    const next = shownHalf(shown, target, content, !scaled)
     shown = next
     scaled = true
-    lastBaseline = baseline
-    lastViewStart = viewStart
     return next
   }
 
@@ -136,9 +136,9 @@ export function mountChart(
     const series = tapeInView(points, viewStart, viewEnd, now, options.extendLive(), view.follow)
     const strike = options.getStrike()
     const head = series.length ? series[series.length - 1] : null
-    const baseline = priceInUse(strike?.price ?? null, head?.price ?? null)
+    const baseline = stageBaseline(strike?.price ?? null, points, viewStart)
     const center = baseline ?? 0
-    const half = snapHalf(halfSpan(series, center), contentHalf(series, center), baseline, viewStart, viewEnd)
+    const half = snapHalf(halfSpan(series, center), contentHalf(series, center))
     const min = center - half
     const max = center + half
     const yAt = (price: number) => PAD.t + ((max - price) / (max - min)) * plotH

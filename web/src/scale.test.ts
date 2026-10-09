@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { HALF_FLOOR, contentHalf, halfSpan, openPrice, shownHalf } from "./scale"
+import { HALF_FLOOR, HOLD_RATIO, contentHalf, halfSpan, openPrice, shownHalf } from "./scale"
 
 const baseline = 100
 
@@ -92,4 +92,14 @@ test("a print past a short target still lands on screen", () => {
 test("a shrinking target snaps to a range that fits", () => {
   expect(shownHalf(2, 1, 0.5, false)).toBe(1)
   expect(shownHalf(2, 1, 1.4, true)).toBe(1.4)
+})
+
+test("a small shrink around the baseline holds", () => {
+  expect(shownHalf(1, 0.9, 0.8, false)).toBe(1)
+  expect(0.9).toBeGreaterThanOrEqual(HOLD_RATIO)
+})
+
+test("a shrink below the hold band snaps once", () => {
+  expect(shownHalf(1, 0.5, 0.4, false)).toBe(0.5)
+  expect(0.5).toBeLessThan(HOLD_RATIO)
 })

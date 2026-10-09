@@ -21,6 +21,13 @@ export function marketMs(): number {
   return seconds * 1000
 }
 
+/** Width of the scrolling market chart. At the default block this is half the strike-to-settle wait. */
+export function viewMs(): number {
+  const seconds = Number(process.env.VIEW_SECONDS ?? 5)
+  if (!Number.isInteger(seconds) || seconds < 1 || seconds > 120) return 5_000
+  return seconds * 1000
+}
+
 export function blockMs(): number {
   return windowMs() + marketMs()
 }

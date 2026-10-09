@@ -40,16 +40,20 @@ export function contentHalf(points: PricePoint[], baseline: number): number {
   return extent
 }
 
+/** A new fit inside this fraction of the current half does not change the zoom. */
+export const HOLD_RATIO = 0.7
+
 /**
  * Half-range actually drawn.
- * A print that no longer fits snaps wider in one jump. A larger target that
- * still fits holds, so the scale does not jitter outward. A smaller target
- * snaps to a range that still fits every print. `reset` snaps too.
+ * A print that does not fit snaps wider in one jump. A new fit that is still
+ * at least `HOLD_RATIO` of the current half holds, so noise around the baseline
+ * does not zoom. A fit below that band snaps tighter once. `reset` snaps too.
  */
 export function shownHalf(current: number, target: number, content: number, reset: boolean): number {
-  const fit = Math.max(target, Number.isFinite(content) ? content : 0)
-  if (reset || !Number.isFinite(current)) return fit
-  if (content > current) return fit
-  if (target >= current) return current
+  const extent = Number.isFinite(content) ? content : 0
+  const fit = Math.max(target, extent, HALF_FLOOR)
+  if (reset || !Number.isFinite(current) || current <= 0) return fit
+  if (extent > current) return fit
+  if (fit >= current * HOLD_RATIO) return current
   return fit
 }

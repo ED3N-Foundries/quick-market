@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type PointerEvent as ReactPointerEvent, type RefObject } from "react"
 import { mountChart, type ChartScale, type TapeChart, type TapeSample } from "./chart"
-import { focusPool, followWindow, heldMarket, heldStrike } from "./focus"
+import { chartMarket, focusPool, followWindow, heldMarket, heldStrike } from "./focus"
 import { botLabel, formatClock, formatGainLoss, formatMoney, formatPrice, formatPriceDelta, formatSigned, microsToInput, moneyShare, parseAmountMicros, payoutMicros, quoteDollar, quotePair, randomAddress, shortAddress, sourceLabel } from "./format"
 import type { Band, Board, HistoryRound, OpenBet, SettledMessage, Side } from "./types"
 import { useMarket } from "./useMarket"
@@ -10,6 +10,7 @@ export function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const chartRef = useRef<TapeChart | null>(null)
   const viewRef = useRef({ follow: true, start: 0, end: 0 })
+  const viewSecondsRef = useRef(market.config.viewSeconds)
   const boardRef = useRef(market.board)
   const openBetsRef = useRef<OpenBet[]>([])
   const [chart, setChart] = useState<TapeChart | null>(null)
@@ -21,6 +22,7 @@ export function App() {
   const scrub = useScrub(chart)
   boardRef.current = market.board
   openBetsRef.current = market.you?.openBets ?? []
+  viewSecondsRef.current = market.config.viewSeconds
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -32,14 +34,14 @@ export function App() {
         const board = boardRef.current
         if (!board) return null
         const now = Date.now() + market.offsetRef.current
-        const frame = followWindow(board, openBetsRef.current, now)
+        const frame = followWindow(board, openBetsRef.current, now, (viewSecondsRef.current || 5) * 1000)
         return { blockStart: frame.start, blockEnd: frame.end }
       },
       getStrike: () => {
         const board = boardRef.current
         if (!board) return null
-        const held = heldMarket(board, openBetsRef.current, Date.now() + market.offsetRef.current)
-        return heldStrike(held)
+        const now = Date.now() + market.offsetRef.current
+        return heldStrike(chartMarket(board, openBetsRef.current, now))
       },
       extendLive: () => true,
     })

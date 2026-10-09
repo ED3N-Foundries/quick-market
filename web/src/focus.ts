@@ -1,4 +1,4 @@
-import { betSession } from "./betChart"
+import { betSession, marketScroll } from "./betChart"
 import type { Band, Board, OpenBet, PoolCard } from "./types"
 
 function findMarket(board: Board, id: number): Band | null {
@@ -20,11 +20,28 @@ export function heldMarket(board: Board, openBets: OpenBet[], now: number): Band
   return best
 }
 
-/** Follow span for the chart. Always the 5s slice that contains now, so a
- *  held bet does not stretch the tape. The strike, when one is locked, is
- *  the horizon on that same slice.
+function isResolving(market: Band | null, now: number): market is Band {
+  return !!market?.strike && now >= market.strikeAt && now < market.settlesAt
+}
+
+/** The market the rolling chart is centered on.
+ *  The betting window stays a fixed frame. The roll is the market chart:
+ *  a held bet that has struck, or the live market during the market phase.
+ *  An unstruck bet does not qualify, and a previous market does not roll the bet window.
  */
-export function followWindow(board: Board, _openBets: OpenBet[], now: number): { start: number; end: number } {
+export function chartMarket(board: Board, openBets: OpenBet[], now: number): Band | null {
+  const held = heldMarket(board, openBets, now)
+  if (isResolving(held, now)) return held
+  if (board.phase === "market" && isResolving(board.live, now)) return board.live
+  return null
+}
+
+/** Follow span for the chart. The market chart scrolls one view wide with now
+ *  on the right edge. The bet chart stays the fixed slice that contains now.
+ *  A held bet does not change the width.
+ */
+export function followWindow(board: Board, openBets: OpenBet[], now: number, viewMs = 5_000): { start: number; end: number } {
+  if (chartMarket(board, openBets, now)) return marketScroll(now, viewMs)
   return betSession(board, now)
 }
 
