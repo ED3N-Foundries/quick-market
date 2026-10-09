@@ -131,7 +131,7 @@ export function quoteDollar(side: "up" | "down", up: number, down: number, feeBp
   const nextDown = down + (side === "down" ? stake : 0)
   const other = side === "up" ? nextDown : nextUp
   if (other <= 0) return "$1 back"
-  return `$1 can win ${formatMoney(payoutMicros(stake, side, nextUp, nextDown, feeBps))}`
+  return `$1 wins ${formatMoney(payoutMicros(stake, side, nextUp, nextDown, feeBps))}`
 }
 
 export function moneyShare(side: number, total: number): string {
