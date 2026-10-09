@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type PointerEvent as ReactPointerEvent, type RefObject } from "react"
 import { mountChart, type ChartScale, type TapeChart, type TapeSample } from "./chart"
-import { focusPool, followWindow, heldMarket } from "./focus"
+import { focusPool, followWindow, heldMarket, heldStrike } from "./focus"
 import { botLabel, formatClock, formatGainLoss, formatMoney, formatPrice, formatPriceDelta, formatSigned, microsToInput, moneyShare, parseAmountMicros, payoutMicros, quoteDollar, quotePair, randomAddress, shortAddress, sourceLabel } from "./format"
 import type { Band, Board, HistoryRound, OpenBet, SettledMessage, Side } from "./types"
 import { useMarket } from "./useMarket"
@@ -35,20 +35,11 @@ export function App() {
         const frame = followWindow(board, openBetsRef.current, now)
         return { blockStart: frame.start, blockEnd: frame.end }
       },
-      getMarkets: () => {
+      getStrike: () => {
         const board = boardRef.current
-        if (!board) return []
+        if (!board) return null
         const held = heldMarket(board, openBetsRef.current, Date.now() + market.offsetRef.current)
-        if (!held) return []
-        return [
-          {
-            id: held.id,
-            betsOpen: held.betsOpen,
-            strikeAt: held.strikeAt,
-            settlesAt: held.settlesAt,
-            strike: held.strike === null ? null : Number(held.strike),
-          },
-        ]
+        return heldStrike(held)
       },
       extendLive: () => true,
     })
@@ -139,14 +130,7 @@ export function App() {
       <section className="chart-wrap" onPointerDown={onPointerDown} onPointerMove={scrub.move} onPointerLeave={scrub.clear}>
         <canvas ref={canvasRef} />
         {chart && (
-          <ChartOverlay
-            chart={chart}
-            board={board}
-            shade={heldSpan && now >= heldSpan.strikeAt ? { betsOpen: heldSpan.betsOpen, strikeAt: heldSpan.strikeAt } : null}
-            openBets={openBets}
-            feeBps={market.config.feeBps}
-            hover={scrub.hover}
-          />
+          <ChartOverlay chart={chart} board={board} openBets={openBets} feeBps={market.config.feeBps} hover={scrub.hover} />
         )}
         {market.feed === "stale" && <p className="feed-flag">Price delayed</p>}
         {!following && (
@@ -325,14 +309,12 @@ export function App() {
 function ChartOverlay({
   chart,
   board,
-  shade,
   openBets,
   feeBps,
   hover,
 }: {
   chart: TapeChart
   board: Board | null
-  shade: { betsOpen: number; strikeAt: number } | null
   openBets: OpenBet[]
   feeBps: number
   hover: { t: number } | null
@@ -344,7 +326,6 @@ function ChartOverlay({
 
   return (
     <div className="chart-overlay">
-      {shade && <LockShade betsOpen={shade.betsOpen} strikeAt={shade.strikeAt} scale={current} xAt={xAt} />}
       {openBets.map((bet) => {
         const band = board.bands.find((row) => row.id === bet.roundId) ?? (board.join?.id === bet.roundId ? board.join : null)
         if (!band) return null
@@ -365,34 +346,6 @@ function ChartOverlay({
         </span>
       ))}
       {hover && <Scrub scale={current} xAt={xAt} hover={hover} sample={chart.sample(hover.t)} bands={board.bands} />}
-    </div>
-  )
-}
-
-function LockShade({
-  betsOpen,
-  strikeAt,
-  scale,
-  xAt,
-}: {
-  betsOpen: number
-  strikeAt: number
-  scale: ChartScale
-  xAt: (t: number) => number
-}) {
-  const plotRight = scale.plotLeft + scale.plotWidth
-  const left = Math.max(xAt(betsOpen), scale.plotLeft)
-  const right = Math.min(xAt(strikeAt), plotRight)
-  if (right - left < 8) return null
-  return (
-    <div className="lock-shade" style={{ left, width: right - left, top: scale.plotTop, height: scale.plotHeight }}>
-      <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
-        <path
-          fill="currentColor"
-          d="M7 10V7a5 5 0 0 1 10 0v3h1a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V11a1 1 0 0 1 1-1h1zm2 0h6V7a3 3 0 0 0-6 0v3z"
-        />
-      </svg>
-      <span>Locked</span>
     </div>
   )
 }
@@ -719,25 +672,16 @@ function Replay({ row, windowMs, onClose }: { row: HistoryRound; windowMs: numbe
         const tape = (body.tape ?? []) as { t: number; price: string }[]
         const canvas = canvasRef.current
         if (!canvas) return
-        const strike = row.strike == null ? null : Number(row.strike)
         const betsOpen = row.startsAt - windowMs
         viewRef.current = { follow: false, start: betsOpen, end: row.endsAt }
         spawned = mountChart(canvas, {
           getNow: () => row.endsAt + 1,
           getView: () => viewRef.current,
           getClock: () => null,
-          getMarkets: () => [
-            {
-              id: row.id,
-              betsOpen,
-              strikeAt: row.startsAt,
-              settlesAt: row.endsAt,
-              strike,
-            },
-          ],
+          getStrike: () => heldStrike({ strike: row.strike }),
           extendLive: () => false,
         })
-        spawned.reset(tape.map((point) => ({ t: point.t, price: Number(point.price) })))
+        spawned.reset(tape.map((point) => ({ t: point.t, price: Number(point.price), text: point.price })))
         setChart(spawned)
         setBets(body.bets ?? [])
       })
@@ -797,7 +741,7 @@ function Replay({ row, windowMs, onClose }: { row: HistoryRound; windowMs: numbe
         </header>
         <section className="chart-wrap still" onPointerMove={scrub.move} onPointerLeave={scrub.clear}>
           <canvas ref={canvasRef} />
-          {chart && <ChartOverlay chart={chart} board={board} shade={null} openBets={[]} feeBps={0} hover={scrub.hover} />}
+          {chart && <ChartOverlay chart={chart} board={board} openBets={[]} feeBps={0} hover={scrub.hover} />}
         </section>
         {failed && <p className="empty">Couldn't load this market.</p>}
         {bets && bets.length === 0 && <p className="empty">No bets in this pool.</p>}

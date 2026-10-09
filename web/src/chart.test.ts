@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { tapeInView, type TapePoint } from "./chart"
+import { priceInUse, tapeInView, type TapePoint } from "./chart"
 
 const points: TapePoint[] = [
   { t: 0, price: 100 },
@@ -32,6 +32,13 @@ test("replay stops at the last print inside the window", () => {
     { t: 12_000, price: 100 },
     { t: 12_000, price: 101 },
   ])
+})
+
+test("a locked strike is the price in use, and a missing strike falls back to the latest price", () => {
+  expect(priceInUse(101, 100)).toBe(101)
+  expect(priceInUse(null, 100)).toBe(100)
+  expect(priceInUse(Number.NaN, 100)).toBe(100)
+  expect(priceInUse(null, null)).toBeNull()
 })
 
 test("a panned view does not invent a hold out to its right edge", () => {

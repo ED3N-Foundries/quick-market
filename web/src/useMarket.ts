@@ -41,7 +41,7 @@ export function useMarket() {
     chart.reset(seedRef.current)
     const last = seedRef.current[seedRef.current.length - 1]?.t ?? 0
     for (const point of bufferRef.current) {
-      if (point.t >= last) chart.push(point.t, point.price)
+      if (point.t >= last) chart.push(point.t, point.price, point.text)
     }
     bufferRef.current = []
     seededRef.current = true
@@ -57,13 +57,13 @@ export function useMarket() {
 
   const pushTick = useCallback((t: number, price: string) => {
     priceRef.current = price
-    const point = { t, price: Number(price) }
+    const point = { t, price: Number(price), text: price }
     const chart = chartRef.current
     if (!seededRef.current || !chart) {
       bufferRef.current.push(point)
       return
     }
-    chart.push(point.t, point.price)
+    chart.push(point.t, point.price, point.text)
   }, [])
 
   useEffect(() => {
@@ -87,6 +87,7 @@ export function useMarket() {
           seedRef.current = (body.tape as { t: number; price: string }[]).map((point) => ({
             t: point.t,
             price: Number(point.price),
+            text: point.price,
           }))
           if (chartRef.current) applySeed(chartRef.current)
         }

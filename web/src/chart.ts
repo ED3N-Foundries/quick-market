@@ -1,13 +1,17 @@
-import { HALF_FLOOR, contentHalf, halfSpan, openPrice, shownHalf, type PricePoint } from "./scale"
+import { formatPrice } from "./format"
+import { HALF_FLOOR, contentHalf, halfSpan, shownHalf, type PricePoint } from "./scale"
 
-export type TapePoint = PricePoint
+export type TapePoint = PricePoint & { text?: string }
 
-export type MarketSpan = {
-  id: number
-  betsOpen: number
-  strikeAt: number
-  settlesAt: number
-  strike: number | null
+export type ChartStrike = { price: number; text: string }
+
+/** The price the chart is built around. A locked strike is the close of the bet
+ *  window. Until that close, the latest price is the one in play.
+ */
+export function priceInUse(strike: number | null, latest: number | null): number | null {
+  if (strike != null && Number.isFinite(strike)) return strike
+  if (latest != null && Number.isFinite(latest)) return latest
+  return null
 }
 
 export type ChartScale = {
@@ -28,7 +32,7 @@ export type TapeSample = { price: number; at: number; previous: number | null }
 
 export type TapeChart = {
   reset(points: TapePoint[]): void
-  push(t: number, price: number): void
+  push(t: number, price: number, text?: string): void
   destroy(): void
   subscribe(listener: () => void): () => void
   getScale(): ChartScale | null
@@ -43,7 +47,6 @@ const PUSH = "#4c8dff"
 const UP_FILL = "rgba(47, 206, 134, 0.22)"
 const DOWN_FILL = "rgba(255, 90, 79, 0.2)"
 const NEUTRAL = "rgba(243,240,232,0.7)"
-const STRIKE = "rgba(243,240,232,0.55)"
 const PUSH_EPS = 1e-8
 
 export function priceTone(price: number, baseline: number): "up" | "down" | "push" {
@@ -59,7 +62,7 @@ export function mountChart(
     getNow: () => number
     getView: () => View
     getClock: () => { blockStart: number; blockEnd: number } | null
-    getMarkets: () => MarketSpan[]
+    getStrike: () => ChartStrike | null
     extendLive: () => boolean
   },
 ): TapeChart {
@@ -130,11 +133,10 @@ export function mountChart(
     const viewEnd = view.follow ? (clock?.blockEnd ?? now) : view.end
     const span = Math.max(1, viewEnd - viewStart)
     const xAt = (t: number) => PAD.l + ((t - viewStart) / span) * plotW
-    const markets = options.getMarkets().filter((market) => market.settlesAt > viewStart && market.betsOpen < viewEnd)
-
     const series = tapeInView(points, viewStart, viewEnd, now, options.extendLive(), view.follow)
-    const rawOpen = openPrice(points, viewStart)
-    const baseline = rawOpen != null && Number.isFinite(rawOpen) ? rawOpen : null
+    const strike = options.getStrike()
+    const head = series.length ? series[series.length - 1] : null
+    const baseline = priceInUse(strike?.price ?? null, head?.price ?? null)
     const center = baseline ?? 0
     const half = snapHalf(halfSpan(series, center), contentHalf(series, center), baseline, viewStart, viewEnd)
     const min = center - half
@@ -170,53 +172,42 @@ export function mountChart(
     ctx.rect(PAD.l, PAD.t, plotW, plotH)
     ctx.clip()
 
+    const path = series.map((point) => ({ ...point, x: xAt(point.t), y: yAt(point.price) }))
     if (!series.length) {
       ctx.fillStyle = "rgba(243,240,232,0.45)"
       ctx.font = "13px ui-sans-serif, system-ui, sans-serif"
       ctx.fillText("Waiting for the price", PAD.l, PAD.t + 18)
-    } else {
-      const path = series.map((point) => ({ ...point, x: xAt(point.t), y: yAt(point.price) }))
-      for (const market of markets) {
-        if (market.strike === null) continue
-        const x0 = xAt(Math.max(market.strikeAt, viewStart))
-        const x1 = xAt(Math.min(market.settlesAt, viewEnd))
-        if (x1 <= x0) continue
-        const strikeY = yAt(market.strike)
-        ctx.save()
-        ctx.beginPath()
-        ctx.rect(x0, PAD.t, x1 - x0, plotH)
-        ctx.clip()
-        for (let i = 1; i < path.length; i++) {
-          const a = path[i - 1]
-          const b = path[i]
-          if (!a || !b) continue
-          if (b.t < market.strikeAt || a.t > market.settlesAt) continue
-          fillSegment(ctx, a, b, market.strike, strikeY)
-        }
-        ctx.restore()
-        ctx.save()
-        ctx.setLineDash([4, 5])
-        ctx.strokeStyle = STRIKE
-        ctx.beginPath()
-        ctx.moveTo(x0, strikeY)
-        ctx.lineTo(x1, strikeY)
-        ctx.stroke()
-        ctx.restore()
-      }
-
-      ctx.lineWidth = 1.75
-      ctx.lineJoin = "round"
-      ctx.lineCap = "round"
+    } else if (baseline != null) {
+      const baselineY = yAt(baseline)
       for (let i = 1; i < path.length; i++) {
         const a = path[i - 1]
         const b = path[i]
-        if (a && b) strokePair(ctx, a, b, markets)
+        if (a && b) fillSegment(ctx, a, b, baseline, baselineY)
+      }
+    }
+
+    if (baseline != null) drawHorizon(ctx, PAD.l, PAD.l + plotW, yAt(baseline), null, PAD.t, plotH)
+
+    if (series.length) {
+      ctx.lineWidth = 1.75
+      ctx.lineJoin = "round"
+      ctx.lineCap = "round"
+      ctx.setLineDash([])
+      for (let i = 1; i < path.length; i++) {
+        const a = path[i - 1]
+        const b = path[i]
+        if (a && b && baseline != null) strokePair(ctx, a, b, baseline)
+        else if (a && b) {
+          ctx.strokeStyle = NEUTRAL
+          trace(ctx, a, b)
+        }
       }
     }
 
     if (options.extendLive() && now >= viewStart && now <= viewEnd) {
       ctx.strokeStyle = "rgba(243,240,232,0.28)"
       ctx.lineWidth = 1
+      ctx.setLineDash([])
       ctx.beginPath()
       ctx.moveTo(xAt(now), PAD.t)
       ctx.lineTo(xAt(now), PAD.t + plotH)
@@ -225,14 +216,14 @@ export function mountChart(
 
     const last = series.length ? series[series.length - 1] : null
     if (last) {
-      const market = marketAt(markets, last.t)
-      const tone = market?.strike == null ? null : priceTone(last.price, market.strike)
+      const tone = baseline == null ? null : priceTone(last.price, baseline)
       const color = tone === "push" ? PUSH : tone === "up" ? UP : tone === "down" ? DOWN : NEUTRAL
       ctx.fillStyle = color
       ctx.beginPath()
       ctx.arc(xAt(last.t), yAt(last.price), 3.5, 0, Math.PI * 2)
       ctx.fill()
     }
+    if (baseline != null) drawHorizon(ctx, PAD.l, PAD.l + plotW, yAt(baseline), horizonLabel(strike, points, head?.t ?? viewEnd), PAD.t, plotH, true)
     ctx.restore()
 
     ctx.fillStyle = "rgba(243,240,232,0.45)"
@@ -247,15 +238,16 @@ export function mountChart(
     reset(next) {
       points = next.filter((point) => Number.isFinite(point.t) && Number.isFinite(point.price))
     },
-    push(t, price) {
+    push(t, price, text?: string) {
       if (!Number.isFinite(t) || !Number.isFinite(price)) return
       const last = points[points.length - 1]
       if (last && t < last.t) return
       if (last && t === last.t) {
         last.price = price
+        if (text) last.text = text
         return
       }
-      points.push({ t, price })
+      points.push(text ? { t, price, text } : { t, price })
       const cutoff = t - TAPE_MS
       if (points.length > 20_000 || (points[0] && points[0].t < cutoff)) {
         const index = points.findIndex((point) => point.t >= cutoff)
@@ -382,57 +374,29 @@ function priceTicks(min: number, max: number): { price: number; label: string }[
 
 type XY = TapePoint & { x: number; y: number }
 
-function marketAt(markets: MarketSpan[], t: number): MarketSpan | null {
-  for (const market of markets) {
-    if (market.strike === null) continue
-    if (t >= market.strikeAt && t < market.settlesAt) return market
-  }
-  return null
-}
-
-function strokePair(ctx: CanvasRenderingContext2D, a: XY, b: XY, markets: MarketSpan[]) {
+function strokePair(ctx: CanvasRenderingContext2D, a: XY, b: XY, baseline: number) {
   if (a.t === b.t && a.price === b.price) return
-  const cuts: number[] = []
-  for (const market of markets) {
-    if (market.strikeAt > a.t && market.strikeAt < b.t) cuts.push(market.strikeAt)
-    if (market.settlesAt > a.t && market.settlesAt < b.t) cuts.push(market.settlesAt)
-  }
-  cuts.sort((left, right) => left - right)
-  const cut = cuts[0]
-  if (cut !== undefined) {
-    const mid = splitAt(a, b, cut)
-    if (mid) {
-      strokePair(ctx, a, mid, markets)
-      strokePair(ctx, mid, b, markets)
-      return
-    }
-  }
-  const market = marketAt(markets, a.t === b.t ? a.t : (a.t + b.t) / 2)
-  if (!market || market.strike === null) {
-    ctx.strokeStyle = NEUTRAL
-    trace(ctx, a, b)
-    return
-  }
-  if (priceTone(a.price, market.strike) === "push" && priceTone(b.price, market.strike) === "push") {
+  if (priceTone(a.price, baseline) === "push" && priceTone(b.price, baseline) === "push") {
     ctx.strokeStyle = PUSH
     ctx.setLineDash([5, 4])
     trace(ctx, a, b)
     ctx.setLineDash([])
     return
   }
-  if ((a.price - market.strike) * (b.price - market.strike) < 0) {
-    const ratio = (market.strike - a.price) / (b.price - a.price)
+  if ((a.price - baseline) * (b.price - baseline) < 0) {
+    const ratio = (baseline - a.price) / (b.price - a.price)
     const mid: XY = {
       t: a.t + (b.t - a.t) * ratio,
-      price: market.strike,
+      price: baseline,
       x: a.x + (b.x - a.x) * ratio,
       y: a.y + (b.y - a.y) * ratio,
     }
-    strokePair(ctx, a, mid, markets)
-    strokePair(ctx, mid, b, markets)
+    strokePair(ctx, a, mid, baseline)
+    strokePair(ctx, mid, b, baseline)
     return
   }
-  ctx.strokeStyle = a.price >= market.strike && b.price >= market.strike ? UP : DOWN
+  ctx.setLineDash([])
+  ctx.strokeStyle = a.price >= baseline && b.price >= baseline ? UP : DOWN
   trace(ctx, a, b)
 }
 
@@ -441,17 +405,6 @@ function trace(ctx: CanvasRenderingContext2D, a: XY, b: XY) {
   ctx.moveTo(a.x, a.y)
   ctx.lineTo(b.x, b.y)
   ctx.stroke()
-}
-
-function splitAt(a: XY, b: XY, t: number): XY | null {
-  if (!(t > a.t && t < b.t)) return null
-  const ratio = (t - a.t) / (b.t - a.t)
-  return {
-    t,
-    price: a.price + (b.price - a.price) * ratio,
-    x: a.x + (b.x - a.x) * ratio,
-    y: a.y + (b.y - a.y) * ratio,
-  }
 }
 
 function fillSegment(ctx: CanvasRenderingContext2D, a: XY, b: XY, strike: number, strikeY: number) {
@@ -477,6 +430,70 @@ function fillSegment(ctx: CanvasRenderingContext2D, a: XY, b: XY, strike: number
   ctx.lineTo(a.x, strikeY)
   ctx.closePath()
   ctx.fill()
+}
+
+function latestText(points: TapePoint[], at: number): string | null {
+  let carried: string | null = null
+  for (const point of points) {
+    if (!Number.isFinite(point.t) || !Number.isFinite(point.price)) continue
+    if (point.t > at) break
+    if (point.text) carried = point.text
+  }
+  return carried
+}
+
+function horizonLabel(strike: ChartStrike | null, points: TapePoint[], at: number): string | null {
+  const text = strike?.text ?? latestText(points, at)
+  if (!text || !/^\d+(\.\d+)?$/.test(text.trim())) return null
+  return formatPrice(text)
+}
+
+function drawHorizon(
+  ctx: CanvasRenderingContext2D,
+  x0: number,
+  x1: number,
+  y: number,
+  label: string | null,
+  plotTop: number,
+  plotH: number,
+  labelOnly = false,
+) {
+  ctx.save()
+  if (!labelOnly) {
+    ctx.strokeStyle = "rgba(243,240,232,0.85)"
+    ctx.lineWidth = 1
+    ctx.setLineDash([])
+    ctx.beginPath()
+    ctx.moveTo(x0, y)
+    ctx.lineTo(x1, y)
+    ctx.stroke()
+  }
+  if (label) {
+    ctx.font = "11px ui-sans-serif, system-ui, sans-serif"
+    ctx.textAlign = "left"
+    ctx.textBaseline = "middle"
+    const padX = 5
+    const boxW = ctx.measureText(label).width + padX * 2
+    const boxH = 16
+    const left = x0 + 8
+    const top = Math.min(plotTop + plotH - boxH - 2, Math.max(plotTop + 2, y - boxH / 2))
+    ctx.fillStyle = "rgba(9,10,12,0.88)"
+    roundRect(ctx, left, top, boxW, boxH, 4)
+    ctx.fill()
+    ctx.fillStyle = "rgba(243,240,232,0.95)"
+    ctx.fillText(label, left + padX, top + boxH / 2)
+  }
+  ctx.restore()
+}
+
+function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
+  ctx.beginPath()
+  ctx.moveTo(x + r, y)
+  ctx.arcTo(x + w, y, x + w, y + h, r)
+  ctx.arcTo(x + w, y + h, x, y + h, r)
+  ctx.arcTo(x, y + h, x, y, r)
+  ctx.arcTo(x, y, x + w, y, r)
+  ctx.closePath()
 }
 
 function clockLabel(ms: number) {

@@ -1,5 +1,4 @@
 import { betSession } from "./betChart"
-import { marketSession } from "./marketChart"
 import type { Band, Board, OpenBet, PoolCard } from "./types"
 
 function findMarket(board: Board, id: number): Band | null {
@@ -21,13 +20,20 @@ export function heldMarket(board: Board, openBets: OpenBet[], now: number): Band
   return best
 }
 
-/** Follow span for the chart. A held bet uses the market frame until it
- *  settles. With no bet, the bet chart rolls into the next live session.
+/** Follow span for the chart. Always the 5s slice that contains now, so a
+ *  held bet does not stretch the tape. The strike, when one is locked, is
+ *  the horizon on that same slice.
  */
-export function followWindow(board: Board, openBets: OpenBet[], now: number): { start: number; end: number } {
-  const held = heldMarket(board, openBets, now)
-  if (held) return marketSession(held)
+export function followWindow(board: Board, _openBets: OpenBet[], now: number): { start: number; end: number } {
   return betSession(board, now)
+}
+
+/** Locked strike for the chart horizon. A market that has not struck yet has none. */
+export function heldStrike(market: { strike: string | null } | null): { price: number; text: string } | null {
+  if (!market?.strike) return null
+  const price = Number(market.strike)
+  if (!Number.isFinite(price)) return null
+  return { price, text: market.strike }
 }
 
 /** Pool shown in the trade panel. A held market wins. Otherwise only the bet window. */

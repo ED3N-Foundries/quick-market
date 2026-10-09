@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { focusPool, followWindow, heldMarket } from "./focus"
+import { focusPool, followWindow, heldMarket, heldStrike } from "./focus"
 import type { Band, Board, PoolCard } from "./types"
 
 function band(id: number, betsOpen: number, strike: string | null = null): Band {
@@ -71,21 +71,33 @@ test("the no-bet view stays one window wide and always contains now", () => {
   }
 })
 
-test("an open bet freezes the chart on that market until it settles", () => {
+test("an open bet keeps the 5s slice and still focuses that market", () => {
   const current = board()
   const bet = [{ roundId: 1, side: "up" as const, stakeMicros: 1_000_000 }]
   expect(heldMarket(current, bet, 12_000)?.id).toBe(1)
-  expect(followWindow(current, bet, 12_000)).toEqual({ start: 0, end: 15_000 })
+  expect(followWindow(current, bet, 12_000)).toEqual({ start: 10_000, end: 15_000 })
   expect(focusPool(current, bet, 12_000)?.id).toBe(1)
   expect(followWindow(current, bet, 15_000)).toEqual({ start: 15_000, end: 20_000 })
   expect(heldMarket(current, bet, 15_000)).toBeNull()
 })
 
+test("a bet that has struck still uses the live 5s slice", () => {
+  const current = board()
+  const bet = [{ roundId: 2, side: "down" as const, stakeMicros: 1_000_000 }]
+  expect(followWindow(current, bet, 16_000)).toEqual({ start: 15_000, end: 20_000 })
+  expect(followWindow(current, bet, 21_000)).toEqual({ start: 20_000, end: 25_000 })
+  expect(heldMarket(current, bet, 21_000)?.id).toBe(2)
+  expect(followWindow(current, bet, 21_000).end - followWindow(current, bet, 21_000).start).toBe(5_000)
+})
+
 test("a bet waiting for its open does not borrow the other market's strike", () => {
   const current = board()
   const bet = [{ roundId: 2, side: "down" as const, stakeMicros: 1_000_000 }]
-  expect(followWindow(current, bet, 11_000)).toEqual({ start: 10_000, end: 25_000 })
+  const held = heldMarket(current, bet, 11_000)
+  expect(followWindow(current, bet, 11_000)).toEqual({ start: 10_000, end: 15_000 })
   expect(focusPool(current, bet, 11_000)?.id).toBe(2)
+  expect(heldStrike(held)).toBeNull()
+  expect(heldStrike(current.live)).toEqual({ price: 100, text: "100" })
 })
 
 test("two open bets stay on the one that settles first", () => {
@@ -101,5 +113,5 @@ test("two open bets stay on the one that settles first", () => {
     { roundId: 1, side: "up" as const, stakeMicros: 1 },
   ]
   expect(heldMarket(current, bets, 12_000)?.id).toBe(1)
-  expect(followWindow(current, bets, 12_000)).toEqual({ start: 0, end: 15_000 })
+  expect(followWindow(current, bets, 12_000)).toEqual({ start: 10_000, end: 15_000 })
 })

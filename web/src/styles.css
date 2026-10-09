@@ -136,19 +136,6 @@ button.primary, .wallet .primary {
 .chip.down strong { color: var(--down); }
 .chip span { color: var(--muted); }
 .ytick { color: var(--muted); transform: translateY(-50%); }
-.lock-shade {
-  position: absolute;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  background: rgba(9, 10, 12, 0.58);
-  color: var(--text);
-  font-size: 12px;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-}
-.lock-shade svg { display: block; }
 .scrub-line { position: absolute; width: 1px; background: rgba(243, 240, 232, 0.45); }
 .scrub {
   position: absolute;
