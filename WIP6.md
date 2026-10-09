@@ -1,0 +1,3 @@
+The zoom appears to keep changing for no reason around baseline in bet stages, there should be tolerance to prevent that, red and green hills should hold, rn sometimes they disappear or snap between eachother. There's snappiness in all kinds of cases right now showing different weird bugged variations. Fix.
+
+Market view should be continuous rolling so we should add another config variable for window size verticle where we scroll it like it's a game, so maybe 5s size scroll so it would cover 2x width before reaching the end and declaring a market winner.
