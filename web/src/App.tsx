@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type PointerEvent as ReactPointerEvent, type RefObject } from "react"
 import { mountChart, type ChartScale, type TapeChart, type TapeSample } from "./chart"
+import { chartBaseline, focusPool, followWindow, heldMarket } from "./focus"
 import { botLabel, formatClock, formatGainLoss, formatMoney, formatPrice, formatPriceDelta, formatSigned, microsToInput, moneyShare, parseAmountMicros, quotePair, randomAddress, shortAddress, sourceLabel, takeMicros } from "./format"
 import type { Band, Board, HistoryRound, OpenBet, SettledMessage, Side } from "./types"
 import { useMarket } from "./useMarket"
@@ -10,6 +11,7 @@ export function App() {
   const chartRef = useRef<TapeChart | null>(null)
   const viewRef = useRef({ follow: true, start: 0, end: 0 })
   const boardRef = useRef(market.board)
+  const openBetsRef = useRef<OpenBet[]>([])
   const [chart, setChart] = useState<TapeChart | null>(null)
   const [stake, setStake] = useState("10")
   const [fundAmount, setFundAmount] = useState("")
@@ -17,6 +19,7 @@ export function App() {
   const [following, setFollowing] = useState(true)
   const scrub = useScrub(chart)
   boardRef.current = market.board
+  openBetsRef.current = market.you?.openBets ?? []
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -26,7 +29,10 @@ export function App() {
       getView: () => viewRef.current,
       getClock: () => {
         const board = boardRef.current
-        return board ? { blockStart: board.blockStart, blockEnd: board.blockEnd } : null
+        if (!board) return null
+        const now = Date.now() + market.offsetRef.current
+        const frame = followWindow(board, openBetsRef.current, now)
+        return { blockStart: frame.start, blockEnd: frame.end }
       },
       getMarkets: () =>
         (boardRef.current?.bands ?? []).map((band) => ({
@@ -36,7 +42,7 @@ export function App() {
           settlesAt: band.settlesAt,
           strike: band.strike === null ? null : Number(band.strike),
         })),
-      getBaseline: () => baselineOf(boardRef.current),
+      getBaseline: () => chartBaseline(boardRef.current, openBetsRef.current, Date.now() + market.offsetRef.current),
       extendLive: () => true,
     })
     chartRef.current = next
@@ -52,13 +58,16 @@ export function App() {
 
   const board = market.board
   const you = market.you
-  const focus = board?.phase === "bets" ? board.join : board?.live
-  const joined = !!board?.join && !!you?.openBets.some((bet) => bet.roundId === board.join?.id)
-  const canBet = !!you && board?.phase === "bets" && !!board.join && market.feed === "live" && !joined && !market.pending
+  const openBets = you?.openBets ?? []
+  const now = Date.now() + market.offsetRef.current
+  const heldSpan = board ? heldMarket(board, openBets, now) : null
+  const focus = focusPool(board, openBets, now)
+  const canBet = !!you && !heldSpan && board?.phase === "bets" && !!board.join && market.feed === "live" && !market.pending
   const total = (focus?.poolUpMicros ?? 0) + (focus?.poolDownMicros ?? 0)
-  const held = you?.openBets.find((bet) => bet.roundId === focus?.id) ?? null
-  const upWin = winnings(stake, "up", focus?.poolUpMicros ?? 0, focus?.poolDownMicros ?? 0, market.config.feeBps, held, board?.phase === "bets")
-  const downWin = winnings(stake, "down", focus?.poolUpMicros ?? 0, focus?.poolDownMicros ?? 0, market.config.feeBps, held, board?.phase === "bets")
+  const held = openBets.find((bet) => bet.roundId === focus?.id) ?? null
+  const accepting = !heldSpan && board?.phase === "bets"
+  const upWin = winnings(stake, "up", focus?.poolUpMicros ?? 0, focus?.poolDownMicros ?? 0, market.config.feeBps, held, accepting)
+  const downWin = winnings(stake, "down", focus?.poolUpMicros ?? 0, focus?.poolDownMicros ?? 0, market.config.feeBps, held, accepting)
   const fundMicros = parseAmountMicros(fundAmount)
 
   function chip(percent: number) {
@@ -95,11 +104,18 @@ export function App() {
           <span className="mark">Quick</span>
           <span className="pair">BTC</span>
         </div>
-        <PriceReadout priceRef={market.priceRef} strike={board?.live?.strike ?? null} source={market.config.source} />
+        <PriceReadout
+          priceRef={market.priceRef}
+          strike={heldSpan ? heldSpan.strike : (board?.live?.strike ?? null)}
+          source={market.config.source}
+        />
         <div className="clock-block">
-          <span className="clock-label">{board?.phase === "market" ? "Market" : "Bets"}</span>
+          <span className="clock-label">{heldSpan ? "Settles" : board?.phase === "market" ? "Market" : "Bets"}</span>
           {board ? (
-            <Countdown endsAt={board.phase === "bets" ? board.windowEndsAt : board.blockEnd} offsetRef={market.offsetRef} />
+            <Countdown
+              endsAt={heldSpan ? heldSpan.settlesAt : board.phase === "bets" ? board.windowEndsAt : board.blockEnd}
+              offsetRef={market.offsetRef}
+            />
           ) : (
             <strong className="clock">—</strong>
           )}
@@ -114,7 +130,8 @@ export function App() {
             chart={chart}
             board={board}
             locked={board?.phase === "market"}
-            openBets={you?.openBets ?? []}
+            heldId={heldSpan?.id ?? null}
+            openBets={openBets}
             feeBps={market.config.feeBps}
             hover={scrub.hover}
           />
@@ -289,6 +306,7 @@ function ChartOverlay({
   chart,
   board,
   locked,
+  heldId,
   openBets,
   feeBps,
   hover,
@@ -296,6 +314,7 @@ function ChartOverlay({
   chart: TapeChart
   board: Board | null
   locked: boolean
+  heldId: number | null
   openBets: OpenBet[]
   feeBps: number
   hover: { t: number } | null
@@ -308,10 +327,11 @@ function ChartOverlay({
   return (
     <div className="chart-overlay">
       {board.bands.map((band) => {
+        if (heldId != null && band.id !== heldId) return null
         const left = xAt(band.betsOpen)
         const right = xAt(band.strikeAt)
         if (right - left < 2 || right < 0 || left > current.width) return null
-        const open = band.id === board.join?.id && board.phase === "bets"
+        const open = heldId == null && band.id === board.join?.id && board.phase === "bets"
         return (
           <div
             key={`w-${band.id}`}
@@ -322,7 +342,7 @@ function ChartOverlay({
           </div>
         )
       })}
-      {locked && <LockShade board={board} scale={current} xAt={xAt} />}
+      {locked && heldId == null && <LockShade board={board} scale={current} xAt={xAt} />}
       {openBets.map((bet) => {
         const band = board.bands.find((row) => row.id === bet.roundId) ?? (board.join?.id === bet.roundId ? board.join : null)
         if (!band) return null
@@ -722,7 +742,7 @@ function Replay({ row, windowMs, onClose }: { row: HistoryRound; windowMs: numbe
         </header>
         <section className="chart-wrap still" onPointerMove={scrub.move} onPointerLeave={scrub.clear}>
           <canvas ref={canvasRef} />
-          {chart && <ChartOverlay chart={chart} board={board} locked={false} openBets={[]} feeBps={0} hover={scrub.hover} />}
+          {chart && <ChartOverlay chart={chart} board={board} locked={false} heldId={null} openBets={[]} feeBps={0} hover={scrub.hover} />}
         </section>
         {failed && <p className="empty">Couldn't load this market.</p>}
         {bets && bets.length === 0 && <p className="empty">No bets in this pool.</p>}
@@ -790,16 +810,6 @@ function useScrub(chart: TapeChart | null) {
     setHover(null)
   }
   return { hover, move, clear }
-}
-
-function baselineOf(board: Board | null): number | null {
-  if (!board) return null
-  if (board.live?.strike != null) return Number(board.live.strike)
-  for (let index = board.bands.length - 1; index >= 0; index--) {
-    const strike = board.bands[index]?.strike
-    if (strike != null) return Number(strike)
-  }
-  return null
 }
 
 function winnings(

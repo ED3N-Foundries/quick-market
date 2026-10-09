@@ -10,6 +10,8 @@ Why do markets take so logn to resolve if I played? Is there a bug or a purposef
 
 Also animate our balance changes after changes happen, up or down.
 
+if we didnt bet yet there should be no market time, just constant rolling bet windows because we didn't bet anything yet so why would we see a false 5s view of market when a market is 10s, that's false on its face. So we need to fix that.
+
 ## Winnings
 
 Also, the to win indicators in the up and down boxes doesn't make sense yet or maybe it does? Make it more clear like how polymarket would:

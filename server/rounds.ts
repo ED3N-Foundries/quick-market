@@ -412,10 +412,17 @@ export function placeBet(input: {
       if (!round || round.status !== "open") throw new BetError("Betting is closed")
 
       ensureUser(input.address)
+      const botRow = getDb().query("SELECT is_bot FROM users WHERE address = ?").get(input.address) as
+        | { is_bot: number }
+        | null
+      const bot = botRow?.is_bot === 1
       const opens = openBetsFor(input.address)
       const onThis = opens.find((bet) => bet.roundId === id)
       for (const bet of opens) {
-        if (bet.roundId !== id && bet.roundId !== clock.liveId) throw new BetError("Your last bet is still open")
+        if (bet.roundId === id) continue
+        // Bots keep filling the next window while their previous market is still live.
+        if (bot && bet.roundId === clock.liveId) continue
+        throw new BetError("Your last bet is still open")
       }
       if (onThis && onThis.side !== input.side) throw new BetError("You are already on the other side")
       if (feedStatus(input.now) !== "live") throw new BetError("Price feed is delayed")

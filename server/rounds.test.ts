@@ -63,8 +63,9 @@ test("strike locks when the window closes and a winner is paid once", () => {
   notePrint(print("100.00", T + BLOCK - 20))
   advance(T + BLOCK + 10)
   const alongside = placeBet({ address: you, side: "down", stakeMicros: USDC, now: T + BLOCK + 80 })
-  expect(alongside.ok).toBe(true)
-  expect(youFor(you)?.openBets).toHaveLength(2)
+  expect(alongside.ok).toBe(false)
+  if (!alongside.ok) expect(alongside.error).toBe("Your last bet is still open")
+  expect(youFor(you)?.openBets).toHaveLength(1)
 
   notePrint(print("101.00", T + WINDOW + BLOCK - 4_000))
   const first = advance(T + WINDOW + BLOCK + 5)
@@ -74,8 +75,8 @@ test("strike locks when the window closes and a winner is paid once", () => {
     149_625_000,
   )
   expect(again.settled).toHaveLength(0)
-  expect(youFor(you)?.balanceMicros).toBe(10_000 * USDC - 50 * USDC - USDC + 149_625_000)
-  expect(youFor(you)?.openBets).toEqual([{ roundId: MARKET_ID + 1, side: "down", stakeMicros: USDC }])
+  expect(youFor(you)?.balanceMicros).toBe(10_000 * USDC - 50 * USDC + 149_625_000)
+  expect(youFor(you)?.openBets).toEqual([])
 })
 
 test("same-side adds stack and the other side is rejected", () => {
@@ -155,6 +156,14 @@ test("bots take both sides once per window", () => {
   advance(T + 80)
   const again = board(T + 90).join
   expect((again?.poolUpMicros ?? 0) + (again?.poolDownMicros ?? 0)).toBe(pot)
+
+  notePrint(print("100", T + BLOCK - 20))
+  advance(T + BLOCK + 10)
+  const next = board(T + BLOCK + 50).join
+  const nextBots = next?.tray.filter((row) => row.bot) ?? []
+  expect(nextBots).toHaveLength(4)
+  expect(nextBots.some((row) => row.side === "up")).toBe(true)
+  expect(nextBots.some((row) => row.side === "down")).toBe(true)
 })
 
 test("round detail includes the tape and the price held into the open", () => {
