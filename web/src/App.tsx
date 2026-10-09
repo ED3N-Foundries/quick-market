@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type PointerEvent as ReactPointerEvent, type RefObject } from "react"
 import { mountChart, type ChartScale, type TapeChart, type TapeSample } from "./chart"
-import { chartBaseline, focusPool, followWindow, heldMarket } from "./focus"
+import { focusPool, followWindow, heldMarket } from "./focus"
 import { botLabel, formatClock, formatGainLoss, formatMoney, formatPrice, formatPriceDelta, formatSigned, microsToInput, moneyShare, parseAmountMicros, payoutMicros, quoteDollar, quotePair, randomAddress, shortAddress, sourceLabel } from "./format"
 import type { Band, Board, HistoryRound, OpenBet, SettledMessage, Side } from "./types"
 import { useMarket } from "./useMarket"
@@ -50,7 +50,6 @@ export function App() {
           },
         ]
       },
-      getBaseline: () => chartBaseline(boardRef.current, openBetsRef.current, Date.now() + market.offsetRef.current),
       extendLive: () => true,
     })
     chartRef.current = next
@@ -754,7 +753,6 @@ function Replay({ row, windowMs, onClose }: { row: HistoryRound; windowMs: numbe
               strike,
             },
           ],
-          getBaseline: () => strike,
           extendLive: () => false,
         })
         spawned.reset(tape.map((point) => ({ t: point.t, price: Number(point.price) })))

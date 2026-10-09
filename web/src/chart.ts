@@ -1,4 +1,4 @@
-import { HALF_FLOOR, contentHalf, halfSpan, shownHalf, type PricePoint } from "./scale"
+import { HALF_FLOOR, contentHalf, halfSpan, openPrice, shownHalf, type PricePoint } from "./scale"
 
 export type TapePoint = PricePoint
 
@@ -60,7 +60,6 @@ export function mountChart(
     getView: () => View
     getClock: () => { blockStart: number; blockEnd: number } | null
     getMarkets: () => MarketSpan[]
-    getBaseline: () => number | null
     extendLive: () => boolean
   },
 ): TapeChart {
@@ -149,11 +148,11 @@ export function mountChart(
     }
     if (anchor) visible.push(anchor)
 
-    const rawBaseline = options.getBaseline()
-    const baseline = rawBaseline != null && Number.isFinite(rawBaseline) ? rawBaseline : null
+    const rawOpen = openPrice(points, viewStart)
+    const baseline = rawOpen != null && Number.isFinite(rawOpen) ? rawOpen : null
     const lastReal = visible[visible.length - 1] ?? null
-    const center = baseline ?? lastReal?.price ?? 0
-    const half = snapHalf(halfSpan(visible, center, now), contentHalf(visible, center, now), baseline, viewStart, viewEnd)
+    const center = baseline ?? 0
+    const half = snapHalf(halfSpan(visible, center), contentHalf(visible, center), baseline, viewStart, viewEnd)
     const min = center - half
     const max = center + half
     const yAt = (price: number) => PAD.t + ((max - price) / (max - min)) * plotH

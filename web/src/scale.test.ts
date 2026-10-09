@@ -1,41 +1,50 @@
 import { expect, test } from "bun:test"
-import { HALF_FLOOR, contentHalf, halfSpan, shownHalf } from "./scale"
+import { HALF_FLOOR, contentHalf, halfSpan, openPrice, shownHalf } from "./scale"
 
-const now = 10_000
 const baseline = 100
 
-test("a cent near the open stays on the floor when an older print is far away", () => {
-  const half = halfSpan(
-    [
-      { t: 0, price: baseline + 20 },
-      { t: 9_000, price: baseline + 0.01 },
-      { t: now, price: baseline + 0.01 },
-    ],
-    baseline,
-    now,
-  )
-  expect(half).toBe(HALF_FLOOR)
-  expect(0.01 / half).toBeGreaterThan(0.2)
+test("the window opens on the price already printing, and later prints do not move it", () => {
+  const points = [
+    { t: 1_000, price: baseline },
+    { t: 4_000, price: baseline + 40 },
+    { t: 9_000, price: baseline - 15 },
+  ]
+  expect(openPrice(points, 1_000)).toBe(baseline)
+  expect(openPrice(points, 1_500)).toBe(baseline)
+  expect(openPrice(points, 0)).toBe(baseline)
 })
 
-test("a four dollar swing near the open fills the chart and stays inside it", () => {
-  const half = halfSpan(
-    [
-      { t: 8_000, price: 98 },
-      { t: 8_500, price: 102 },
-      { t: 9_000, price: 98 },
-      { t: now, price: baseline },
-    ],
-    baseline,
-    now,
-  )
-  expect(half).toBeCloseTo(4 / 1.1)
+test("a price carried into the window is the open", () => {
+  expect(openPrice([{ t: 0, price: 50 }, { t: 2_000, price: 80 }], 1_500)).toBe(50)
+})
+
+test("a spike anywhere in the window stays on screen and the open stays centered", () => {
+  const points = [
+    { t: 0, price: baseline + 20 },
+    { t: 9_000, price: baseline + 0.01 },
+    { t: 10_000, price: baseline + 0.01 },
+  ]
+  const half = halfSpan(points, baseline)
+  expect(half).toBeCloseTo(20 / 0.9)
+  expect(half).toBeGreaterThan(20)
+  for (const point of points) expect(Math.abs(point.price - baseline)).toBeLessThanOrEqual(half)
+})
+
+test("a four dollar swing around the open fills the chart and stays inside it", () => {
+  const points = [
+    { t: 8_000, price: 98 },
+    { t: 8_500, price: 102 },
+    { t: 9_000, price: 98 },
+    { t: 10_000, price: baseline },
+  ]
+  const half = halfSpan(points, baseline)
+  expect(half).toBeCloseTo(2 / 0.9)
   expect(half).toBeGreaterThan(2)
 })
 
 test("a price twenty dollars through the open stays on screen with the open centered", () => {
-  const half = halfSpan([{ t: now, price: baseline + 20 }], baseline, now)
-  expect(half).toBeCloseTo(20 / 0.72)
+  const half = halfSpan([{ t: 10_000, price: baseline + 20 }], baseline)
+  expect(half).toBeCloseTo(20 / 0.9)
   expect(half).toBeGreaterThan(20)
 })
 
@@ -43,42 +52,29 @@ test("a flat tape uses the floor", () => {
   const half = halfSpan(
     [
       { t: 9_000, price: baseline },
-      { t: now, price: baseline },
+      { t: 10_000, price: baseline },
     ],
     baseline,
-    now,
   )
   expect(half).toBe(HALF_FLOOR)
 })
 
-test("content half is the trailing distance from the open", () => {
-  expect(contentHalf([{ t: now, price: baseline + 20 }], baseline, now)).toBe(20)
-})
-
-test("content half ignores a spike older than the trail", () => {
+test("content half is the furthest print from the open", () => {
   expect(
     contentHalf(
       [
-        { t: now - 4_000, price: baseline + 20 },
-        { t: now, price: baseline + 0.01 },
+        { t: 0, price: baseline + 20 },
+        { t: 10_000, price: baseline + 0.01 },
       ],
       baseline,
-      now,
     ),
-  ).toBeCloseTo(0.01)
+  ).toBe(20)
 })
 
-test("content half keeps a spike still inside the trail", () => {
-  expect(
-    contentHalf(
-      [
-        { t: now - 1_000, price: baseline + 2 },
-        { t: now, price: baseline },
-      ],
-      baseline,
-      now,
-    ),
-  ).toBe(2)
+test("a cent near a flat open stays visible on the floor", () => {
+  const half = halfSpan([{ t: 10_000, price: baseline + 0.01 }], baseline)
+  expect(half).toBe(HALF_FLOOR)
+  expect(0.01 / half).toBeGreaterThan(0.2)
 })
 
 test("a larger target holds while the print still fits", () => {
