@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test"
-import { crossTime, inTheMoney, pieceBaseline, priceInUse, priceY, scaleFrame, strikeCaption, tapeInView, type TapePoint } from "./chart"
+import { crossTime, inTheMoney, pieceBaseline, priceInUse, priceY, ridePoints, scaleFrame, strikeCaption, tapeInView, type TapePoint } from "./chart"
+import { contentHalf } from "./scale"
 
 const points: TapePoint[] = [
   { t: 0, price: 100 },
@@ -56,7 +57,7 @@ test("a bet window stays on the open print while later prints move", () => {
   expect(scaleFrame(null, points, 10_000)).toEqual({ center: 100, before: 100, after: null })
 })
 
-test("a fall into the strike stays down against the open until the view reaches the strike", () => {
+test("a fall into the strike keeps its open ink while the center is the strike", () => {
   const points = [
     { t: 9_000, price: 100 },
     { t: 10_000, price: 100 },
@@ -65,7 +66,7 @@ test("a fall into the strike stays down against the open until the view reaches 
   ]
   const strike = { price: 90, at: 15_000, openAt: 10_000 }
   const during = scaleFrame(strike, points, 10_000)
-  expect(during.center).toBe(100)
+  expect(during.center).toBe(90)
   expect(during.before).toBe(100)
   expect(during.after).toBe(90)
   expect(pieceBaseline(10_000, 15_000, strike.at, during.before, during.after)).toBe(100)
@@ -76,6 +77,22 @@ test("a fall into the strike stays down against the open until the view reaches 
   expect(ride.before).toBeNull()
   expect(ride.after).toBe(90)
   expect(pieceBaseline(15_000, 16_000, strike.at, ride.before, ride.after)).toBe(90)
+})
+
+test("a pegged ride's zoom ignores the run into the strike", () => {
+  const at = 15_000
+  const series = [
+    { t: 10_000, price: 100 },
+    { t: at, price: 100 },
+    { t: at, price: 90 },
+    { t: 16_000, price: 90.2 },
+  ]
+  const ride = ridePoints(series, at, 90)
+  expect(ride).toEqual([
+    { t: 16_000, price: 90.2 },
+    { t: at, price: 90 },
+  ])
+  expect(contentHalf(ride, 90)).toBeCloseTo(0.2)
 })
 
 test("a step that crosses the strike splits once", () => {

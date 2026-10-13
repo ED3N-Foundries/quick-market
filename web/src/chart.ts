@@ -24,8 +24,8 @@ export type ScaleFrame = {
 
 /** Vertical frame for one view.
  *  With no strike, the center is the print already in force at `viewStart`.
- *  With a strike, that open pin stays the center while the view still shows
- *  time before `strike.at`. The strike becomes the center once the view starts there.
+ *  With a strike, the center is the strike immediately. Prints before `strike.at`
+ *  keep the open pin as their ink, so that tape does not flip when the window closes.
  */
 export function scaleFrame(
   strike: { price: number; at: number; openAt: number } | null,
@@ -39,7 +39,20 @@ export function scaleFrame(
   if (viewStart >= strike.at) return { center: strike.price, before: null, after: strike.price }
   const pin = openPrice(points, strike.openAt)
   if (pin == null) return { center: strike.price, before: null, after: strike.price }
-  return { center: pin, before: pin, after: strike.price }
+  return { center: strike.price, before: pin, after: strike.price }
+}
+
+/** Prints that set a pegged ride's zoom. The strike is included so a flat ride
+ *  stays on the floor. Prints at or before the strike, including a step corner
+ *  that repeats the old price at `at`, do not count.
+ */
+export function ridePoints(series: PricePoint[], at: number, strikePrice: number): PricePoint[] {
+  const ride: PricePoint[] = []
+  for (const point of series) {
+    if (point.t > at && Number.isFinite(point.price)) ride.push(point)
+  }
+  ride.push({ t: at, price: strikePrice })
+  return ride
 }
 
 /** Point where a segment crosses `at`. Null when `at` is not strictly inside it. */
@@ -222,7 +235,8 @@ export function mountChart(
     }
     const head = series.length ? series[series.length - 1] : null
     const center = frame.center ?? frame.after ?? 0
-    const half = snapHalf(halfSpan(series, center), contentHalf(series, center))
+    const zoom = strike?.peg && frame.after != null && frameAt != null ? ridePoints(series, frameAt, frame.after) : series
+    const half = snapHalf(halfSpan(zoom, center), contentHalf(zoom, center))
     const min = center - half
     const max = center + half
     const yAt = (price: number) => priceY(price, { yMin: min, yMax: max, plotTop: PAD.t, plotHeight: plotH })
