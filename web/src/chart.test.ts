@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { priceInUse, stageBaseline, strikeCaption, tapeInView, type TapePoint } from "./chart"
+import { crossTime, inTheMoney, pieceBaseline, priceInUse, priceY, scaleFrame, strikeCaption, tapeInView, type TapePoint } from "./chart"
 
 const points: TapePoint[] = [
   { t: 0, price: 100 },
@@ -53,8 +53,61 @@ test("a bet window stays on the open print while later prints move", () => {
     { t: 12_000, price: 110 },
     { t: 14_000, price: 90 },
   ]
-  expect(stageBaseline(null, points, 10_000)).toBe(100)
-  expect(stageBaseline(105, points, 10_000)).toBe(105)
+  expect(scaleFrame(null, points, 10_000)).toEqual({ center: 100, before: 100, after: null })
+})
+
+test("a fall into the strike stays down against the open until the view reaches the strike", () => {
+  const points = [
+    { t: 9_000, price: 100 },
+    { t: 10_000, price: 100 },
+    { t: 14_000, price: 90 },
+    { t: 15_000, price: 90 },
+  ]
+  const strike = { price: 90, at: 15_000, openAt: 10_000 }
+  const during = scaleFrame(strike, points, 10_000)
+  expect(during.center).toBe(100)
+  expect(during.before).toBe(100)
+  expect(during.after).toBe(90)
+  expect(pieceBaseline(10_000, 15_000, strike.at, during.before, during.after)).toBe(100)
+  expect(pieceBaseline(14_000, 14_000, strike.at, during.before, during.after)).toBe(100)
+
+  const ride = scaleFrame(strike, points, 15_000)
+  expect(ride.center).toBe(90)
+  expect(ride.before).toBeNull()
+  expect(ride.after).toBe(90)
+  expect(pieceBaseline(15_000, 16_000, strike.at, ride.before, ride.after)).toBe(90)
+})
+
+test("a step that crosses the strike splits once", () => {
+  const at = 15_000
+  expect(crossTime({ t: 10_000, price: 100 }, { t: 16_000, price: 100 }, at)).toEqual({ t: at, price: 100 })
+  expect(crossTime({ t: 10_000, price: 100 }, { t: 12_000, price: 90 }, at)).toBeNull()
+  const frame = scaleFrame(
+    { price: 90, at, openAt: 10_000 },
+    [
+      { t: 10_000, price: 100 },
+      { t: 16_000, price: 90 },
+    ],
+    10_000,
+  )
+  expect(pieceBaseline(10_000, at, at, frame.before, frame.after)).toBe(100)
+  expect(pieceBaseline(at, 16_000, at, frame.before, frame.after)).toBe(90)
+})
+
+test("in the money is the bet side of the strike, and a push is not", () => {
+  expect(inTheMoney("up", 101, 100)).toBe(true)
+  expect(inTheMoney("down", 101, 100)).toBe(false)
+  expect(inTheMoney("down", 99, 100)).toBe(true)
+  expect(inTheMoney("up", 100, 100)).toBe(false)
+  expect(inTheMoney("down", 100, 100)).toBe(false)
+})
+
+test("a higher price sits above a lower one", () => {
+  const scale = { yMin: 90, yMax: 110, plotTop: 16, plotHeight: 200 }
+  const mid = priceY(100, scale)
+  expect(mid).toBeCloseTo(116)
+  expect(priceY(110, scale)).toBeLessThan(mid)
+  expect(priceY(90, scale)).toBeGreaterThan(mid)
 })
 
 test("a panned view does not invent a hold out to its right edge", () => {

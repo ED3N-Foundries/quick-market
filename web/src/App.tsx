@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type PointerEvent as ReactPointerEvent, type RefObject } from "react"
-import { mountChart, type ChartScale, type TapeChart, type TapeSample } from "./chart"
+import { mountChart, priceY, type ChartScale, type TapeChart, type TapeSample } from "./chart"
 import { chartMarket, focusPool, followWindow, heldMarket, heldStrike } from "./focus"
 import { botLabel, formatClock, formatDollarMove, formatGainLoss, formatMoney, formatPrice, formatPriceDelta, formatSigned, microsToInput, moneyShare, parseAmountMicros, payoutMicros, quoteDollar, quotePair, randomAddress, shortAddress, sourceLabel } from "./format"
 import type { Band, Board, HistoryRound, OpenBet, SettledMessage, Side } from "./types"
@@ -42,8 +42,18 @@ export function App() {
         const board = boardRef.current
         if (!board) return null
         const now = Date.now() + market.offsetRef.current
-        const strike = heldStrike(chartMarket(board, openBetsRef.current, now))
-        return strike ? { ...strike, peg: true } : null
+        const riding = chartMarket(board, openBetsRef.current, now)
+        const strike = heldStrike(riding)
+        if (!strike || !riding) return null
+        return { ...strike, peg: true, at: riding.strikeAt, openAt: riding.betsOpen }
+      },
+      getAim: () => {
+        const board = boardRef.current
+        if (!board) return null
+        const now = Date.now() + market.offsetRef.current
+        const held = heldMarket(board, openBetsRef.current, now)
+        if (!held) return null
+        return openBetsRef.current.find((bet) => bet.roundId === held.id)?.side ?? null
       },
       extendLive: () => true,
     })
@@ -116,7 +126,7 @@ export function App() {
           <span className="mark">Quick</span>
           <span className="pair">BTC</span>
         </div>
-        <div className="clock-cluster">
+        <div className="clock-cluster" data-move={heldSpan?.strike ? "1" : "0"}>
           <PriceReadout priceRef={market.priceRef} strike={heldSpan?.strike ?? null} source={market.config.source} />
           <div className="clock-block">
             <span className="clock-label">{heldSpan ? "Settles" : "Bets"}</span>
@@ -340,7 +350,7 @@ function ChartOverlay({
       {peg && (
         <PegPrice
           text={peg.text}
-          top={current.plotTop + current.plotHeight / 2}
+          top={pegTop(current, peg.price)}
           right={gutter + 16}
         />
       )}
@@ -406,6 +416,11 @@ function Scrub({
       </p>
     </>
   )
+}
+
+function pegTop(scale: ChartScale, price: number): number {
+  const y = priceY(price, scale)
+  return Math.min(scale.plotTop + scale.plotHeight - 4, Math.max(scale.plotTop + 4, y))
 }
 
 function PegPrice({ text, top, right }: { text: string; top: number; right: number }) {
@@ -551,16 +566,10 @@ function PriceReadout({
       const price = priceRef.current
       if (priceEl.current) priceEl.current.textContent = price ? formatPrice(price) : "—"
       const delta = price && strike ? formatDollarMove(price, strike) : null
-      if (deltaEl.current && wordEl.current && moveEl.current) {
-        if (delta) {
-          deltaEl.current.textContent = delta.text
-          wordEl.current.textContent = moveWord(delta.side)
-          moveEl.current.dataset.side = delta.side
-        } else {
-          deltaEl.current.textContent = "price locks in"
-          wordEl.current.textContent = "Lock"
-          moveEl.current.dataset.side = "lock"
-        }
+      if (delta && deltaEl.current && wordEl.current && moveEl.current) {
+        deltaEl.current.textContent = delta.text
+        wordEl.current.textContent = moveWord(delta.side)
+        moveEl.current.dataset.side = delta.side
       }
       raf = requestAnimationFrame(loop)
     }
@@ -578,14 +587,12 @@ function PriceReadout({
           </span>
         </span>
       </div>
-      <div ref={moveEl} className="move" data-side="lock">
-        <span ref={wordEl} className="move-label">
-          Lock
-        </span>
-        <span ref={deltaEl} className="delta">
-          price locks in
-        </span>
-      </div>
+      {strike && (
+        <div ref={moveEl} className="move">
+          <span ref={wordEl} className="move-label" />
+          <span ref={deltaEl} className="delta" />
+        </div>
+      )}
     </>
   )
 }
@@ -821,7 +828,11 @@ function Replay({ row, windowMs, onClose }: { row: HistoryRound; windowMs: numbe
           getNow: () => row.endsAt + 1,
           getView: () => viewRef.current,
           getClock: () => null,
-          getStrike: () => heldStrike({ strike: row.strike }),
+          getStrike: () => {
+            const strike = heldStrike({ strike: row.strike })
+            if (!strike) return null
+            return { ...strike, at: row.startsAt, openAt: row.startsAt - windowMs }
+          },
           extendLive: () => false,
         })
         spawned.reset(tape.map((point) => ({ t: point.t, price: Number(point.price), text: point.price })))

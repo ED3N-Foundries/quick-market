@@ -3,7 +3,7 @@ import { HALF_FLOOR, contentHalf, halfSpan, openPrice, shownHalf, type PricePoin
 
 export type TapePoint = PricePoint & { text?: string }
 
-export type ChartStrike = { price: number; text: string; peg?: boolean }
+export type ChartStrike = { price: number; text: string; peg?: boolean; at?: number; openAt?: number }
 
 /** The price the chart is built around. A locked strike is the market open.
  *  Until that open prints, `fallback` is the price the stage stays centered on.
@@ -14,11 +14,68 @@ export function priceInUse(strike: number | null, fallback: number | null): numb
   return null
 }
 
-/** Baseline for one stage. A strike wins. Otherwise the price already printing
- *  when `viewStart` opened, so later prints do not move the hills.
+export type ScaleFrame = {
+  center: number | null
+  /** Ink for prints before the strike. Null once the view starts at the strike. */
+  before: number | null
+  /** Ink for prints at or after the strike. Null until a strike exists. */
+  after: number | null
+}
+
+/** Vertical frame for one view.
+ *  With no strike, the center is the print already in force at `viewStart`.
+ *  With a strike, that open pin stays the center while the view still shows
+ *  time before `strike.at`. The strike becomes the center once the view starts there.
  */
-export function stageBaseline(strike: number | null, points: PricePoint[], viewStart: number): number | null {
-  return priceInUse(strike, openPrice(points, viewStart))
+export function scaleFrame(
+  strike: { price: number; at: number; openAt: number } | null,
+  points: PricePoint[],
+  viewStart: number,
+): ScaleFrame {
+  if (!strike || !Number.isFinite(strike.price)) {
+    const open = openPrice(points, viewStart)
+    return { center: open, before: open, after: null }
+  }
+  if (viewStart >= strike.at) return { center: strike.price, before: null, after: strike.price }
+  const pin = openPrice(points, strike.openAt)
+  if (pin == null) return { center: strike.price, before: null, after: strike.price }
+  return { center: pin, before: pin, after: strike.price }
+}
+
+/** Point where a segment crosses `at`. Null when `at` is not strictly inside it. */
+export function crossTime(
+  a: { t: number; price: number },
+  b: { t: number; price: number },
+  at: number,
+): { t: number; price: number } | null {
+  if (!(a.t < at && b.t > at)) return null
+  const ratio = (at - a.t) / (b.t - a.t)
+  if (!Number.isFinite(ratio)) return null
+  return { t: at, price: a.price + (b.price - a.price) * ratio }
+}
+
+/** Baseline for one piece. A piece that starts at the strike uses the strike. */
+export function pieceBaseline(
+  t0: number,
+  t1: number,
+  at: number | null,
+  before: number | null,
+  after: number | null,
+): number | null {
+  if (after == null) return before
+  if (at == null || t0 >= at) return after
+  if (t1 <= at) return before
+  return before
+}
+
+/** Canvas Y for a price. A higher price is a smaller Y. */
+export function priceY(
+  price: number,
+  scale: { yMin: number; yMax: number; plotTop: number; plotHeight: number },
+): number {
+  const span = scale.yMax - scale.yMin
+  if (!(span > 0)) return scale.plotTop + scale.plotHeight / 2
+  return scale.plotTop + ((scale.yMax - price) / span) * scale.plotHeight
 }
 
 export type ChartScale = {
@@ -51,14 +108,23 @@ type View = { follow: boolean; start: number; end: number }
 const UP = "#2fce86"
 const DOWN = "#ff5a4f"
 const PUSH = "#4c8dff"
+const GOLD = "#e2b340"
 const UP_FILL = "rgba(47, 206, 134, 0.22)"
 const DOWN_FILL = "rgba(255, 90, 79, 0.2)"
 const NEUTRAL = "rgba(243,240,232,0.7)"
 const PUSH_EPS = 1e-8
+const PULSE_MS = 1200
+const WASH_FAINT = 0.05
+const WASH_STRONG = 0.14
 
 export function priceTone(price: number, baseline: number): "up" | "down" | "push" {
   if (Math.abs(price - baseline) <= PUSH_EPS) return "push"
   return price > baseline ? "up" : "down"
+}
+
+/** True when `price` is strictly on `side` of the strike. A push is not in the money. */
+export function inTheMoney(side: "up" | "down", price: number, strike: number): boolean {
+  return priceTone(price, strike) === side
 }
 const PAD = { l: 12, r: 68, t: 16, b: 22 }
 const TAPE_MS = 15 * 60 * 1000
@@ -70,6 +136,7 @@ export function mountChart(
     getView: () => View
     getClock: () => { blockStart: number; blockEnd: number } | null
     getStrike: () => ChartStrike | null
+    getAim?: () => "up" | "down" | null
     extendLive: () => boolean
   },
 ): TapeChart {
@@ -95,6 +162,13 @@ export function mountChart(
   const observer = new ResizeObserver(resize)
   observer.observe(canvas)
   resize()
+
+  const motion = window.matchMedia("(prefers-reduced-motion: reduce)")
+  let reducedMotion = motion.matches
+  const onMotion = () => {
+    reducedMotion = motion.matches
+  }
+  motion.addEventListener("change", onMotion)
 
   const frame = () => {
     if (!running) return
@@ -135,13 +209,23 @@ export function mountChart(
     const xAt = (t: number) => PAD.l + ((t - viewStart) / span) * plotW
     const series = tapeInView(points, viewStart, viewEnd, now, options.extendLive(), view.follow)
     const strike = options.getStrike()
+    const aim = options.getAim?.() ?? null
+    const timed =
+      strike && Number.isFinite(strike.price) && Number.isFinite(strike.at) && Number.isFinite(strike.openAt)
+        ? { price: strike.price, at: strike.at as number, openAt: strike.openAt as number }
+        : null
+    let frame = scaleFrame(timed, points, viewStart)
+    let frameAt: number | null = timed?.at ?? null
+    if (strike && Number.isFinite(strike.price) && !timed) {
+      frame = { center: strike.price, before: null, after: strike.price }
+      frameAt = null
+    }
     const head = series.length ? series[series.length - 1] : null
-    const baseline = stageBaseline(strike?.price ?? null, points, viewStart)
-    const center = baseline ?? 0
+    const center = frame.center ?? frame.after ?? 0
     const half = snapHalf(halfSpan(series, center), contentHalf(series, center))
     const min = center - half
     const max = center + half
-    const yAt = (price: number) => PAD.t + ((max - price) / (max - min)) * plotH
+    const yAt = (price: number) => priceY(price, { yMin: min, yMax: max, plotTop: PAD.t, plotHeight: plotH })
     const ticks = priceTicks(min, max).map((tick) => ({ ...tick, y: yAt(tick.price) }))
 
     publish({
@@ -173,34 +257,44 @@ export function mountChart(
     ctx.clip()
 
     const path = series.map((point) => ({ ...point, x: xAt(point.t), y: yAt(point.price) }))
+    const plotRight = PAD.l + plotW
+    const horizons = horizonSpans(frame, frameAt, viewStart, viewEnd, PAD.l, plotRight, xAt)
+    const washPrice = aim ? (strike && Number.isFinite(strike.price) ? strike.price : frame.before) : null
+    if (washPrice != null) {
+      const y = yAt(washPrice)
+      const top = aim === "up" ? PAD.t : y
+      const heightOf = (aim === "up" ? y : PAD.t + plotH) - top
+      if (heightOf > 0) {
+        const phase = pulsePhase(performance.now(), reducedMotion)
+        const alpha = reducedMotion ? (WASH_FAINT + WASH_STRONG) / 2 : WASH_FAINT + (WASH_STRONG - WASH_FAINT) * phase
+        ctx.fillStyle = `rgba(143, 138, 128, ${alpha})`
+        ctx.fillRect(PAD.l, top, plotW, heightOf)
+      }
+    }
+    const pieces = inkPieces(path, frame, frameAt)
     if (!series.length) {
       ctx.fillStyle = "rgba(243,240,232,0.45)"
       ctx.font = "13px ui-sans-serif, system-ui, sans-serif"
       ctx.fillText("Waiting for the price", PAD.l, PAD.t + 18)
-    } else if (baseline != null) {
-      const baselineY = yAt(baseline)
-      for (let i = 1; i < path.length; i++) {
-        const a = path[i - 1]
-        const b = path[i]
-        if (a && b) fillSegment(ctx, a, b, baseline, baselineY)
+    } else {
+      for (const piece of pieces) {
+        if (piece.baseline == null) continue
+        fillSegment(ctx, piece.a, piece.b, piece.baseline, yAt(piece.baseline))
       }
     }
 
-    if (baseline != null) drawHorizon(ctx, PAD.l, PAD.l + plotW, yAt(baseline), null, PAD.t, plotH)
+    for (const horizon of horizons) drawHorizon(ctx, horizon.x0, horizon.x1, yAt(horizon.price), null, PAD.t, plotH)
 
-    if (series.length) {
+    if (pieces.length) {
       ctx.lineWidth = 1.75
       ctx.lineJoin = "round"
       ctx.lineCap = "round"
       ctx.setLineDash([])
-      for (let i = 1; i < path.length; i++) {
-        const a = path[i - 1]
-        const b = path[i]
-        if (a && b && baseline != null) strokePair(ctx, a, b, baseline)
-        else if (a && b) {
+      for (const piece of pieces) {
+        if (piece.baseline == null) {
           ctx.strokeStyle = NEUTRAL
-          trace(ctx, a, b)
-        }
+          trace(ctx, piece.a, piece.b)
+        } else strokePair(ctx, piece.a, piece.b, piece.baseline)
       }
     }
 
@@ -216,14 +310,30 @@ export function mountChart(
 
     const last = series.length ? series[series.length - 1] : null
     if (last) {
-      const tone = baseline == null ? null : priceTone(last.price, baseline)
-      const color = tone === "push" ? PUSH : tone === "up" ? UP : tone === "down" ? DOWN : NEUTRAL
-      ctx.fillStyle = color
+      const x = xAt(last.t)
+      const y = yAt(last.price)
+      const gold = !!aim && !!strike && Number.isFinite(strike.price) && inTheMoney(aim, last.price, strike.price)
+      if (gold) {
+        const phase = pulsePhase(performance.now(), reducedMotion)
+        ctx.fillStyle = `rgba(226, 179, 64, ${reducedMotion ? 0.35 : 0.18 + 0.45 * phase})`
+        ctx.beginPath()
+        ctx.arc(x, y, reducedMotion ? 7 : 6 + 3 * phase, 0, Math.PI * 2)
+        ctx.fill()
+        ctx.fillStyle = GOLD
+      } else {
+        const headBaseline = pieceBaseline(last.t, last.t, frameAt, frame.before, frame.after)
+        const tone = headBaseline == null ? null : priceTone(last.price, headBaseline)
+        ctx.fillStyle = tone === "push" ? PUSH : tone === "up" ? UP : tone === "down" ? DOWN : NEUTRAL
+      }
       ctx.beginPath()
-      ctx.arc(xAt(last.t), yAt(last.price), 3.5, 0, Math.PI * 2)
+      ctx.arc(x, y, 3.5, 0, Math.PI * 2)
       ctx.fill()
     }
-    if (baseline != null) drawHorizon(ctx, PAD.l, PAD.l + plotW, yAt(baseline), strikeCaption(strike, points, head?.t ?? viewEnd), PAD.t, plotH, true)
+    const captionAt = head?.t ?? viewEnd
+    for (const horizon of horizons) {
+      const label = horizon.ride ? strikeCaption(strike, points, captionAt) : strike ? null : strikeCaption(null, points, captionAt)
+      if (label) drawHorizon(ctx, horizon.x0, horizon.x1, yAt(horizon.price), label, PAD.t, plotH, true)
+    }
     ctx.restore()
 
     ctx.fillStyle = "rgba(243,240,232,0.45)"
@@ -258,6 +368,7 @@ export function mountChart(
       running = false
       cancelAnimationFrame(raf)
       observer.disconnect()
+      motion.removeEventListener("change", onMotion)
       listeners.clear()
     },
     subscribe(listener) {
@@ -373,6 +484,63 @@ function priceTicks(min: number, max: number): { price: number; label: string }[
 }
 
 type XY = TapePoint & { x: number; y: number }
+
+function pulsePhase(now: number, reduced: boolean): number {
+  if (reduced) return 0.5
+  return (Math.sin((now / PULSE_MS) * Math.PI * 2) + 1) / 2
+}
+
+function horizonSpans(
+  frame: ScaleFrame,
+  at: number | null,
+  viewStart: number,
+  viewEnd: number,
+  plotLeft: number,
+  plotRight: number,
+  xAt: (t: number) => number,
+): { x0: number; x1: number; price: number; ride: boolean }[] {
+  const spans: { x0: number; x1: number; price: number; ride: boolean }[] = []
+  if (frame.before != null && (at == null || at > viewStart)) {
+    const x1 = at == null || at >= viewEnd ? plotRight : Math.min(plotRight, Math.max(plotLeft, xAt(at)))
+    if (x1 > plotLeft) spans.push({ x0: plotLeft, x1, price: frame.before, ride: false })
+  }
+  if (frame.after != null && (at == null || at < viewEnd)) {
+    const x0 = at == null || at <= viewStart ? plotLeft : Math.min(plotRight, Math.max(plotLeft, xAt(at)))
+    if (plotRight > x0) spans.push({ x0, x1: plotRight, price: frame.after, ride: true })
+  }
+  return spans
+}
+
+function inkPieces(
+  path: XY[],
+  frame: ScaleFrame,
+  at: number | null,
+): { a: XY; b: XY; baseline: number | null }[] {
+  const pieces: { a: XY; b: XY; baseline: number | null }[] = []
+  for (let i = 1; i < path.length; i++) {
+    const a = path[i - 1]
+    const b = path[i]
+    if (!a || !b) continue
+    if (at != null && frame.before != null && frame.after != null) {
+      const mid = crossTime(a, b, at)
+      if (mid) {
+        const ratio = (at - a.t) / (b.t - a.t)
+        const split: XY = {
+          ...a,
+          t: mid.t,
+          price: mid.price,
+          x: a.x + (b.x - a.x) * ratio,
+          y: a.y + (b.y - a.y) * ratio,
+        }
+        pieces.push({ a, b: split, baseline: pieceBaseline(a.t, split.t, at, frame.before, frame.after) })
+        pieces.push({ a: split, b, baseline: pieceBaseline(split.t, b.t, at, frame.before, frame.after) })
+        continue
+      }
+    }
+    pieces.push({ a, b, baseline: pieceBaseline(a.t, b.t, at, frame.before, frame.after) })
+  }
+  return pieces
+}
 
 function strokePair(ctx: CanvasRenderingContext2D, a: XY, b: XY, baseline: number) {
   if (a.t === b.t && a.price === b.price) return
