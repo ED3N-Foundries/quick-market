@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type PointerEvent as ReactPointerEvent, type RefObject } from "react"
 import { mountChart, type ChartScale, type TapeChart, type TapeSample } from "./chart"
 import { chartMarket, focusPool, followWindow, heldMarket, heldStrike } from "./focus"
-import { botLabel, formatClock, formatGainLoss, formatMoney, formatPrice, formatPriceDelta, formatSigned, microsToInput, moneyShare, parseAmountMicros, payoutMicros, quoteDollar, quotePair, randomAddress, shortAddress, sourceLabel } from "./format"
+import { botLabel, formatClock, formatDollarMove, formatGainLoss, formatMoney, formatPrice, formatPriceDelta, formatSigned, microsToInput, moneyShare, parseAmountMicros, payoutMicros, quoteDollar, quotePair, randomAddress, shortAddress, sourceLabel } from "./format"
 import type { Band, Board, HistoryRound, OpenBet, SettledMessage, Side } from "./types"
 import { useMarket } from "./useMarket"
 
@@ -16,6 +16,7 @@ export function App() {
   const [chart, setChart] = useState<TapeChart | null>(null)
   const [stake, setStake] = useState("10")
   const [fundAmount, setFundAmount] = useState("")
+  const [fundOpen, setFundOpen] = useState(false)
   const [withdrawAmount, setWithdrawAmount] = useState("")
   const [withdrawError, setWithdrawError] = useState<string | null>(null)
   const [following, setFollowing] = useState(true)
@@ -62,7 +63,7 @@ export function App() {
   const now = Date.now() + market.offsetRef.current
   const heldSpan = board ? heldMarket(board, openBets, now) : null
   const focus = focusPool(board, openBets, now)
-  const canBet = !!you && !heldSpan && board?.phase === "bets" && !!board.join && market.feed === "live" && !market.pending
+  const canBet = !!you && !heldSpan && !!board?.join && market.feed === "live" && !market.pending
   const total = (focus?.poolUpMicros ?? 0) + (focus?.poolDownMicros ?? 0)
   const held = openBets.find((bet) => bet.roundId === focus?.id) ?? null
   const upQuote = focus ? quoteDollar("up", focus.poolUpMicros, focus.poolDownMicros, market.config.feeBps) : "—"
@@ -114,18 +115,17 @@ export function App() {
           <span className="mark">Quick</span>
           <span className="pair">BTC</span>
         </div>
-        <PriceReadout priceRef={market.priceRef} strike={heldSpan?.strike ?? null} source={market.config.source} />
-        <div className="clock-block">
-          <span className="clock-label">{heldSpan ? "Settles" : "Bets"}</span>
-          {board ? (
-            <Countdown
-              endsAt={heldSpan ? heldSpan.settlesAt : board.phase === "bets" ? board.windowEndsAt : board.blockEnd}
-              offsetRef={market.offsetRef}
-            />
-          ) : (
-            <strong className="clock">—</strong>
-          )}
-          {market.result && <span className="last-result">{market.result}</span>}
+        <div className="clock-cluster">
+          <PriceReadout priceRef={market.priceRef} strike={heldSpan?.strike ?? null} source={market.config.source} />
+          <div className="clock-block">
+            <span className="clock-label">{heldSpan ? "Settles" : "Bets"}</span>
+            {board ? (
+              <Countdown endsAt={heldSpan ? heldSpan.settlesAt : board.windowEndsAt} offsetRef={market.offsetRef} />
+            ) : (
+              <strong className="clock">—</strong>
+            )}
+            {market.result && <span className="last-result">{market.result}</span>}
+          </div>
         </div>
       </header>
 
@@ -165,7 +165,12 @@ export function App() {
             <span>Spendable</span>
             {market.address ? (
               <span className="who">
-                {shortAddress(market.address)}
+                <span className="who-line">
+                  {shortAddress(market.address)}
+                  <button type="button" className="fund-plus" aria-label="Fund" onClick={() => setFundOpen(true)}>
+                    +
+                  </button>
+                </span>
                 <small>Demo</small>
               </span>
             ) : (
@@ -213,30 +218,19 @@ export function App() {
           disabled={!canBet}
           onBet={() => market.place("down", stake)}
         />
-        <div className="funding">
-          <div className="funds">
-            <button type="button" onClick={() => market.fundWallet("10")} disabled={!you}>
-              +$10
-            </button>
-            <button type="button" onClick={() => market.fundWallet("1000")} disabled={!you}>
-              +$1,000
-            </button>
-          </div>
-          <div className="fund-custom">
-            <input
-              aria-label="Fund amount"
-              inputMode="decimal"
-              placeholder="Amount"
-              value={fundAmount}
-              onChange={(event) => setFundAmount(event.target.value)}
-              disabled={!you}
-            />
-            <button type="button" onClick={() => market.fundWallet(fundAmount)} disabled={!you || fundMicros === null}>
-              Fund
-            </button>
-          </div>
-        </div>
       </section>
+      {fundOpen && (
+        <FundOverlay
+          amount={fundAmount}
+          disabled={!you}
+          customDisabled={!you || fundMicros === null}
+          onAmount={setFundAmount}
+          onClose={() => setFundOpen(false)}
+          onFund={(amount) => {
+            void market.fundWallet(amount)
+          }}
+        />
+      )}
 
       <details className="tray">
         <summary>
@@ -482,13 +476,13 @@ function PriceReadout({
       const price = priceRef.current
       if (priceEl.current) priceEl.current.textContent = price ? formatPrice(price) : "—"
       if (deltaEl.current) {
-        const delta = price && strike ? formatPriceDelta(price, strike) : null
+        const delta = price && strike ? formatDollarMove(price, strike) : null
         if (delta) {
           deltaEl.current.textContent = delta.text
           deltaEl.current.dataset.side = delta.side
         } else {
-          deltaEl.current.textContent = ""
-          deltaEl.current.dataset.side = "flat"
+          deltaEl.current.textContent = "price locks in"
+          deltaEl.current.dataset.side = "lock"
         }
       }
       raf = requestAnimationFrame(loop)
@@ -505,6 +499,57 @@ function PriceReadout({
         </span>
       </div>
       <span ref={deltaEl} className="delta" data-side="flat" />
+    </div>
+  )
+}
+
+function FundOverlay({
+  amount,
+  disabled,
+  customDisabled,
+  onAmount,
+  onClose,
+  onFund,
+}: {
+  amount: string
+  disabled: boolean
+  customDisabled: boolean
+  onAmount: (amount: string) => void
+  onClose: () => void
+  onFund: (amount: string) => void
+}) {
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose()
+    }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [onClose])
+  return (
+    <div className="fund-back" onClick={onClose}>
+      <div className="fund-overlay" role="dialog" aria-modal="true" aria-label="Fund" onClick={(event) => event.stopPropagation()}>
+        <div className="funds">
+          <button type="button" onClick={() => onFund("10")} disabled={disabled}>
+            +$10
+          </button>
+          <button type="button" onClick={() => onFund("1000")} disabled={disabled}>
+            +$1,000
+          </button>
+        </div>
+        <div className="fund-custom">
+          <input
+            aria-label="Fund amount"
+            inputMode="decimal"
+            placeholder="Amount"
+            value={amount}
+            onChange={(event) => onAmount(event.target.value)}
+            disabled={disabled}
+          />
+          <button type="button" onClick={() => onFund(amount)} disabled={customDisabled}>
+            Fund
+          </button>
+        </div>
+      </div>
     </div>
   )
 }

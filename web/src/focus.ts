@@ -25,14 +25,12 @@ function isResolving(market: Band | null, now: number): market is Band {
 }
 
 /** The market the rolling chart is centered on.
- *  The betting window stays a fixed frame. The roll is the market chart:
- *  a held bet that has struck, or the live market during the market phase.
- *  An unstruck bet does not qualify, and a previous market does not roll the bet window.
+ *  Only a bet you are riding, after its strike and before it settles.
+ *  An unbetted user stays on the betting window, and an unstruck bet does not roll it.
  */
 export function chartMarket(board: Board, openBets: OpenBet[], now: number): Band | null {
   const held = heldMarket(board, openBets, now)
   if (isResolving(held, now)) return held
-  if (board.phase === "market" && isResolving(board.live, now)) return board.live
   return null
 }
 
@@ -53,11 +51,11 @@ export function heldStrike(market: { strike: string | null } | null): { price: n
   return { price, text: market.strike }
 }
 
-/** Pool shown in the trade panel. A held market wins. Otherwise only the bet window. */
+/** Pool shown in the trade panel. A held market wins. Otherwise the open betting window. */
 export function focusPool(board: Board | null, openBets: OpenBet[], now: number): PoolCard | null {
   if (!board) return null
   const held = heldMarket(board, openBets, now)
-  if (!held) return board.phase === "bets" ? board.join : null
+  if (!held) return board.join
   if (board.live?.id === held.id) return board.live
   if (board.join?.id === held.id) return board.join
   return { ...held, tray: [] }

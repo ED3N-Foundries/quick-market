@@ -20,10 +20,11 @@ test("an open betting window is the session", () => {
   expect(betSession(board(), 14_999)).toEqual({ start: 10_000, end: 15_000 })
 })
 
-test("the moment the window ends, the next session starts", () => {
-  const closed = board({ phase: "market" })
+test("the moment the window ends, the next window starts", () => {
+  const closed = board({ blockEnd: 15_000, windowEndsAt: 15_000, phase: "bets" })
   expect(betSession(closed, 15_000)).toEqual({ start: 15_000, end: 20_000 })
   expect(betSession(closed, 19_999)).toEqual({ start: 15_000, end: 20_000 })
+  expect(betSession(closed, 20_000)).toEqual({ start: 20_000, end: 25_000 })
 })
 
 test("a stale board still rolls forward instead of parking", () => {
@@ -38,9 +39,9 @@ test("the market camera keeps now on the right edge", () => {
   expect(marketScroll(19_250, 5_000)).toEqual({ start: 14_250, end: 19_250 })
 })
 
-test("two viewports of scroll cover the default settle wait", () => {
+test("one viewport of scroll covers the default ride", () => {
   const viewMs = 5_000
   const strikeAt = 5_000
-  const settlesAt = strikeAt + viewMs * 2
-  expect(marketScroll(settlesAt, viewMs).end - marketScroll(strikeAt, viewMs).end).toBe(viewMs * 2)
+  const settlesAt = strikeAt + viewMs
+  expect(marketScroll(settlesAt, viewMs).end - marketScroll(strikeAt, viewMs).end).toBe(viewMs)
 })

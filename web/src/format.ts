@@ -56,6 +56,14 @@ export function formatPrice(price: string): string {
   return `${Number(whole).toLocaleString("en-US")}.${decimals}`
 }
 
+/** Dollar move from a strike. Push is `=$0.00`. */
+export function formatDollarMove(price: string, baseline: string): { text: string; side: "up" | "down" | "push" } | null {
+  const delta = formatPriceDelta(price, baseline)
+  if (!delta) return null
+  if (delta.side === "push") return { text: "=$0.00", side: "push" }
+  return { text: `${delta.text[0]}$${delta.text.slice(1)}`, side: delta.side }
+}
+
 export function formatPriceDelta(price: string, baseline: string): { text: string; side: "up" | "down" | "push" } | null {
   const left = decimalParts(price)
   const right = decimalParts(baseline)

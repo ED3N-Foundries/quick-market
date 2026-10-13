@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { formatGainLoss, formatMoney, formatPrice, formatPriceDelta, parseAmountMicros, payoutMicros, quoteDollar } from "./format"
+import { formatDollarMove, formatGainLoss, formatMoney, formatPrice, formatPriceDelta, parseAmountMicros, payoutMicros, quoteDollar } from "./format"
 import { priceTone } from "./chart"
 
 test("formatMoney rounds half-up to cents for display", () => {
@@ -29,6 +29,12 @@ test("formatPriceDelta subtracts without rounding away decimals", () => {
   expect(formatPriceDelta("100.1234", "100.0000")).toEqual({ text: "+0.1234", side: "up" })
   expect(formatPriceDelta("99.9", "100.0")).toEqual({ text: "−0.10", side: "down" })
   expect(formatPriceDelta("100.00", "100.00")).toEqual({ text: "=", side: "push" })
+})
+
+test("formatDollarMove puts a dollar sign on the strike change", () => {
+  expect(formatDollarMove("100.1234", "100.0000")).toEqual({ text: "+$0.1234", side: "up" })
+  expect(formatDollarMove("99.9", "100.0")).toEqual({ text: "−$0.10", side: "down" })
+  expect(formatDollarMove("100.00", "100.00")).toEqual({ text: "=$0.00", side: "push" })
 })
 
 test("payoutMicros matches a paid pool and refunds a one-sided pool", () => {

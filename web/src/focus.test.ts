@@ -44,20 +44,20 @@ test("the betting window stays fixed while a previous market is still live", () 
   expect(focusPool(current, [], 12_000)?.id).toBe(2)
 })
 
-test("the market phase scrolls with now on the right edge", () => {
+test("an unbetted user stays on the betting window while a market is live", () => {
   const next = board({
-    blockStart: 10_000,
+    blockStart: 15_000,
     blockEnd: 20_000,
-    windowEndsAt: 15_000,
+    windowEndsAt: 20_000,
     phase: "market",
-    join: null,
+    join: card(band(3, 15_000)),
     live: card(band(2, 10_000, "101")),
     bands: [],
   })
-  expect(followWindow(next, [], 15_000)).toEqual({ start: 10_000, end: 15_000 })
-  expect(followWindow(next, [], 19_000)).toEqual({ start: 14_000, end: 19_000 })
-  expect(chartMarket(next, [], 16_000)?.id).toBe(2)
-  expect(focusPool(next, [], 16_000)).toBeNull()
+  expect(chartMarket(next, [], 16_000)).toBeNull()
+  expect(followWindow(next, [], 16_000)).toEqual({ start: 15_000, end: 20_000 })
+  expect(followWindow(next, [], 19_000)).toEqual({ start: 15_000, end: 20_000 })
+  expect(focusPool(next, [], 16_000)?.id).toBe(3)
 })
 
 test("a held market scrolls two viewports and the bet window does not", () => {
@@ -115,8 +115,9 @@ test("a struck market scrolls one view wide until it settles", () => {
     live,
   })
   const bet = [{ roundId: 2, side: "down" as const, stakeMicros: 1_000_000 }]
-  expect(followWindow(current, [], 16_000)).toEqual({ start: 11_000, end: 16_000 })
-  expect(followWindow(current, bet, 16_000)).toEqual(followWindow(current, [], 16_000))
+  expect(chartMarket(current, [], 16_000)).toBeNull()
+  expect(followWindow(current, [], 16_000)).toEqual({ start: 15_000, end: 20_000 })
+  expect(followWindow(current, bet, 16_000)).toEqual({ start: 11_000, end: 16_000 })
   expect(followWindow(current, bet, 21_000)).toEqual({ start: 16_000, end: 21_000 })
   expect(heldMarket(current, bet, 21_000)?.id).toBe(2)
   expect(followWindow(current, bet, 21_000).end - followWindow(current, bet, 21_000).start).toBe(5_000)

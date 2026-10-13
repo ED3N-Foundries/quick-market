@@ -24,8 +24,8 @@ Open http://127.0.0.1:5173. The API listens on http://127.0.0.1:3001.
 
 ## Rules
 
-- Time is a UTC block of window plus market. The first part is the betting window, and the previous market is still live on that same stretch. The second part is the new market, with betting closed.
-- The open prints when the window closes. That market settles when the next window closes. A player stays on that market until it settles and cannot join the next window yet. The betting window stays a fixed frame. The market chart is `VIEW_SECONDS` wide and scrolls with now on the right edge. A held market keeps that scroll until it settles, two widths at the default block.
+- Betting windows tile UTC time. Each one lasts `WINDOW_SECONDS`, and the next opens when the previous closes. There is no closed half where betting stops.
+- The open prints when the window closes. That market settles `MARKET_SECONDS` later. A player who bet rides it until it settles and cannot join another window yet. Everyone else stays on the open betting window. The bet chart is that fixed window. The market chart is `VIEW_SECONDS` wide, scrolls with now on the right edge, and shows only during a ride.
 - The line is one feed for the whole session: Binance `BTCUSDT` or Coinbase `BTC-USD`. The server does not switch between them. Green is above that market's open, red is below.
 - Stake is demo USDC. Your payout is your share of the winning side, after a 0.25% fee on the pot.
 - A tie is a push: stakes return, no fee. A market with no print across its whole life is void, and stakes return.

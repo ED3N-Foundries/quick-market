@@ -292,7 +292,7 @@ function cardFor(id: number): PoolCard | null {
 
 export function board(now = Date.now()): Board {
   const clock = clockAt(now)
-  if (clock.joinId !== null) ensureRound(clock.joinId)
+  if (clock.joinId >= 0) ensureRound(clock.joinId)
   if (clock.liveId >= 0) ensureRound(clock.liveId)
   const rows = getDb()
     .query("SELECT * FROM rounds WHERE ends_at > ? ORDER BY id ASC")
@@ -301,8 +301,8 @@ export function board(now = Date.now()): Board {
     blockStart: clock.blockStart,
     blockEnd: clock.blockEnd,
     windowEndsAt: clock.windowEndsAt,
-    phase: clock.windowOpen ? "bets" : "market",
-    join: clock.joinId === null ? null : cardFor(clock.joinId),
+    phase: "bets",
+    join: clock.joinId < 0 ? null : cardFor(clock.joinId),
     live: cardFor(clock.liveId),
     bands: rows.map(toBand),
   }
@@ -406,7 +406,7 @@ export function placeBet(input: {
 
       const clock = clockAt(input.now)
       const id = clock.joinId
-      if (id === null) throw new BetError("Betting is closed")
+      if (id < 0) throw new BetError("Betting is closed")
       ensureRound(id)
       const round = getRound(id)
       if (!round || round.status !== "open") throw new BetError("Betting is closed")
@@ -420,8 +420,8 @@ export function placeBet(input: {
       const onThis = opens.find((bet) => bet.roundId === id)
       for (const bet of opens) {
         if (bet.roundId === id) continue
-        // Bots keep filling the next window while their previous market is still live.
-        if (bot && bet.roundId === clock.liveId) continue
+        // Bots keep filling every window while earlier markets are still resolving.
+        if (bot) continue
         throw new BetError("Your last bet is still open")
       }
       if (onThis && onThis.side !== input.side) throw new BetError("You are already on the other side")
@@ -591,7 +591,7 @@ export function advance(now: number): { settled: SettledEvent[]; broadcastRound:
   for (const round of due) settled.push(closeRound(round))
   if (settled.length) broadcastRound = true
 
-  if (clock.joinId !== null) ensureRound(clock.joinId)
+  if (clock.joinId >= 0) ensureRound(clock.joinId)
   if (clock.liveId >= 0) ensureRound(clock.liveId)
 
   const locking = getDb()
@@ -606,9 +606,9 @@ export function advance(now: number): { settled: SettledEvent[]; broadcastRound:
     if (result.changes > 0) broadcastRound = true
   }
 
-  if (clock.joinId !== null && feedStatus(now) === "live" && seatBots(clock.joinId, now)) broadcastRound = true
+  if (clock.joinId >= 0 && feedStatus(now) === "live" && seatBots(clock.joinId, now)) broadcastRound = true
 
-  const key = `${clock.cycle}:${clock.windowOpen ? "bets" : "market"}`
+  const key = `${clock.cycle}`
   if (key !== cachedKey) {
     cachedKey = key
     broadcastRound = true
@@ -694,7 +694,8 @@ function roundTape(round: RoundRow): { t: number; price: string }[] {
     byTime.set(print.exchangeTs, print.price)
   }
   const life = Math.max(1_000, round.ends_at - round.starts_at)
-  const held = priceAt(round.starts_at, life)
+  const windowSpan = Math.max(0, round.starts_at - bounds.betsOpen)
+  const held = priceAt(round.starts_at, Math.max(life, windowSpan + 1_000))
   if (held) byTime.set(held.exchangeTs, held.price)
   return [...byTime.entries()].sort((left, right) => left[0] - right[0]).map(([t, price]) => ({ t, price }))
 }
