@@ -123,7 +123,9 @@ export function App() {
             {board ? (
               <Countdown endsAt={heldSpan ? heldSpan.settlesAt : board.windowEndsAt} offsetRef={market.offsetRef} />
             ) : (
-              <strong className="clock">—</strong>
+              <span className="clock-line">
+                <strong className="clock">—</strong>
+              </span>
             )}
           </div>
         </div>
@@ -503,6 +505,33 @@ function BalanceFigure({ micros }: { micros: number | null }) {
   )
 }
 
+function LockMark({ locked }: { locked: boolean }) {
+  return (
+    <span className="lock" data-state={locked ? "locked" : "open"} aria-label={locked ? "Price locked" : "Price locking"}>
+      <span className="lock-spin" aria-hidden="true" />
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <rect
+          x="5"
+          y="11"
+          width="14"
+          height="9"
+          rx="2"
+          fill={locked ? "currentColor" : "none"}
+          stroke="currentColor"
+          strokeWidth={locked ? 0 : 1.8}
+        />
+        <path d="M8 11V8a4 4 0 0 1 8 0v3" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+      </svg>
+    </span>
+  )
+}
+
+function moveWord(side: "up" | "down" | "push"): string {
+  if (side === "up") return "Up"
+  if (side === "down") return "Down"
+  return "Push"
+}
+
 function PriceReadout({
   priceRef,
   strike,
@@ -514,19 +543,23 @@ function PriceReadout({
 }) {
   const priceEl = useRef<HTMLSpanElement>(null)
   const deltaEl = useRef<HTMLSpanElement>(null)
+  const wordEl = useRef<HTMLSpanElement>(null)
+  const moveEl = useRef<HTMLDivElement>(null)
   useEffect(() => {
     let raf = 0
     const loop = () => {
       const price = priceRef.current
       if (priceEl.current) priceEl.current.textContent = price ? formatPrice(price) : "—"
-      if (deltaEl.current) {
-        const delta = price && strike ? formatDollarMove(price, strike) : null
+      const delta = price && strike ? formatDollarMove(price, strike) : null
+      if (deltaEl.current && wordEl.current && moveEl.current) {
         if (delta) {
           deltaEl.current.textContent = delta.text
-          deltaEl.current.dataset.side = delta.side
+          wordEl.current.textContent = moveWord(delta.side)
+          moveEl.current.dataset.side = delta.side
         } else {
           deltaEl.current.textContent = "price locks in"
-          deltaEl.current.dataset.side = "lock"
+          wordEl.current.textContent = "Lock"
+          moveEl.current.dataset.side = "lock"
         }
       }
       raf = requestAnimationFrame(loop)
@@ -535,15 +568,25 @@ function PriceReadout({
     return () => cancelAnimationFrame(raf)
   }, [priceRef, strike])
   return (
-    <div className="price-block">
-      <div>
+    <>
+      <div className="price-block">
         <span className="quote">{quotePair(source)}</span>
-        <span ref={priceEl} className="price">
-          —
+        <span className="price-line">
+          <LockMark locked={!!strike} />
+          <span ref={priceEl} className="price">
+            —
+          </span>
         </span>
       </div>
-      <span ref={deltaEl} className="delta" data-side="flat" />
-    </div>
+      <div ref={moveEl} className="move" data-side="lock">
+        <span ref={wordEl} className="move-label">
+          Lock
+        </span>
+        <span ref={deltaEl} className="delta">
+          price locks in
+        </span>
+      </div>
+    </>
   )
 }
 
@@ -604,16 +647,25 @@ function Countdown({ endsAt, offsetRef }: { endsAt: number; offsetRef: RefObject
     let raf = 0
     const loop = () => {
       const left = Math.max(0, endsAt - (Date.now() + offsetRef.current))
-      if (ref.current) ref.current.textContent = (left / 1000).toFixed(1)
+      const secs = left / 1000
+      const node = ref.current
+      if (node) {
+        node.textContent = secs.toFixed(1)
+        const block = node.closest(".clock-block")
+        if (block instanceof HTMLElement) block.dataset.urgent = secs < 1.5 ? "1" : "0"
+      }
       raf = requestAnimationFrame(loop)
     }
     loop()
     return () => cancelAnimationFrame(raf)
   }, [endsAt, offsetRef])
   return (
-    <strong ref={ref} className="clock">
-      0.0
-    </strong>
+    <span className="clock-line">
+      <strong ref={ref} className="clock">
+        0.0
+      </strong>
+      <span className="clock-unit">s</span>
+    </span>
   )
 }
 
