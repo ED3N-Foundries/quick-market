@@ -3,7 +3,7 @@ import { HALF_FLOOR, contentHalf, halfSpan, openPrice, shownHalf, type PricePoin
 
 export type TapePoint = PricePoint & { text?: string }
 
-export type ChartStrike = { price: number; text: string }
+export type ChartStrike = { price: number; text: string; peg?: boolean }
 
 /** The price the chart is built around. A locked strike is the market open.
  *  Until that open prints, `fallback` is the price the stage stays centered on.
@@ -223,7 +223,7 @@ export function mountChart(
       ctx.arc(xAt(last.t), yAt(last.price), 3.5, 0, Math.PI * 2)
       ctx.fill()
     }
-    if (baseline != null) drawHorizon(ctx, PAD.l, PAD.l + plotW, yAt(baseline), horizonLabel(strike, points, head?.t ?? viewEnd), PAD.t, plotH, true)
+    if (baseline != null) drawHorizon(ctx, PAD.l, PAD.l + plotW, yAt(baseline), strikeCaption(strike, points, head?.t ?? viewEnd), PAD.t, plotH, true)
     ctx.restore()
 
     ctx.fillStyle = "rgba(243,240,232,0.45)"
@@ -446,6 +446,12 @@ function horizonLabel(strike: ChartStrike | null, points: TapePoint[], at: numbe
   const text = strike?.text ?? latestText(points, at)
   if (!text || !/^\d+(\.\d+)?$/.test(text.trim())) return null
   return formatPrice(text)
+}
+
+/** Left-edge caption. A pegged strike is labeled on the right instead, so this stays empty. */
+export function strikeCaption(strike: ChartStrike | null, points: TapePoint[], at: number): string | null {
+  if (strike?.peg) return null
+  return horizonLabel(strike, points, at)
 }
 
 function drawHorizon(

@@ -42,7 +42,8 @@ export function App() {
         const board = boardRef.current
         if (!board) return null
         const now = Date.now() + market.offsetRef.current
-        return heldStrike(chartMarket(board, openBetsRef.current, now))
+        const strike = heldStrike(chartMarket(board, openBetsRef.current, now))
+        return strike ? { ...strike, peg: true } : null
       },
       extendLive: () => true,
     })
@@ -131,7 +132,14 @@ export function App() {
       <section className="chart-wrap" onPointerDown={onPointerDown} onPointerMove={scrub.move} onPointerLeave={scrub.clear}>
         <canvas ref={canvasRef} />
         {chart && (
-          <ChartOverlay chart={chart} board={board} openBets={openBets} feeBps={market.config.feeBps} hover={scrub.hover} />
+          <ChartOverlay
+            chart={chart}
+            board={board}
+            openBets={openBets}
+            feeBps={market.config.feeBps}
+            hover={scrub.hover}
+            offsetRef={market.offsetRef}
+          />
         )}
         {market.feed === "stale" && <p className="feed-flag">Price delayed</p>}
         {!following && (
@@ -307,29 +315,44 @@ function ChartOverlay({
   openBets,
   feeBps,
   hover,
+  offsetRef,
 }: {
   chart: TapeChart
   board: Board | null
   openBets: OpenBet[]
   feeBps: number
   hover: { t: number } | null
+  offsetRef?: RefObject<number>
 }) {
   const current = useSyncExternalStore(chart.subscribe, chart.getScale, chart.getScale)
   if (!current || !board) return null
   const span = Math.max(1, current.viewEnd - current.viewStart)
   const xAt = (t: number) => current.plotLeft + ((t - current.viewStart) / span) * current.plotWidth
+  const now = Date.now() + (offsetRef?.current ?? 0)
+  const riding = chartMarket(board, openBets, now)
+  const peg = heldStrike(riding)
+  const gutter = current.width - current.plotLeft - current.plotWidth
 
   return (
     <div className="chart-overlay">
+      {peg && (
+        <PegPrice
+          text={peg.text}
+          top={current.plotTop + current.plotHeight / 2}
+          right={gutter + 16}
+        />
+      )}
       {openBets.map((bet) => {
         const band = board.bands.find((row) => row.id === bet.roundId) ?? (board.join?.id === bet.roundId ? board.join : null)
         if (!band) return null
+        const pinsRight = riding?.id === bet.roundId
         return (
           <BetChip
             key={bet.roundId}
             bet={bet}
             band={band}
-            left={Math.max(current.plotLeft, xAt(band.strikeAt)) + 8}
+            left={pinsRight ? undefined : Math.max(current.plotLeft, xAt(band.strikeAt)) + 8}
+            right={pinsRight ? gutter + 8 : undefined}
             top={current.plotTop}
             feeBps={feeBps}
           />
@@ -383,22 +406,44 @@ function Scrub({
   )
 }
 
+function PegPrice({ text, top, right }: { text: string; top: number; right: number }) {
+  const [flash, setFlash] = useState(() => !window.matchMedia("(prefers-reduced-motion: reduce)").matches)
+  useEffect(() => {
+    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    if (reduce) {
+      setFlash(false)
+      return
+    }
+    setFlash(true)
+    const id = window.setTimeout(() => setFlash(false), 900)
+    return () => window.clearTimeout(id)
+  }, [text])
+  return (
+    <p className={flash ? "peg flash" : "peg"} style={{ top, right }} aria-label="Locked price">
+      <span>Locked</span>
+      <strong>{formatPrice(text)}</strong>
+    </p>
+  )
+}
+
 function BetChip({
   bet,
   band,
   left,
+  right,
   top,
   feeBps,
 }: {
   bet: OpenBet
   band: Band
-  left: number
+  left?: number
+  right?: number
   top: number
   feeBps: number
 }) {
   const payout = payoutMicros(bet.stakeMicros, bet.side, band.poolUpMicros, band.poolDownMicros, feeBps)
   return (
-    <p className={`chip ${bet.side}`} style={{ left, top: top + 52 }}>
+    <p className={`chip ${bet.side}`} style={{ left, right, top: top + 52 }}>
       <strong>
         {bet.side === "up" ? "▲ Up" : "▼ Down"} {formatMoney(bet.stakeMicros)}
       </strong>

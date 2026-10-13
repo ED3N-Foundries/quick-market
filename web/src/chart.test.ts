@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { priceInUse, stageBaseline, tapeInView, type TapePoint } from "./chart"
+import { priceInUse, stageBaseline, strikeCaption, tapeInView, type TapePoint } from "./chart"
 
 const points: TapePoint[] = [
   { t: 0, price: 100 },
@@ -39,6 +39,11 @@ test("a locked strike is the price in use, and a missing strike uses the stage f
   expect(priceInUse(null, 100)).toBe(100)
   expect(priceInUse(Number.NaN, 100)).toBe(100)
   expect(priceInUse(null, null)).toBeNull()
+})
+
+test("a pegged strike leaves the left caption empty", () => {
+  expect(strikeCaption({ price: 100, text: "100.5", peg: true }, points, 12_000)).toBeNull()
+  expect(strikeCaption({ price: 100, text: "100.5" }, points, 12_000)).toBe("100.50")
 })
 
 test("a bet window stays on the open print while later prints move", () => {
