@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs"
 import { join, normalize, sep } from "node:path"
-import { botCount, feeBps, marketMs, MIN_STAKE_MICROS, priceSource, viewMs, windowMs } from "./config"
+import { botCount, feeBps, marketMs, MIN_STAKE_MICROS, priceSource, viewMs, windowMs, type PriceSource } from "./config"
 import { getDb } from "./db"
 import { hub } from "./hub"
 import { normalizeAddress, parseMicros } from "./money"
@@ -26,7 +26,7 @@ const serveUi = process.env.NODE_ENV === "production"
 
 getDb()
 
-let pending: { price: string; exchangeTs: number; source: "binance" | "coinbase" } | null = null
+let pending: { price: string; exchangeTs: number; source: PriceSource } | null = null
 let lastFeed: "live" | "stale" | null = null
 
 startOracle((print) => {

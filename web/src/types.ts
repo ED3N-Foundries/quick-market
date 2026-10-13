@@ -1,5 +1,5 @@
 export type Side = "up" | "down"
-export type PriceSource = "binance" | "coinbase"
+export type PriceSource = "binance" | "coinbase" | "average"
 
 export type Config = {
   windowSeconds: number

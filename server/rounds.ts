@@ -7,6 +7,7 @@ import {
   MIN_STAKE_MICROS,
   STARTING_BALANCE_MICROS,
   TAPE_MS,
+  type PriceSource,
 } from "./config"
 import { getDb } from "./db"
 import { settleRound, type Resolution, type Side } from "./settle"
@@ -17,7 +18,7 @@ export type Print = {
   price: string
   exchangeTs: number
   receivedAt: number
-  source: "binance" | "coinbase"
+  source: PriceSource
 }
 
 export type TrayRow = {
@@ -178,7 +179,7 @@ function priceAt(boundary: number, maxAge: number): Print | null {
        ORDER BY second_ts DESC LIMIT 1`,
     )
     .get(Math.floor(boundary / 1000), Math.floor((boundary - maxAge) / 1000)) as
-    | { price: string; source: "binance" | "coinbase"; exchange_ts: number }
+    | { price: string; source: PriceSource; exchange_ts: number }
     | null
   if (!row || boundary - row.exchange_ts > maxAge) return null
   return { price: row.price, exchangeTs: row.exchange_ts, receivedAt: row.exchange_ts, source: row.source }

@@ -3,10 +3,12 @@ export const STARTING_BALANCE_MICROS = 10_000_000_000
 export const LIVE_MS = 5_000
 export const TAPE_MS = 15 * 60 * 1000
 
-export type PriceSource = "binance" | "coinbase"
+export type PriceSource = "binance" | "coinbase" | "average"
 
 export function priceSource(): PriceSource {
-  return process.env.PRICE_SOURCE === "coinbase" ? "coinbase" : "binance"
+  if (process.env.PRICE_SOURCE === "coinbase") return "coinbase"
+  if (process.env.PRICE_SOURCE === "average") return "average"
+  return "binance"
 }
 
 export function windowMs(): number {

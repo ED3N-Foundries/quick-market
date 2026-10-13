@@ -28,7 +28,9 @@ export function parseAmountMicros(input: string): number | null {
 }
 
 export function quotePair(source: string): string {
-  return source === "coinbase" ? "BTC-USD" : "BTC-USDT"
+  if (source === "coinbase") return "BTC-USD"
+  if (source === "binance") return "BTC-USDT"
+  return "BTC"
 }
 
 export function microsToInput(micros: number): string {
@@ -111,7 +113,10 @@ export function botLabel(address: string): string {
 }
 
 export function sourceLabel(source: string): string {
-  return source === "coinbase" ? "Coinbase BTC-USD" : "Binance BTCUSDT"
+  if (source === "coinbase") return "Coinbase BTC-USD"
+  if (source === "binance") return "Binance BTCUSDT"
+  if (source === "average") return "the average of Binance BTCUSDT and Coinbase BTC-USD"
+  return "an unknown feed"
 }
 
 export function takeMicros(stake: number, side: "up" | "down", up: number, down: number, feeBps: number): number {

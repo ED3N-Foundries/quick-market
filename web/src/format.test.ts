@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { formatDollarMove, formatGainLoss, formatMoney, formatPrice, formatPriceDelta, parseAmountMicros, payoutMicros, quoteDollar } from "./format"
+import { formatDollarMove, formatGainLoss, formatMoney, formatPrice, formatPriceDelta, parseAmountMicros, payoutMicros, quoteDollar, quotePair, sourceLabel } from "./format"
 import { priceTone } from "./chart"
 
 test("formatMoney rounds half-up to cents for display", () => {
@@ -16,6 +16,16 @@ test("formatGainLoss shows the lost stake or the stake plus winnings", () => {
   expect(formatGainLoss(10_000_000, 0)).toBe("-$10.00")
   expect(formatGainLoss(10_000_000, 18_500_000)).toBe("+$18.50")
   expect(formatGainLoss(10_000_000, 10_000_000)).toBe("$0.00")
+})
+
+test("source labels follow the configured feed", () => {
+  expect(sourceLabel("binance")).toBe("Binance BTCUSDT")
+  expect(sourceLabel("coinbase")).toBe("Coinbase BTC-USD")
+  expect(sourceLabel("average")).toBe("the average of Binance BTCUSDT and Coinbase BTC-USD")
+  expect(sourceLabel("other")).toBe("an unknown feed")
+  expect(quotePair("binance")).toBe("BTC-USDT")
+  expect(quotePair("coinbase")).toBe("BTC-USD")
+  expect(quotePair("average")).toBe("BTC")
 })
 
 test("formatPrice keeps the feed decimals", () => {

@@ -20,7 +20,7 @@ bun run dev
 
 Open http://127.0.0.1:5173. The API listens on http://127.0.0.1:3001. Vite proxies `/api` and `/ws` there. `NODE_ENV=production` (`bun run start`) serves `dist/` from the API.
 
-`WINDOW_SECONDS` and `MARKET_SECONDS` both default to 5. `VIEW_SECONDS` defaults to 5 and is the scrolling chart width. `PRICE_SOURCE=binance` (or `coinbase`) is the only price feed for the process. `BOT_COUNT` defaults to 8. `FEE_BPS` defaults to 25. `DB_PATH` defaults to `data/quick-market.sqlite`.
+`WINDOW_SECONDS` and `MARKET_SECONDS` both default to 5. `VIEW_SECONDS` defaults to 5 and is the scrolling chart width. `PRICE_SOURCE=binance` (or `coinbase`, or `average`) is the only price feed for the process. `BOT_COUNT` defaults to 8. `FEE_BPS` defaults to 25. `DB_PATH` defaults to `data/quick-market.sqlite`.
 
 ## Architecture
 
@@ -32,7 +32,7 @@ A human may hold one open bet. Another window returns "Your last bet is still op
 
 Balances, stakes, fees, and payouts are integer micros. Strike and settle prices stay exchange strings. The fee is `FEE_BPS` of a paid two-sided pot. Each winner is paid their share of the pot after that fee. A one-sided pool returns every stake and takes no fee. A settle equal to the strike is a push and does the same. A market with no usable print for the strike or the settle is void and stakes return.
 
-The price feed is Binance `BTCUSDT` trades or Coinbase `BTC-USD` ticker. The process does not switch between them. Prints go out on `/ws` as `tick`. Round and settlement updates go out as `round` and `settled`.
+The price feed is Binance `BTCUSDT` trades, the Coinbase `BTC-USD` ticker, or `PRICE_SOURCE=average`: the equal-weight mean of the last Binance `BTCUSDT` trade and the last Coinbase `BTC-USD` trade. The average emits only while both trades are under 5 seconds old and within 1% of each other. The process does not switch between them. Prints go out on `/ws` as `tick`. Round and settlement updates go out as `round` and `settled`.
 
 `GET /api/state` is the board, the tape, config, and the demo user. `POST /api/bets`, `/api/fund`, and `/api/withdraw` change that user. `GET /api/rounds` is settled history. `GET /api/rounds/:id` is one round, its bets, and the tape from the betting open through the settle, plus one print held into the open.
 
