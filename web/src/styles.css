@@ -113,7 +113,6 @@ button.primary, .wallet .primary {
   font-variant-numeric: tabular-nums;
   font-weight: 560;
 }
-.last-result { display: block; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 
 .who { display: flex; flex-direction: column; align-items: flex-end; font-variant-numeric: tabular-nums; font-size: 12px; letter-spacing: 0; text-transform: none; }
 .who-line { display: flex; align-items: center; gap: 6px; }

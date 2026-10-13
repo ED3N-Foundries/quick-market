@@ -1,12 +1,12 @@
 # Quick Market
 
-Simulated bitcoin up/down pools. One shared window, two sides, pari-mutuel payout. Balances are demo USDC. Wallet connect and contracts are not wired.
+Simulated bitcoin up/down pools. One shared betting window, two sides, pari-mutuel payout. Balances are demo USDC. Wallet connect and contracts are not wired.
 
 ## Progress
 
 - [x] Scaffold: Bun, SQLite, React shell
 - [x] Live BTC tape and continuous chart
-- [x] Rounds, pari-mutuel settlement, overlapping window
+- [x] Successive betting windows, pari-mutuel settlement, ride-only market chart
 - [x] Trading screen
 - [x] History and demo wallet
 
@@ -18,19 +18,37 @@ bun test
 bun run dev
 ```
 
-Open http://127.0.0.1:5173. The API listens on http://127.0.0.1:3001.
+Open http://127.0.0.1:5173. The API listens on http://127.0.0.1:3001. Vite proxies `/api` and `/ws` there. `NODE_ENV=production` (`bun run start`) serves `dist/` from the API.
 
-`WINDOW_SECONDS` and `MARKET_SECONDS` both default to 5. `VIEW_SECONDS` defaults to 5 and is how wide the scrolling market chart is. `PRICE_SOURCE=binance` (or `coinbase`) picks the only price feed. `BOT_COUNT` defaults to 8.
+`WINDOW_SECONDS` and `MARKET_SECONDS` both default to 5. `VIEW_SECONDS` defaults to 5 and is the scrolling chart width. `PRICE_SOURCE=binance` (or `coinbase`) is the only price feed for the process. `BOT_COUNT` defaults to 8. `FEE_BPS` defaults to 25. `DB_PATH` defaults to `data/quick-market.sqlite`.
 
-## Rules
+## Architecture
 
-- Betting windows tile UTC time. Each one lasts `WINDOW_SECONDS`, and the next opens when the previous closes. There is no closed half where betting stops.
-- The open prints when the window closes. That market settles `MARKET_SECONDS` later. A player who bet rides it until it settles and cannot join another window yet. Everyone else stays on the open betting window. The bet chart is that fixed window. The market chart is `VIEW_SECONDS` wide, scrolls with now on the right edge, and shows only during a ride.
-- The line is one feed for the whole session: Binance `BTCUSDT` or Coinbase `BTC-USD`. The server does not switch between them. Green is above that market's open, red is below.
-- Stake is demo USDC. Your payout is your share of the winning side, after a 0.25% fee on the pot.
-- A tie is a push: stakes return, no fee. A market with no print across its whole life is void, and stakes return.
-- Bots, marked Bot, fill both sides of every window.
-- Connect, Fund, and Withdraw move the demo balance only. Withdraw spends only the spendable balance.
+Bun serves HTTP and a websocket. SQLite holds users, rounds, bets, and one price per second. React draws the screen. The server advances the clock every 16ms.
+
+Betting windows tile UTC time. Each lasts `WINDOW_SECONDS`, and the next opens when the previous closes. Market `id` is `floor(now / window)`. Its book opens at `id * window`, the strike locks when that window closes, and it settles `MARKET_SECONDS` later.
+
+A human may hold one open bet. Another window returns "Your last bet is still open". Adding to the same side of the current bet is allowed. The other side is not. Bots are exempt and fill both sides of every window. A bet needs a live feed: a print within the last 5 seconds. The minimum stake is 1 USDC.
+
+Balances, stakes, fees, and payouts are integer micros. Strike and settle prices stay exchange strings. The fee is `FEE_BPS` of a paid two-sided pot. Each winner is paid their share of the pot after that fee. A one-sided pool returns every stake and takes no fee. A settle equal to the strike is a push and does the same. A market with no usable print for the strike or the settle is void and stakes return.
+
+The price feed is Binance `BTCUSDT` trades or Coinbase `BTC-USD` ticker. The process does not switch between them. Prints go out on `/ws` as `tick`. Round and settlement updates go out as `round` and `settled`.
+
+`GET /api/state` is the board, the tape, config, and the demo user. `POST /api/bets`, `/api/fund`, and `/api/withdraw` change that user. `GET /api/rounds` is settled history. `GET /api/rounds/:id` is one round, its bets, and the tape from the betting open through the settle, plus one print held into the open.
+
+## UX
+
+The screen is the chart, then Up, the stake, and Down. On a narrow window those three stack. The pool list under them is collapsed until opened. Bots are marked Bot. Previous rounds sit below that, with All and My plays. The footer states the window lengths, what up, down, push, and void mean, the fee, the feed name, and withdraw.
+
+With no open bet the clock reads Bets and counts down to the window close. The chart is that fixed window. The price sits immediately left of the clock and says "price locks in". Up and Down show that side's share of the pool, the money and player count, and "$1 wins $y", or "$1 back" when the other side is empty.
+
+After a bet, the clock reads Settles and counts down to settlement. Until the strike, the chart stays the betting window and the price still says "price locks in". A ticket shows the side, the stake, and To win. From the strike until settlement the chart scrolls, `VIEW_SECONDS` wide, with now on the right. The line is a step hold: green above the open, red below it, and blue dashed when it sits on the open. The price then shows the dollar move from the strike: `+$`, `−$`, or `=$0.00`. When the market settles, the screen returns to whatever betting window is open.
+
+Dragging pans the chart and hides the scrub. Now returns to the follow span. Hover shows the time, the held price, the change from the previous print, and Up, Down, or Push versus the open.
+
+Connect stores a demo address in the browser. The stake amount is white. A + next to the address opens the fund overlay: +$10, +$1,000, and a custom amount. The backdrop or Escape closes it. A new account starts at $10,000. Withdraw spends only the spendable balance, and its error stays on the withdraw box. The balance flashes green or red when it moves.
+
+A result toast appears only for a round this address played. Clicking a previous round opens a still replay from the betting open through the settle. Escape, the backdrop, or Close dismisses it.
 
 ## Brief
 

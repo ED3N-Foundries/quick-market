@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import type { TapeChart, TapePoint } from "./chart"
-import { formatGainLoss } from "./format"
 import type { Board, Config, SettledMessage, Side, You } from "./types"
 
 const ADDRESS_KEY = "qm.address"
@@ -21,7 +20,6 @@ export function useMarket() {
   const [you, setYou] = useState<You | null>(null)
   const [config, setConfig] = useState<Config>(defaultConfig)
   const [feed, setFeed] = useState<"live" | "stale">("stale")
-  const [result, setResult] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [pending, setPending] = useState(false)
   const [historyVersion, setHistoryVersion] = useState(0)
@@ -135,7 +133,6 @@ export function useMarket() {
               : current,
           )
           if (mine) {
-            setResult(describeResult(message, mine))
             setNotices((current) =>
               current.some((notice) => notice.roundId === message.roundId) ? current : [...current, message],
             )
@@ -185,7 +182,6 @@ export function useMarket() {
   const connect = useCallback((nextAddress: string) => {
     localStorage.setItem(ADDRESS_KEY, nextAddress)
     setAddress(nextAddress)
-    setResult(null)
     setNotices([])
     setError(null)
   }, [])
@@ -208,7 +204,6 @@ export function useMarket() {
         }
         setYou(body.you)
         setBoard(body.board)
-        setResult(null)
       } catch {
         setError("Can't reach the market server")
       } finally {
@@ -263,7 +258,6 @@ export function useMarket() {
     you,
     config,
     feed,
-    result,
     error,
     pending,
     historyVersion,
@@ -280,11 +274,4 @@ export function useMarket() {
     withdrawWallet,
     bindChart,
   }
-}
-
-function describeResult(event: SettledMessage, mine: SettledMessage["payouts"][number]): string {
-  if (event.resolution === "void") return "Void"
-  if (event.winningSide === "push") return "= Push"
-  const label = mine.side === "up" ? "▲ Up" : "▼ Down"
-  return `${label} ${formatGainLoss(mine.stakeMicros, mine.payoutMicros)}`
 }

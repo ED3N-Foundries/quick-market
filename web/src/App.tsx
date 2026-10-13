@@ -124,7 +124,6 @@ export function App() {
             ) : (
               <strong className="clock">—</strong>
             )}
-            {market.result && <span className="last-result">{market.result}</span>}
           </div>
         </div>
       </header>
