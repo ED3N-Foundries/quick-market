@@ -1,5 +1,5 @@
 import { beforeEach, expect, test } from "bun:test"
-import { applyDeposit, pollDeposits } from "./custody"
+import { applyDeposit, pollDeposits, treasuryFaultMessage } from "./custody"
 import { getDb, migrateCustody, useDatabase } from "./db"
 import { credit, youFor } from "./rounds"
 
@@ -35,6 +35,35 @@ test("custody migration zeros demo balances and drops open bets", () => {
   expect(youFor(who)?.balanceMicros).toBe(0)
   const bets = db.query("SELECT id FROM bets ORDER BY id").all() as { id: string }[]
   expect(bets.map((bet) => bet.id)).toEqual(["done"])
+})
+
+test("a treasury with no ETH reports the gas failure", () => {
+  expect(treasuryFaultMessage(new Error("insufficient funds for gas * price + value"), "Base Sepolia")).toBe(
+    "Treasury needs Base Sepolia ETH for gas.",
+  )
+  expect(treasuryFaultMessage(new Error("nonce too low"), "Base Sepolia")).toBe("Treasury could not prepare the withdraw")
+})
+
+test("pollDeposits credits a transfer that landed ahead of the cursor", async () => {
+  const db = getDb()
+  db.query("INSERT INTO meta (key, value) VALUES ('deposit_block', '100')").run()
+  await pollDeposits(
+    {
+      getBlockNumber: async () => 110n,
+      getLogs: (async () => [
+        {
+          args: { from, value: 20_000_000n },
+          logIndex: 4,
+          transactionHash: `0x${"ab".repeat(32)}`,
+        },
+      ]) as never,
+    },
+    { usdc: `0x${"55".repeat(20)}` },
+    treasury as `0x${string}`,
+  )
+  expect(youFor(from)?.balanceMicros).toBe(20_000_000)
+  const saved = db.query("SELECT value FROM meta WHERE key = 'deposit_block'").get() as { value: string } | null
+  expect(saved?.value).toBe("107")
 })
 
 test("pollDeposits chunks eth_getLogs into ranges of at most 200 blocks", async () => {

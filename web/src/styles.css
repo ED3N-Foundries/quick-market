@@ -648,6 +648,14 @@ body {
   color: var(--muted);
 }
 .fund-custom { display: flex; gap: 6px; }
+.fund-custom[data-busy="1"] { flex-wrap: wrap; }
+.fund-custom[data-busy="1"] .primary {
+  flex: 1 0 100%;
+  white-space: normal;
+  line-height: 1.2;
+  text-align: center;
+}
+.fund-overlay .note { overflow-wrap: anywhere; }
 .fund-custom input {
   flex: 1;
   min-width: 0;

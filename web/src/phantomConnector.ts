@@ -2,6 +2,7 @@ import { AddressType } from "@phantom/react-sdk"
 import type { IEthereumChain } from "@phantom/chain-interfaces"
 import { getAddress, type Address } from "viem"
 import { createConnector, type CreateConnectorFn } from "wagmi"
+import { isUnrecognizedChain } from "./depositFlow"
 
 // Deeplink counts as an embedded provider and the SDK requires a Portal appId for it.
 // Injected Phantom works without one. New Portal apps are paused, and embedded EVM is not live.
@@ -33,6 +34,38 @@ function accountsOf(sdk: PhantomSdk): readonly Address[] {
     .getAddresses()
     .filter((item) => item.addressType === AddressType.ethereum)
     .map((item) => getAddress(item.address))
+}
+
+type AddableChain = {
+  id: number
+  name: string
+  nativeCurrency: { name: string; symbol: string; decimals: number }
+  rpcUrls: { default: { http: readonly string[] } }
+  blockExplorers?: { default: { url: string } }
+}
+
+async function ensureChain(sdk: PhantomSdk, chain: AddableChain) {
+  try {
+    await sdk.ethereum.switchChain(chain.id)
+    return
+  } catch (error) {
+    if (!isUnrecognizedChain(error)) throw error
+  }
+  const explorer = chain.blockExplorers?.default.url
+  await sdk.ethereum.request({
+    method: "wallet_addEthereumChain",
+    params: [
+      {
+        chainId: `0x${chain.id.toString(16)}`,
+        chainName: chain.name,
+        nativeCurrency: chain.nativeCurrency,
+        rpcUrls: [...chain.rpcUrls.default.http],
+        ...(explorer ? { blockExplorerUrls: [explorer] } : {}),
+      },
+    ],
+  })
+  const current = chainNumber(await sdk.ethereum.getChainId())
+  if (current !== chain.id) await sdk.ethereum.switchChain(chain.id)
 }
 
 export function phantomConnector() {
@@ -102,7 +135,7 @@ export function phantomConnector() {
         if (parameters?.chainId && parameters.chainId !== chainId) {
           const chain = config.chains.find((item) => item.id === parameters.chainId)
           if (!chain) throw new Error(`Chain ${parameters.chainId} is not configured`)
-          await sdk.ethereum.switchChain(parameters.chainId)
+          await ensureChain(sdk, chain)
           config.emitter.emit("change", { chainId: parameters.chainId })
           chainId = chain.id
         }
@@ -140,7 +173,7 @@ export function phantomConnector() {
         if (!sdk?.isConnected()) throw new Error("Phantom is not connected")
         const chain = config.chains.find((item) => item.id === chainId)
         if (!chain) throw new Error(`Chain ${chainId} is not configured`)
-        await sdk.ethereum.switchChain(chainId)
+        await ensureChain(sdk, chain)
         config.emitter.emit("change", { chainId })
         return chain
       },

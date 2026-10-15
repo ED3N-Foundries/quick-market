@@ -46,6 +46,8 @@ export function App() {
   const [fundOpen, setFundOpen] = useState(false)
   const [fundError, setFundError] = useState<string | null>(null)
   const [funding, setFunding] = useState(false)
+  const [fundPhase, setFundPhase] = useState<"idle" | "phantom" | "confirming" | "pending">("idle")
+  const [fundHash, setFundHash] = useState<string | null>(null)
   const [withdrawOpen, setWithdrawOpen] = useState(false)
   const [withdrawAmount, setWithdrawAmount] = useState("")
   const [withdrawError, setWithdrawError] = useState<string | null>(null)
@@ -398,6 +400,8 @@ export function App() {
           disabled={!session.token || funding}
           customDisabled={!session.token || funding || fundMicros === null}
           error={fundError}
+          phase={fundPhase}
+          hash={fundHash}
           onAmount={setFundAmount}
           onClose={() => setFundOpen(false)}
           onFund={(amount) => {
@@ -405,17 +409,37 @@ export function App() {
             if (micros === null) return
             const target = (you?.balanceMicros ?? 0) + micros
             setFunding(true)
+            setFundPhase("phantom")
+            setFundHash(null)
             setFundError(null)
-            void session.deposit(amount, market.config.treasury, market.config.usdc, market.config.chainId).then(async (message) => {
-              if (message) {
-                setFundError(message)
+            void session.deposit(amount, market.config.treasury, market.config.usdc, market.config.chainId).then(async (result) => {
+              if (!result.ok) {
+                setFundError(result.message)
                 setFunding(false)
+                setFundPhase("idle")
                 return
               }
-              const updated = await market.waitForBalance(target)
-              setFunding(false)
-              if (!updated) setFundError("Deposit sent. It will show after confirmation.")
-              else setFundOpen(false)
+              setFundHash(result.hash)
+              setFundPhase(result.pending ? "pending" : "confirming")
+              try {
+                const updated = await market.waitForBalance(target)
+                setFunding(false)
+                setFundPhase("idle")
+                if (!updated) {
+                  setFundError(
+                    result.pending
+                      ? `Transfer sent. Waiting for the ledger. ${briefTx(result.hash)}`
+                      : "Deposit sent. It will show after confirmation.",
+                  )
+                } else {
+                  setFundHash(null)
+                  setFundOpen(false)
+                }
+              } catch {
+                setFunding(false)
+                setFundPhase("idle")
+                setFundError("Transfer sent. The USDC is in the treasury and will be credited when the server is back.")
+              }
             })
           }}
         />
@@ -781,6 +805,10 @@ function AddressWithHover({ address, label }: { address: string; label?: string 
   )
 }
 
+function briefTx(hash: string): string {
+  return hash.length < 18 ? hash : `${hash.slice(0, 10)}…${hash.slice(-4)}`
+}
+
 function FundOverlay({
   address,
   label,
@@ -792,6 +820,8 @@ function FundOverlay({
   disabled,
   customDisabled,
   error,
+  phase,
+  hash,
   onAmount,
   onClose,
   onFund,
@@ -806,6 +836,8 @@ function FundOverlay({
   disabled: boolean
   customDisabled: boolean
   error: string | null
+  phase: "idle" | "phantom" | "confirming" | "pending"
+  hash: string | null
   onAmount: (amount: string) => void
   onClose: () => void
   onFund: (amount: string) => void
@@ -859,7 +891,7 @@ function FundOverlay({
             +$1,000
           </button>
         </div>
-        <div className="fund-custom">
+        <div className="fund-custom" data-busy={phase === "idle" ? "0" : "1"}>
           <input
             aria-label="Fund amount"
             inputMode="decimal"
@@ -869,10 +901,21 @@ function FundOverlay({
             disabled={disabled}
           />
           <button type="button" className="primary" onClick={() => onFund(amount)} disabled={customDisabled}>
-            {funding ? "Approving…" : "Deposit"}
+            {phase === "phantom" ? "Confirm in Phantom…" : phase === "confirming" || phase === "pending" ? "Waiting for 3 confirmations…" : "Deposit"}
           </button>
         </div>
-        {funding && <p className="note pending-note">Approve USDC transfer in Phantom…</p>}
+        {isTestnetChain(chainId) && (
+          <p className="note">
+            Phantom warns on localhost and Base Sepolia. The transaction is a USDC transfer to the treasury address shown above.
+          </p>
+        )}
+        {phase === "phantom" && <p className="note pending-note">Confirm in Phantom…</p>}
+        {phase === "confirming" && <p className="note pending-note">Waiting for 3 confirmations…</p>}
+        {phase === "pending" && (
+          <p className="note pending-note" title={hash ?? undefined}>
+            Transfer sent. Waiting for the ledger.{hash ? ` ${briefTx(hash)}` : ""}
+          </p>
+        )}
         {error && <p className="note bad">{error}</p>}
       </div>
     </div>

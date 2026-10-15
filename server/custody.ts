@@ -55,6 +55,19 @@ export function treasuryAddress(): Address {
 
 class TreasuryShort extends Error {}
 
+export function treasuryFaultMessage(error: unknown, chainName: string): string {
+  if (error instanceof TreasuryShort) return error.message
+  const message = error instanceof Error ? error.message.toLowerCase() : ""
+  if (
+    message.includes("insufficient funds") ||
+    message.includes("insufficient balance for transfer") ||
+    message.includes("gas required exceeds")
+  ) {
+    return `Treasury needs ${chainName} ETH for gas.`
+  }
+  return "Treasury could not prepare the withdraw"
+}
+
 async function signedTransfer(to: Address, amount: bigint): Promise<Hex> {
   const config = chainFromEnv(process.env.CHAIN)
   const account = treasuryAccount()
@@ -152,9 +165,8 @@ async function requestWithdrawLocked(
     raw = await signedTransfer(address as Address, BigInt(amountMicros))
     hash = keccak256(raw)
   } catch (error) {
-    if (error instanceof TreasuryShort) return { ok: false, error: error.message }
-    console.error(error)
-    return { ok: false, error: "Treasury could not prepare the withdraw" }
+    if (!(error instanceof TreasuryShort)) console.error(error)
+    return { ok: false, error: treasuryFaultMessage(error, chainFromEnv(process.env.CHAIN).name) }
   }
 
   const id = crypto.randomUUID()
@@ -297,7 +309,7 @@ export async function pollDeposits(
         console.error("deposit exceeds the ledger", log.transactionHash)
         continue
       }
-      applyDeposit({
+      const credited = applyDeposit({
         treasury,
         txHash: log.transactionHash,
         logIndex: log.logIndex,
@@ -305,6 +317,7 @@ export async function pollDeposits(
         to: treasury,
         amountMicros: Number(value),
       })
+      if (credited) console.log(`deposit ${sender.toLowerCase()} ${Number(value)} ${log.transactionHash}`)
     }
     writeCursor(to)
     from = to + 1n

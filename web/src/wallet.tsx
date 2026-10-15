@@ -18,12 +18,18 @@ import { base, baseSepolia } from "wagmi/chains"
 import { chainFromEnv, type ChainConfig } from "../../shared/chain"
 import { loginMessage } from "../../shared/login"
 import { usdcAbi } from "../../shared/usdc"
+import {
+  depositRefusal,
+  isCallRevert,
+  matchingSession,
+  walletFaultMessage,
+  type DepositResult,
+  type StoredSession,
+} from "./depositFlow"
 import { extractAccountLabel, parseAmountMicros } from "./format"
 import { bindPhantomSdk, phantomConnector } from "./phantomConnector"
 
 const SESSION_KEY = "qm.session"
-
-type StoredSession = { token: string; address: string; chainId: number }
 
 export type WalletSession = {
   chainError: string | null
@@ -39,7 +45,7 @@ export type WalletSession = {
   switchChain: () => void
   signIn: () => void
   expire: () => void
-  deposit: (amount: string, treasury: string, usdc: string, chainId: number) => Promise<string | null>
+  deposit: (amount: string, treasury: string, usdc: string, chainId: number) => Promise<DepositResult>
 }
 
 const missing: WalletSession = {
@@ -56,7 +62,7 @@ const missing: WalletSession = {
   switchChain: () => {},
   signIn: () => {},
   expire: () => {},
-  deposit: async () => "Chain is invalid",
+  deposit: async () => ({ ok: false, message: "Chain is invalid" }),
 }
 
 const SessionContext = createContext<WalletSession>(missing)
@@ -94,13 +100,13 @@ export const wagmiConfig = !read.chain
     ? createConfig({
         chains: [base],
         connectors: [phantomConnector()],
-        transports: { [base.id]: http() },
+        transports: { [base.id]: http(read.chain.rpc) },
         multiInjectedProviderDiscovery: false,
       })
     : createConfig({
         chains: [baseSepolia],
         connectors: [phantomConnector()],
-        transports: { [baseSepolia.id]: http() },
+        transports: { [baseSepolia.id]: http(read.chain.rpc) },
         multiInjectedProviderDiscovery: false,
       })
 
@@ -214,6 +220,11 @@ function Bridge({ children }: { children: ReactNode }) {
       setSignError(null)
       return
     }
+    setToken(null)
+    if (stored && stored.address !== lower) {
+      sessionStorage.removeItem(SESSION_KEY)
+      void fetch("/api/session", { method: "DELETE", headers: { authorization: `Bearer ${stored.token}` } })
+    }
     let cancel = false
     setSigning(true)
     setSignError(null)
@@ -250,13 +261,17 @@ function Bridge({ children }: { children: ReactNode }) {
     accounts: readStandardAccounts(),
   })
 
+  const chainName = read.chain?.name ?? "Base Sepolia"
+  const signedIn = matchingSession(readStored(expected), address ?? null, expected)
+  const activeToken = signedIn && signedIn.token === token ? token : null
+
   const session: WalletSession = {
     chainError: null,
     pageChain: read.chain,
     address: address ?? null,
     label,
     chainId: walletChainId,
-    token,
+    token: activeToken,
     signing,
     signError,
     connect: () => {
@@ -286,27 +301,90 @@ function Bridge({ children }: { children: ReactNode }) {
     },
     deposit: async (amount, treasury, usdc, chainId) => {
       const micros = parseAmountMicros(amount)
-      if (micros === null || micros <= 0) return "Amount is invalid"
-      if (!treasury || !usdc || !wagmiConfig) return "Treasury is not ready"
+      const account = address
+      if (micros === null || micros <= 0) return { ok: false, message: "Amount is invalid" }
+      if (!account || !activeToken || !matchingSession(readStored(expected), account, expected)) {
+        return { ok: false, message: "Sign in with this wallet before depositing." }
+      }
+      if (!treasury || !usdc || !wagmiConfig) return { ok: false, message: "Treasury is not ready" }
+      if (chainId !== selected.id) return { ok: false, message: "This page and the server are on different chains." }
+      let serverReachable = false
       try {
-        if (chainId !== selected.id) return "This page and the server are on different chains."
+        const response = await fetch("/api/state", { headers: { authorization: `Bearer ${activeToken}` } })
+        if (response.status === 401) return { ok: false, message: "Sign in with this wallet before depositing." }
+        serverReachable = response.ok
+      } catch {
+        serverReachable = false
+      }
+      if (!serverReachable) return { ok: false, message: "Market server is not running." }
+      try {
         if (walletChainId !== selected.id) await switchChainAsync({ chainId: selected.id })
         const client = getPublicClient(wagmiConfig, { chainId: selected.id })
-        if (!client) return "Wallet is not ready"
-        const hash = await writeContractAsync({
-          address: usdc as `0x${string}`,
-          abi: usdcAbi,
-          functionName: "transfer",
-          args: [treasury as `0x${string}`, BigInt(micros)],
-          chainId: selected.id,
+        if (!client) return { ok: false, message: "Wallet is not ready" }
+        const tokenAddress = usdc as `0x${string}`
+        const to = treasury as `0x${string}`
+        const value = BigInt(micros)
+        const [usdcBalance, ethBalance] = await Promise.all([
+          client.readContract({ address: tokenAddress, abi: usdcAbi, functionName: "balanceOf", args: [account] }),
+          client.getBalance({ address: account }),
+        ])
+        let gasWei: bigint | null = null
+        try {
+          const simulated = await client.simulateContract({
+            address: tokenAddress,
+            abi: usdcAbi,
+            functionName: "transfer",
+            args: [to, value],
+            account,
+          })
+          const fees = await client.estimateFeesPerGas()
+          const perGas = fees.maxFeePerGas ?? fees.gasPrice ?? 0n
+          gasWei = (simulated.request.gas ?? 80_000n) * perGas
+        } catch (error) {
+          const blocked = depositRefusal({
+            micros,
+            serverReachable: true,
+            signedIn: true,
+            sameAccount: true,
+            sameChain: true,
+            chainName,
+            usdcBalance,
+            ethBalance,
+            gasWei: null,
+          })
+          if (blocked) return { ok: false, message: blocked }
+          if (isCallRevert(error)) return { ok: false, message: walletFaultMessage(error, chainName) }
+        }
+        const blocked = depositRefusal({
+          micros,
+          serverReachable: true,
+          signedIn: true,
+          sameAccount: true,
+          sameChain: true,
+          chainName,
+          usdcBalance,
+          ethBalance,
+          gasWei,
         })
-        const receipt = await client.waitForTransactionReceipt({ hash })
-        if (receipt.status !== "success") return "Deposit failed"
-        return null
+        if (blocked) return { ok: false, message: blocked }
+        let hash: `0x${string}` | null = null
+        try {
+          hash = await writeContractAsync({
+            address: tokenAddress,
+            abi: usdcAbi,
+            functionName: "transfer",
+            args: [to, value],
+            chainId: selected.id,
+          })
+          const receipt = await client.waitForTransactionReceipt({ hash, timeout: 60_000 })
+          if (receipt.status !== "success") return { ok: false, message: "Deposit failed" }
+          return { ok: true, hash, pending: false }
+        } catch (error) {
+          if (hash) return { ok: true, hash, pending: true }
+          return { ok: false, message: walletFaultMessage(error, chainName) }
+        }
       } catch (error) {
-        const message = error instanceof Error ? error.message : "Deposit failed"
-        if (message.toLowerCase().includes("user rejected")) return "Deposit cancelled"
-        return "Deposit failed"
+        return { ok: false, message: walletFaultMessage(error, chainName) }
       }
     },
   }
@@ -320,7 +398,7 @@ export function WalletProviders({ children }: { children: ReactNode }) {
       ...missing,
       chainError: read.error,
       pageChain: read.chain,
-      deposit: async () => read.error ?? "Chain is invalid",
+      deposit: async () => ({ ok: false, message: read.error ?? "Chain is invalid" }),
     }
     return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>
   }
