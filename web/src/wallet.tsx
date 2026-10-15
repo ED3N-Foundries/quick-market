@@ -18,7 +18,7 @@ import { base, baseSepolia } from "wagmi/chains"
 import { chainFromEnv, type ChainConfig } from "../../shared/chain"
 import { loginMessage } from "../../shared/login"
 import { usdcAbi } from "../../shared/usdc"
-import { parseAmountMicros } from "./format"
+import { extractAccountLabel, parseAmountMicros } from "./format"
 import { bindPhantomSdk, phantomConnector } from "./phantomConnector"
 
 const SESSION_KEY = "qm.session"
@@ -29,6 +29,7 @@ export type WalletSession = {
   chainError: string | null
   pageChain: ChainConfig | null
   address: string | null
+  label: string | null
   chainId: number | undefined
   token: string | null
   signing: boolean
@@ -45,6 +46,7 @@ const missing: WalletSession = {
   chainError: null,
   pageChain: null,
   address: null,
+  label: null,
   chainId: undefined,
   token: null,
   signing: false,
@@ -116,6 +118,22 @@ function readStored(chainId: number): StoredSession | null {
   }
 }
 
+function readStandardAccounts(): unknown[] {
+  if (typeof navigator === "undefined") return []
+  try {
+    const nav = navigator as unknown as { wallets?: { get?: () => unknown[] } }
+    const wallets = nav.wallets?.get?.()
+    if (!Array.isArray(wallets)) return []
+    return wallets.flatMap((wallet) => {
+      if (!wallet || typeof wallet !== "object") return []
+      const accounts = (wallet as { accounts?: unknown }).accounts
+      return Array.isArray(accounts) ? accounts : []
+    })
+  } catch {
+    return []
+  }
+}
+
 function Bridge({ children }: { children: ReactNode }) {
   const expected = read.chain!.id
   const { address, status } = useAccount()
@@ -125,7 +143,7 @@ function Bridge({ children }: { children: ReactNode }) {
   const { connectAsync, connectors } = useConnect()
   const { disconnectAsync } = useDisconnect()
   const { writeContractAsync } = useWriteContract()
-  const { sdk, isConnected, isLoading } = usePhantom()
+  const { sdk, isConnected, isLoading, addresses, user } = usePhantom()
   const { open } = useModal()
   const [token, setToken] = useState<string | null>(null)
   const [signing, setSigning] = useState(false)
@@ -225,10 +243,18 @@ function Bridge({ children }: { children: ReactNode }) {
     }
   }, [address, attempt, expected, signMessageAsync, status])
 
+  const label = extractAccountLabel(address, {
+    addresses: addresses?.length ? addresses : sdk?.getAddresses?.(),
+    user,
+    phantom: typeof window !== "undefined" ? window.phantom : undefined,
+    accounts: readStandardAccounts(),
+  })
+
   const session: WalletSession = {
     chainError: null,
     pageChain: read.chain,
     address: address ?? null,
+    label,
     chainId: walletChainId,
     token,
     signing,

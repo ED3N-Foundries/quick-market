@@ -1,5 +1,22 @@
 import { expect, test } from "bun:test"
-import { formatDollarMove, formatGainLoss, formatMoney, formatPrice, formatPriceDelta, parseAmountMicros, payoutMicros, quoteDollar, quotePair, sourceLabel } from "./format"
+import {
+  chainBadgeText,
+  chainMenuLabel,
+  chainNetworkLabel,
+  extractAccountLabel,
+  formatDollarMove,
+  formatGainLoss,
+  formatMoney,
+  formatPrice,
+  formatPriceDelta,
+  isTestnetChain,
+  parseAmountMicros,
+  payoutMicros,
+  quoteDollar,
+  quotePair,
+  sourceLabel,
+  walletDisplayLabel,
+} from "./format"
 import { priceTone } from "./chart"
 
 test("formatMoney rounds half-up to cents for display", () => {
@@ -72,4 +89,53 @@ test("priceTone marks a price sitting on the baseline as a push", () => {
   expect(priceTone(100 + 1e-10, 100)).toBe("push")
   expect(priceTone(100.01, 100)).toBe("up")
   expect(priceTone(99.99, 100)).toBe("down")
+})
+
+test("walletDisplayLabel prefers a non-empty account label and falls back to shortAddress", () => {
+  const addr = "0x1234567890abcdef1234567890abcdef12345678"
+  expect(walletDisplayLabel(addr, "Main Wallet")).toBe("Main Wallet")
+  expect(walletDisplayLabel(addr, "  Trading 1  ")).toBe("Trading 1")
+  expect(walletDisplayLabel(addr, "")).toBe("0x1234…5678")
+  expect(walletDisplayLabel(addr, "   ")).toBe("0x1234…5678")
+  expect(walletDisplayLabel(addr, null)).toBe("0x1234…5678")
+  expect(walletDisplayLabel(addr, addr)).toBe("0x1234…5678")
+})
+
+test("extractAccountLabel finds matching Phantom or standard wallet account labels", () => {
+  const addr = "0x1234567890abcdef1234567890abcdef12345678"
+  expect(
+    extractAccountLabel(addr, {
+      addresses: [{ address: addr.toUpperCase(), label: "Account 1" }],
+    }),
+  ).toBe("Account 1")
+
+  expect(
+    extractAccountLabel(addr, {
+      addresses: [{ address: addr, name: "Phantom" }],
+      accounts: [{ address: addr, label: "Vault" }],
+    }),
+  ).toBe("Vault")
+
+  expect(
+    extractAccountLabel(addr, {
+      user: { username: "alice.eth" },
+    }),
+  ).toBe("alice.eth")
+
+  expect(
+    extractAccountLabel(addr, {
+      addresses: [{ address: addr }],
+    }),
+  ).toBeNull()
+})
+
+test("chain and testnet label helpers distinguish Base Sepolia testnet from Base mainnet", () => {
+  expect(isTestnetChain(84532)).toBe(true)
+  expect(isTestnetChain(8453)).toBe(false)
+  expect(chainMenuLabel(84532, "Base Sepolia")).toBe("Base Sepolia · Testnet")
+  expect(chainMenuLabel(8453, "Base")).toBe("Base")
+  expect(chainBadgeText(84532, "Base Sepolia")).toBe("Base Sepolia Testnet")
+  expect(chainBadgeText(8453, "Base")).toBe("Base Mainnet")
+  expect(chainNetworkLabel(84532, "Base Sepolia")).toBe("Base Sepolia (Testnet)")
+  expect(chainNetworkLabel(8453, "Base")).toBe("Base Mainnet")
 })

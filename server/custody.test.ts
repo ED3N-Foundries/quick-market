@@ -1,5 +1,5 @@
 import { beforeEach, expect, test } from "bun:test"
-import { applyDeposit } from "./custody"
+import { applyDeposit, pollDeposits } from "./custody"
 import { getDb, migrateCustody, useDatabase } from "./db"
 import { credit, youFor } from "./rounds"
 
@@ -35,4 +35,31 @@ test("custody migration zeros demo balances and drops open bets", () => {
   expect(youFor(who)?.balanceMicros).toBe(0)
   const bets = db.query("SELECT id FROM bets ORDER BY id").all() as { id: string }[]
   expect(bets.map((bet) => bet.id)).toEqual(["done"])
+})
+
+test("pollDeposits chunks eth_getLogs into ranges of at most 200 blocks", async () => {
+  const db = getDb()
+  db.query("INSERT INTO meta (key, value) VALUES ('deposit_block', '100')").run()
+  const ranges: [bigint, bigint][] = []
+  await pollDeposits(
+    {
+      getBlockNumber: async () => 553n,
+      getLogs: (async (params: { fromBlock: bigint; toBlock: bigint }) => {
+        ranges.push([params.fromBlock, params.toBlock])
+        return []
+      }) as never,
+    },
+    { usdc: `0x${"55".repeat(20)}` },
+    treasury as `0x${string}`,
+  )
+  expect(ranges).toEqual([
+    [101n, 300n],
+    [301n, 500n],
+    [501n, 550n],
+  ])
+  for (const [start, end] of ranges) {
+    expect(end - start <= 199n).toBe(true)
+  }
+  const saved = db.query("SELECT value FROM meta WHERE key = 'deposit_block'").get() as { value: string } | null
+  expect(saved?.value).toBe("550")
 })

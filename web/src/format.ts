@@ -98,6 +98,111 @@ export function shortAddress(address: string): string {
   return `${address.slice(0, 6)}…${address.slice(-4)}`
 }
 
+export function walletDisplayLabel(address: string, label?: string | null): string {
+  const clean = label?.trim()
+  if (clean && clean.toLowerCase() !== address.toLowerCase()) return clean
+  return shortAddress(address)
+}
+
+type AccountCandidate = {
+  address?: unknown
+  label?: unknown
+  name?: unknown
+  accountLabel?: unknown
+}
+
+const GENERIC_WALLET_NAMES = new Set(["phantom", "ethereum", "injected", "evm", "metamask", "coinbase wallet"])
+
+function cleanCandidateLabel(value: unknown, address: string): string | null {
+  if (typeof value !== "string") return null
+  const trimmed = value.trim()
+  if (!trimmed) return null
+  if (trimmed.toLowerCase() === address.toLowerCase()) return null
+  if (GENERIC_WALLET_NAMES.has(trimmed.toLowerCase())) return null
+  return trimmed
+}
+
+function labelFromList(list: unknown, address: string): string | null {
+  if (!Array.isArray(list)) return null
+  const lower = address.toLowerCase()
+  for (const item of list) {
+    if (!item || typeof item !== "object") continue
+    const record = item as AccountCandidate
+    if (typeof record.address === "string" && record.address.toLowerCase() === lower) {
+      const found =
+        cleanCandidateLabel(record.label, address) ??
+        cleanCandidateLabel(record.accountLabel, address) ??
+        cleanCandidateLabel(record.name, address)
+      if (found) return found
+    }
+  }
+  return null
+}
+
+export function extractAccountLabel(
+  address: string | null | undefined,
+  sources?: {
+    addresses?: unknown
+    user?: unknown
+    phantom?: unknown
+    accounts?: unknown
+  },
+): string | null {
+  if (!address) return null
+  const fromAddresses = labelFromList(sources?.addresses, address)
+  if (fromAddresses) return fromAddresses
+
+  const fromAccounts = labelFromList(sources?.accounts, address)
+  if (fromAccounts) return fromAccounts
+
+  if (sources?.user && typeof sources.user === "object") {
+    const user = sources.user as Record<string, unknown>
+    const fromUserList = labelFromList(user.addresses, address) ?? labelFromList(user.accounts, address)
+    if (fromUserList) return fromUserList
+    const direct =
+      cleanCandidateLabel(user.label, address) ??
+      cleanCandidateLabel(user.accountLabel, address) ??
+      cleanCandidateLabel(user.username, address) ??
+      cleanCandidateLabel(user.name, address)
+    if (direct) return direct
+  }
+
+  if (sources?.phantom && typeof sources.phantom === "object") {
+    const phantom = sources.phantom as Record<string, unknown>
+    const eth = phantom.ethereum && typeof phantom.ethereum === "object" ? (phantom.ethereum as Record<string, unknown>) : null
+    if (eth) {
+      const fromEth =
+        labelFromList(eth.accounts, address) ??
+        (eth.selectedAccount ? labelFromList([eth.selectedAccount], address) : null) ??
+        cleanCandidateLabel(eth.label, address)
+      if (fromEth) return fromEth
+    }
+  }
+
+  return null
+}
+
+export function isTestnetChain(chainId: number): boolean {
+  return chainId === 84532
+}
+
+export function chainMenuLabel(chainId: number, chainName = "Base"): string {
+  if (isTestnetChain(chainId)) return "Base Sepolia · Testnet"
+  return chainName || "Base"
+}
+
+export function chainBadgeText(chainId: number, chainName = "Base"): string {
+  if (isTestnetChain(chainId)) return "Base Sepolia Testnet"
+  if (chainId === 8453) return "Base Mainnet"
+  return chainName || "Base"
+}
+
+export function chainNetworkLabel(chainId: number, chainName = "Base"): string {
+  if (isTestnetChain(chainId)) return "Base Sepolia (Testnet)"
+  if (chainId === 8453) return "Base Mainnet"
+  return chainName || "Base"
+}
+
 export function formatClock(ms: number): string {
   return new Date(ms).toLocaleTimeString(undefined, {
     hour: "2-digit",

@@ -18,6 +18,7 @@ import { normalizeAddress } from "./money"
 import { credit, withdraw, youFor, type You } from "./rounds"
 
 const CONFIRMATIONS = 3n
+const LOG_RANGE = 199n
 const transferEvent = parseAbiItem("event Transfer(address indexed from, address indexed to, uint256 value)")
 
 type WithdrawRow = {
@@ -245,19 +246,31 @@ function withdrawRow(id: string): WithdrawRow | null {
   return (getDb().query("SELECT * FROM withdrawals WHERE id = ?").get(id) as WithdrawRow | null) ?? null
 }
 
+let polling = false
+
 export function startCustody() {
   const runtime = globalThis as unknown as { quickMarketCustody?: ReturnType<typeof setInterval> }
   if (runtime.quickMarketCustody) clearInterval(runtime.quickMarketCustody)
   const tick = () => {
+    if (polling) return
+    polling = true
     const { chain, account, publicClient } = clients()
-    pollDeposits(publicClient, chain, account.address).catch((error) => console.error(error))
-    resumeWithdrawals().catch((error) => console.error(error))
+    Promise.all([
+      pollDeposits(publicClient, chain, account.address).catch((error) => console.error(error)),
+      resumeWithdrawals().catch((error) => console.error(error)),
+    ]).finally(() => {
+      polling = false
+    })
   }
   tick()
   runtime.quickMarketCustody = setInterval(tick, 2_000)
 }
 
-async function pollDeposits(publicClient: ChainClient, chain: ChainConfig, treasury: Address) {
+export async function pollDeposits(
+  publicClient: Pick<ChainClient, "getBlockNumber" | "getLogs">,
+  chain: Pick<ChainConfig, "usdc">,
+  treasury: Address,
+) {
   const head = await publicClient.getBlockNumber()
   const safe = head > CONFIRMATIONS ? head - CONFIRMATIONS : 0n
   const cursor = readCursor()
@@ -268,7 +281,7 @@ async function pollDeposits(publicClient: ChainClient, chain: ChainConfig, treas
   if (safe <= cursor) return
   let from = cursor + 1n
   while (from <= safe) {
-    const to = from + 1_999n < safe ? from + 1_999n : safe
+    const to = from + LOG_RANGE < safe ? from + LOG_RANGE : safe
     const logs = await publicClient.getLogs({
       address: chain.usdc,
       event: transferEvent,

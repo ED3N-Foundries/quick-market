@@ -1,7 +1,28 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type PointerEvent as ReactPointerEvent, type RefObject } from "react"
 import { mountChart, priceY, type ChartScale, type TapeChart, type TapeSample } from "./chart"
 import { chartMarket, focusPool, followWindow, heldMarket, heldStrike } from "./focus"
-import { formatClock, formatDollarMove, formatGainLoss, formatMoney, formatPrice, formatPriceDelta, formatSigned, microsToInput, moneyShare, parseAmountMicros, payoutMicros, quoteDollar, quotePair, shortAddress, sourceLabel } from "./format"
+import {
+  chainBadgeText,
+  chainMenuLabel,
+  chainNetworkLabel,
+  formatClock,
+  formatDollarMove,
+  formatGainLoss,
+  formatMoney,
+  formatPrice,
+  formatPriceDelta,
+  formatSigned,
+  isTestnetChain,
+  microsToInput,
+  moneyShare,
+  parseAmountMicros,
+  payoutMicros,
+  quoteDollar,
+  quotePair,
+  shortAddress,
+  sourceLabel,
+  walletDisplayLabel,
+} from "./format"
 import type { Band, Board, HistoryRound, OpenBet, SettledMessage, Side } from "./types"
 import { useMarket } from "./useMarket"
 import { useSession } from "./wallet"
@@ -13,18 +34,22 @@ export function App() {
   expireRef.current = session.expire
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const chartRef = useRef<TapeChart | null>(null)
+  const walletMenuRef = useRef<HTMLSpanElement>(null)
   const viewRef = useRef({ follow: true, start: 0, end: 0 })
   const viewSecondsRef = useRef(market.config.viewSeconds)
   const boardRef = useRef(market.board)
   const openBetsRef = useRef<OpenBet[]>([])
   const [chart, setChart] = useState<TapeChart | null>(null)
   const [stake, setStake] = useState("10")
+  const [walletMenuOpen, setWalletMenuOpen] = useState(false)
   const [fundAmount, setFundAmount] = useState("")
   const [fundOpen, setFundOpen] = useState(false)
   const [fundError, setFundError] = useState<string | null>(null)
   const [funding, setFunding] = useState(false)
+  const [withdrawOpen, setWithdrawOpen] = useState(false)
   const [withdrawAmount, setWithdrawAmount] = useState("")
   const [withdrawError, setWithdrawError] = useState<string | null>(null)
+  const [withdrawing, setWithdrawing] = useState(false)
   const [following, setFollowing] = useState(true)
   const scrub = useScrub(chart)
   boardRef.current = market.board
@@ -34,6 +59,28 @@ export function App() {
   useEffect(() => {
     if (market.unauthorized) expireRef.current()
   }, [market.unauthorized])
+
+  useEffect(() => {
+    if (!session.address) setWalletMenuOpen(false)
+  }, [session.address])
+
+  useEffect(() => {
+    if (!walletMenuOpen) return
+    const onPointerDown = (event: PointerEvent) => {
+      if (walletMenuRef.current && !walletMenuRef.current.contains(event.target as Node)) {
+        setWalletMenuOpen(false)
+      }
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setWalletMenuOpen(false)
+    }
+    document.addEventListener("pointerdown", onPointerDown)
+    window.addEventListener("keydown", onKeyDown)
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown)
+      window.removeEventListener("keydown", onKeyDown)
+    }
+  }, [walletMenuOpen])
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -91,15 +138,23 @@ export function App() {
   const downQuote = focus ? quoteDollar("down", focus.poolUpMicros, focus.poolDownMicros, market.config.feeBps) : "—"
   const ticketWin = held ? payoutMicros(held.stakeMicros, held.side, focus?.poolUpMicros ?? 0, focus?.poolDownMicros ?? 0, market.config.feeBps) : 0
   const fundMicros = parseAmountMicros(fundAmount)
+  const wrongChain = session.address !== null && session.chainId !== market.config.chainId
+  const needsSignIn = session.address !== null && !wrongChain && Boolean(session.signError && !session.token)
+  const walletTone = wrongChain || needsSignIn || session.signing ? "warn" : "ok"
 
   async function onWithdraw() {
+    if (withdrawing) return
+    setWithdrawing(true)
+    setWithdrawError(null)
     const message = await market.withdrawWallet(withdrawAmount)
+    setWithdrawing(false)
     if (message) {
       setWithdrawError(message)
       return
     }
     setWithdrawError(null)
     setWithdrawAmount("")
+    setWithdrawOpen(false)
   }
 
   function chip(percent: number) {
@@ -199,43 +254,95 @@ export function App() {
           <div className="balance-label">
             <span>Spendable</span>
             {session.address ? (
-              <span className="who">
-                <span className="who-line">
-                  <button type="button" className="plain" aria-label="Disconnect" onClick={session.disconnect}>
-                    {shortAddress(session.address)}
-                  </button>
-                  <button
-                    type="button"
-                    className="fund-plus"
-                    aria-label="Deposit"
-                    onClick={() => {
-                      setFundError(null)
-                      setFundOpen(true)
-                    }}
-                    disabled={!session.token || funding}
-                  >
-                    +
-                  </button>
-                </span>
-                {session.chainId !== market.config.chainId ? (
-                  <button type="button" className="plain" onClick={session.switchChain}>
-                    Switch network
-                  </button>
-                ) : (
-                  <small>{session.signing ? "Signing" : session.signError ? "Sign in" : market.config.chainName}</small>
-                )}
-                {session.signError && !session.token && (
-                  <button type="button" className="plain" onClick={session.signIn}>
-                    Sign in
-                  </button>
+              <span className="who" ref={walletMenuRef}>
+                <button
+                  type="button"
+                  className="wallet-pill"
+                  data-open={walletMenuOpen ? "1" : "0"}
+                  title={session.address}
+                  aria-label="Wallet menu"
+                  aria-expanded={walletMenuOpen}
+                  aria-haspopup="menu"
+                  onClick={() => setWalletMenuOpen((open) => !open)}
+                >
+                  <span className="wallet-dot" data-tone={walletTone} aria-hidden="true" />
+                  <span className="wallet-name">{walletDisplayLabel(session.address, session.label)}</span>
+                  <span className="wallet-caret" aria-hidden="true">▾</span>
+                  <span className="addr-tip" role="tooltip">
+                    {session.address}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  className="fund-plus"
+                  aria-label="Deposit"
+                  title="Deposit USDC"
+                  onClick={() => {
+                    setWalletMenuOpen(false)
+                    setFundError(null)
+                    setFundOpen(true)
+                  }}
+                  disabled={!session.token || funding}
+                >
+                  +
+                </button>
+                {walletMenuOpen && (
+                  <div className="wallet-menu" role="menu">
+                    {session.label && <p className="wallet-menu-label">{session.label}</p>}
+                    <p className="wallet-menu-addr" title={session.address}>
+                      {session.address}
+                    </p>
+                    <div className="wallet-menu-net">
+                      <span className="net-badge" data-testnet={isTestnetChain(market.config.chainId) ? "1" : "0"}>
+                        {session.signing ? "Signing…" : chainMenuLabel(market.config.chainId, market.config.chainName)}
+                      </span>
+                      {wrongChain && (
+                        <button type="button" className="plain net-action" onClick={session.switchChain}>
+                          Switch network
+                        </button>
+                      )}
+                      {needsSignIn && (
+                        <button type="button" className="plain net-action" onClick={session.signIn}>
+                          Sign in
+                        </button>
+                      )}
+                    </div>
+                    <div className="wallet-menu-actions">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setWalletMenuOpen(false)
+                          setWithdrawError(null)
+                          setWithdrawOpen(true)
+                        }}
+                        disabled={!you}
+                      >
+                        Withdraw
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setWalletMenuOpen(false)
+                          session.disconnect()
+                        }}
+                      >
+                        Disconnect
+                      </button>
+                    </div>
+                  </div>
                 )}
               </span>
             ) : (
               <span className="who">
-                <button type="button" className="primary" onClick={session.connect} disabled={session.chainError !== null}>
+                <button
+                  type="button"
+                  className="primary connect-pill"
+                  title={session.chainError ?? undefined}
+                  onClick={session.connect}
+                  disabled={session.chainError !== null}
+                >
                   Connect
                 </button>
-                {session.chainError && <small>{session.chainError}</small>}
               </span>
             )}
           </div>
@@ -281,7 +388,13 @@ export function App() {
       </section>
       {fundOpen && (
         <FundOverlay
+          address={session.address}
+          label={session.label}
+          treasury={market.config.treasury}
+          chainId={market.config.chainId}
+          chainName={market.config.chainName}
           amount={fundAmount}
+          funding={funding}
           disabled={!session.token || funding}
           customDisabled={!session.token || funding || fundMicros === null}
           error={fundError}
@@ -305,6 +418,29 @@ export function App() {
               else setFundOpen(false)
             })
           }}
+        />
+      )}
+      {withdrawOpen && (
+        <WithdrawOverlay
+          address={session.address}
+          label={session.label}
+          balanceMicros={you?.balanceMicros ?? 0}
+          chainId={market.config.chainId}
+          chainName={market.config.chainName}
+          amount={withdrawAmount}
+          pending={withdrawing}
+          error={withdrawError}
+          onAmount={(value) => {
+            setWithdrawAmount(value)
+            setWithdrawError(null)
+          }}
+          onMax={() => {
+            if (!you) return
+            setWithdrawAmount(microsToInput(you.balanceMicros))
+            setWithdrawError(null)
+          }}
+          onClose={() => setWithdrawOpen(false)}
+          onSubmit={() => void onWithdraw()}
         />
       )}
 
@@ -352,26 +488,6 @@ export function App() {
           <p>
             {(market.config.feeBps / 100).toFixed(2)}% fee on a paid pool. Price from {sourceLabel(market.config.source)}.
           </p>
-        </div>
-        <div className="withdraw">
-          <label>
-            <span>Withdraw</span>
-            <input
-              aria-label="Withdraw amount"
-              inputMode="decimal"
-              placeholder="Amount"
-              value={withdrawAmount}
-              onChange={(event) => {
-                setWithdrawAmount(event.target.value)
-                setWithdrawError(null)
-              }}
-              disabled={!you}
-            />
-          </label>
-          <button type="button" onClick={() => void onWithdraw()} disabled={!you || !withdrawAmount.trim()}>
-            Withdraw
-          </button>
-          {withdrawError && <p className="note bad">{withdrawError}</p>}
         </div>
       </footer>
     </div>
@@ -654,8 +770,25 @@ function PriceReadout({
   )
 }
 
+function AddressWithHover({ address, label }: { address: string; label?: string | null }) {
+  return (
+    <span className="addr-hover" title={address}>
+      <span>{walletDisplayLabel(address, label)}</span>
+      <span className="addr-tip" role="tooltip">
+        {address}
+      </span>
+    </span>
+  )
+}
+
 function FundOverlay({
+  address,
+  label,
+  treasury,
+  chainId,
+  chainName,
   amount,
+  funding,
   disabled,
   customDisabled,
   error,
@@ -663,7 +796,13 @@ function FundOverlay({
   onClose,
   onFund,
 }: {
+  address: string | null
+  label: string | null
+  treasury: string
+  chainId: number
+  chainName: string
   amount: string
+  funding: boolean
   disabled: boolean
   customDisabled: boolean
   error: string | null
@@ -680,7 +819,38 @@ function FundOverlay({
   }, [onClose])
   return (
     <div className="fund-back" onClick={onClose}>
-      <div className="fund-overlay" role="dialog" aria-modal="true" aria-label="Deposit" onClick={(event) => event.stopPropagation()}>
+      <div className="fund-overlay" role="dialog" aria-modal="true" aria-label="Deposit USD" onClick={(event) => event.stopPropagation()}>
+        <header className="overlay-head">
+          <div>
+            <h2>Deposit USD</h2>
+            <span className="net-badge" data-testnet={isTestnetChain(chainId) ? "1" : "0"}>
+              {chainBadgeText(chainId, chainName)}
+            </span>
+          </div>
+          <button type="button" className="overlay-close" aria-label="Close" onClick={onClose}>
+            ×
+          </button>
+        </header>
+        <dl className="overlay-meta">
+          <div>
+            <dt>Import</dt>
+            <dd>USDC (USD on Base)</dd>
+          </div>
+          <div>
+            <dt>Network</dt>
+            <dd>{chainNetworkLabel(chainId, chainName)}</dd>
+          </div>
+          <div>
+            <dt>From → To</dt>
+            <dd className="route-line">
+              {address ? <AddressWithHover address={address} label={label} /> : <span>Wallet</span>}
+              <span className="route-arrow" aria-hidden="true">
+                →
+              </span>
+              {treasury ? <AddressWithHover address={treasury} /> : <span>Treasury</span>}
+            </dd>
+          </div>
+        </dl>
         <div className="funds">
           <button type="button" onClick={() => onFund("10")} disabled={disabled}>
             +$10
@@ -693,13 +863,98 @@ function FundOverlay({
           <input
             aria-label="Fund amount"
             inputMode="decimal"
-            placeholder="Amount"
+            placeholder="Custom USD amount"
             value={amount}
             onChange={(event) => onAmount(event.target.value)}
             disabled={disabled}
           />
-          <button type="button" onClick={() => onFund(amount)} disabled={customDisabled}>
-            Deposit
+          <button type="button" className="primary" onClick={() => onFund(amount)} disabled={customDisabled}>
+            {funding ? "Approving…" : "Deposit"}
+          </button>
+        </div>
+        {funding && <p className="note pending-note">Approve USDC transfer in Phantom…</p>}
+        {error && <p className="note bad">{error}</p>}
+      </div>
+    </div>
+  )
+}
+
+function WithdrawOverlay({
+  address,
+  label,
+  balanceMicros,
+  chainId,
+  chainName,
+  amount,
+  pending,
+  error,
+  onAmount,
+  onMax,
+  onClose,
+  onSubmit,
+}: {
+  address: string | null
+  label: string | null
+  balanceMicros: number
+  chainId: number
+  chainName: string
+  amount: string
+  pending: boolean
+  error: string | null
+  onAmount: (value: string) => void
+  onMax: () => void
+  onClose: () => void
+  onSubmit: () => void
+}) {
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose()
+    }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [onClose])
+  const parsed = parseAmountMicros(amount)
+  const submitDisabled = pending || parsed === null || parsed > balanceMicros
+  return (
+    <div className="fund-back" onClick={onClose}>
+      <div className="fund-overlay" role="dialog" aria-modal="true" aria-label="Withdraw USD" onClick={(event) => event.stopPropagation()}>
+        <header className="overlay-head">
+          <div>
+            <h2>Withdraw USD</h2>
+            <span className="net-badge" data-testnet={isTestnetChain(chainId) ? "1" : "0"}>
+              USDC · {isTestnetChain(chainId) ? "Base Sepolia Testnet" : chainName}
+            </span>
+          </div>
+          <button type="button" className="overlay-close" aria-label="Close" onClick={onClose}>
+            ×
+          </button>
+        </header>
+        <dl className="overlay-meta">
+          <div>
+            <dt>To wallet</dt>
+            <dd>{address ? <AddressWithHover address={address} label={label} /> : "—"}</dd>
+          </div>
+          <div>
+            <dt>Spendable</dt>
+            <dd>{formatMoney(balanceMicros)}</dd>
+          </div>
+        </dl>
+        <div className="fund-custom">
+          <div className="input-with-max">
+            <input
+              aria-label="Withdraw amount"
+              inputMode="decimal"
+              placeholder="Amount"
+              value={amount}
+              onChange={(event) => onAmount(event.target.value)}
+              disabled={pending}
+            />
+            <button type="button" className="max-btn" onClick={onMax} disabled={pending || balanceMicros <= 0}>
+              Max
+            </button>
+          </div>
+          <button type="button" className="primary" onClick={onSubmit} disabled={submitDisabled}>
+            {pending ? "Withdrawing…" : "Withdraw"}
           </button>
         </div>
         {error && <p className="note bad">{error}</p>}
