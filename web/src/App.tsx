@@ -4,7 +4,7 @@ import { chartMarket, focusPool, followWindow, heldMarket, heldStrike } from "./
 import { formatClock, formatDollarMove, formatGainLoss, formatMoney, formatPrice, formatPriceDelta, formatSigned, microsToInput, moneyShare, parseAmountMicros, payoutMicros, quoteDollar, quotePair, shortAddress, sourceLabel } from "./format"
 import type { Band, Board, HistoryRound, OpenBet, SettledMessage, Side } from "./types"
 import { useMarket } from "./useMarket"
-import { ConnectButton, useSession } from "./wallet"
+import { useSession } from "./wallet"
 
 export function App() {
   const session = useSession()
@@ -198,58 +198,44 @@ export function App() {
         <div className="stake">
           <div className="balance-label">
             <span>Spendable</span>
-            {session.projectReady && session.address ? (
-              <ConnectButton.Custom>
-                {({ account, chain, openAccountModal, openChainModal, mounted }) => {
-                  if (!mounted || !account) {
-                    return (
-                      <button type="button" className="primary" onClick={session.connect}>
-                        Connect
-                      </button>
-                    )
-                  }
-                  const wrong = Boolean(chain?.unsupported || chain?.id !== market.config.chainId)
-                  return (
-                    <span className="who">
-                      <span className="who-line">
-                        <button type="button" className="plain" onClick={openAccountModal}>
-                          {shortAddress(account.address)}
-                        </button>
-                        <button
-                          type="button"
-                          className="fund-plus"
-                          aria-label="Deposit"
-                          onClick={() => {
-                            setFundError(null)
-                            setFundOpen(true)
-                          }}
-                          disabled={!session.token || funding}
-                        >
-                          +
-                        </button>
-                      </span>
-                      {wrong ? (
-                        <button type="button" className="plain" onClick={openChainModal}>
-                          Switch network
-                        </button>
-                      ) : (
-                        <small>{session.signing ? "Signing" : session.signError ? "Sign in" : market.config.chainName}</small>
-                      )}
-                      {session.signError && !session.token && (
-                        <button type="button" className="plain" onClick={session.signIn}>
-                          Sign in
-                        </button>
-                      )}
-                    </span>
-                  )
-                }}
-              </ConnectButton.Custom>
+            {session.address ? (
+              <span className="who">
+                <span className="who-line">
+                  <button type="button" className="plain" aria-label="Disconnect" onClick={session.disconnect}>
+                    {shortAddress(session.address)}
+                  </button>
+                  <button
+                    type="button"
+                    className="fund-plus"
+                    aria-label="Deposit"
+                    onClick={() => {
+                      setFundError(null)
+                      setFundOpen(true)
+                    }}
+                    disabled={!session.token || funding}
+                  >
+                    +
+                  </button>
+                </span>
+                {session.chainId !== market.config.chainId ? (
+                  <button type="button" className="plain" onClick={session.switchChain}>
+                    Switch network
+                  </button>
+                ) : (
+                  <small>{session.signing ? "Signing" : session.signError ? "Sign in" : market.config.chainName}</small>
+                )}
+                {session.signError && !session.token && (
+                  <button type="button" className="plain" onClick={session.signIn}>
+                    Sign in
+                  </button>
+                )}
+              </span>
             ) : (
               <span className="who">
-                <button type="button" className="primary" onClick={session.connect} disabled={!session.projectReady}>
+                <button type="button" className="primary" onClick={session.connect} disabled={session.chainError !== null}>
                   Connect
                 </button>
-                {!session.projectReady && !session.chainError && <small>Set WALLETCONNECT_PROJECT_ID</small>}
+                {session.chainError && <small>{session.chainError}</small>}
               </span>
             )}
           </div>

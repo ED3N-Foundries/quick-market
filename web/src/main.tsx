@@ -1,4 +1,3 @@
-import "@rainbow-me/rainbowkit/styles.css"
 import { createRoot } from "react-dom/client"
 import { App } from "./App"
 import { WalletProviders } from "./wallet"

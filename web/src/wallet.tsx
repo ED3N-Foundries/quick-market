@@ -1,20 +1,31 @@
-import { ConnectButton, getDefaultConfig, RainbowKitProvider, useConnectModal } from "@rainbow-me/rainbowkit"
+import { AddressType, PhantomProvider, useModal, usePhantom } from "@phantom/react-sdk"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react"
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react"
 import { getPublicClient } from "wagmi/actions"
-import { useAccount, useChainId, useSignMessage, useSwitchChain, useWriteContract, WagmiProvider } from "wagmi"
+import {
+  createConfig,
+  http,
+  useAccount,
+  useChainId,
+  useConnect,
+  useDisconnect,
+  useSignMessage,
+  useSwitchChain,
+  useWriteContract,
+  WagmiProvider,
+} from "wagmi"
 import { base, baseSepolia } from "wagmi/chains"
 import { chainFromEnv, type ChainConfig } from "../../shared/chain"
 import { loginMessage } from "../../shared/login"
 import { usdcAbi } from "../../shared/usdc"
 import { parseAmountMicros } from "./format"
+import { bindPhantomSdk, phantomConnector } from "./phantomConnector"
 
 const SESSION_KEY = "qm.session"
 
 type StoredSession = { token: string; address: string; chainId: number }
 
 export type WalletSession = {
-  projectReady: boolean
   chainError: string | null
   pageChain: ChainConfig | null
   address: string | null
@@ -23,6 +34,7 @@ export type WalletSession = {
   signing: boolean
   signError: string | null
   connect: () => void
+  disconnect: () => void
   switchChain: () => void
   signIn: () => void
   expire: () => void
@@ -30,7 +42,6 @@ export type WalletSession = {
 }
 
 const missing: WalletSession = {
-  projectReady: false,
   chainError: null,
   pageChain: null,
   address: null,
@@ -39,10 +50,11 @@ const missing: WalletSession = {
   signing: false,
   signError: null,
   connect: () => {},
+  disconnect: () => {},
   switchChain: () => {},
   signIn: () => {},
   expire: () => {},
-  deposit: async () => "Set WALLETCONNECT_PROJECT_ID to connect a wallet.",
+  deposit: async () => "Chain is invalid",
 }
 
 const SessionContext = createContext<WalletSession>(missing)
@@ -56,18 +68,39 @@ function readChain(): { chain: ChainConfig | null; error: string | null } {
 }
 
 const read = readChain()
-const projectId = import.meta.env.WALLETCONNECT_PROJECT_ID
 const selected = read.chain?.id === base.id ? base : baseSepolia
 
-export const wagmiConfig =
-  read.chain && projectId
-    ? getDefaultConfig({
-        appName: "Quick Market",
-        projectId,
-        chains: [selected],
-        ssr: false,
+const phantomConfig = {
+  providers: ["injected" as const],
+  addressTypes: [AddressType.ethereum] as [typeof AddressType.ethereum],
+}
+
+const phantomTheme = {
+  background: "#12141a" as const,
+  text: "#f3f0e8" as const,
+  secondary: "#8f8a80" as const,
+  brand: "#e2b340" as const,
+  error: "#ff5a4f" as const,
+  success: "#2fce86" as const,
+  borderRadius: "16px",
+  overlay: "rgba(9, 10, 12, 0.8)",
+}
+
+export const wagmiConfig = !read.chain
+  ? null
+  : read.chain.id === base.id
+    ? createConfig({
+        chains: [base],
+        connectors: [phantomConnector()],
+        transports: { [base.id]: http() },
+        multiInjectedProviderDiscovery: false,
       })
-    : null
+    : createConfig({
+        chains: [baseSepolia],
+        connectors: [phantomConnector()],
+        transports: { [baseSepolia.id]: http() },
+        multiInjectedProviderDiscovery: false,
+      })
 
 const queryClient = new QueryClient()
 
@@ -89,16 +122,59 @@ function Bridge({ children }: { children: ReactNode }) {
   const walletChainId = useChainId()
   const { signMessageAsync } = useSignMessage()
   const { switchChainAsync } = useSwitchChain()
-  const { openConnectModal } = useConnectModal()
+  const { connectAsync, connectors } = useConnect()
+  const { disconnectAsync } = useDisconnect()
   const { writeContractAsync } = useWriteContract()
+  const { sdk, isConnected, isLoading } = usePhantom()
+  const { open } = useModal()
   const [token, setToken] = useState<string | null>(null)
   const [signing, setSigning] = useState(false)
   const [signError, setSignError] = useState<string | null>(null)
   const [attempt, setAttempt] = useState(0)
+  const pendingModal = useRef(false)
+  const syncAttempts = useRef(0)
+  const syncing = useRef(false)
+  const hadAccount = useRef(false)
+
+  useEffect(() => {
+    bindPhantomSdk(sdk)
+  }, [sdk])
+
+  useEffect(() => {
+    if (isLoading || !pendingModal.current) return
+    pendingModal.current = false
+    open()
+  }, [isLoading, open])
+
+  useEffect(() => {
+    const connector = connectors.find((item) => item.id === "phantom")
+    if (!sdk || isLoading || !connector || syncing.current) return
+    if (!isConnected) {
+      syncAttempts.current = 0
+      if (status !== "connected") return
+      syncing.current = true
+      void disconnectAsync()
+        .catch(() => {})
+        .finally(() => {
+          syncing.current = false
+        })
+      return
+    }
+    if (status !== "disconnected" || syncAttempts.current >= 2) return
+    syncAttempts.current += 1
+    syncing.current = true
+    void connectAsync({ connector })
+      .catch(() => {})
+      .finally(() => {
+        syncing.current = false
+      })
+  }, [connectAsync, connectors, disconnectAsync, isConnected, isLoading, sdk, status])
 
   useEffect(() => {
     if (status === "connecting" || status === "reconnecting") return
     if (status !== "connected" || !address) {
+      if (!hadAccount.current) return
+      hadAccount.current = false
       const stored = sessionStorage.getItem(SESSION_KEY)
       sessionStorage.removeItem(SESSION_KEY)
       if (stored) {
@@ -112,6 +188,7 @@ function Bridge({ children }: { children: ReactNode }) {
       setToken(null)
       return
     }
+    hadAccount.current = true
     const lower = address.toLowerCase()
     const stored = readStored(expected)
     if (stored && stored.address === lower) {
@@ -149,7 +226,6 @@ function Bridge({ children }: { children: ReactNode }) {
   }, [address, attempt, expected, signMessageAsync, status])
 
   const session: WalletSession = {
-    projectReady: true,
     chainError: null,
     pageChain: read.chain,
     address: address ?? null,
@@ -157,7 +233,22 @@ function Bridge({ children }: { children: ReactNode }) {
     token,
     signing,
     signError,
-    connect: () => openConnectModal?.(),
+    connect: () => {
+      if (isLoading || !sdk) {
+        pendingModal.current = true
+        return
+      }
+      open()
+    },
+    disconnect: () => {
+      void (async () => {
+        try {
+          if (sdk?.isConnected()) await sdk.disconnect()
+        } finally {
+          await disconnectAsync().catch(() => {})
+        }
+      })()
+    },
     switchChain: () => {
       void switchChainAsync({ chainId: selected.id }).catch(() => {})
     },
@@ -203,16 +294,16 @@ export function WalletProviders({ children }: { children: ReactNode }) {
       ...missing,
       chainError: read.error,
       pageChain: read.chain,
-      deposit: async () => read.error ?? "Set WALLETCONNECT_PROJECT_ID to connect a wallet.",
+      deposit: async () => read.error ?? "Chain is invalid",
     }
     return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>
   }
   return (
     <WagmiProvider config={wagmiConfig}>
       <QueryClientProvider client={queryClient}>
-        <RainbowKitProvider>
+        <PhantomProvider config={phantomConfig} theme={phantomTheme} appName="Quick Market">
           <Bridge>{children}</Bridge>
-        </RainbowKitProvider>
+        </PhantomProvider>
       </QueryClientProvider>
     </WagmiProvider>
   )
@@ -221,5 +312,3 @@ export function WalletProviders({ children }: { children: ReactNode }) {
 export function useSession() {
   return useContext(SessionContext)
 }
-
-export { ConnectButton }

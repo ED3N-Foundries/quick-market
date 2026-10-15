@@ -22,7 +22,7 @@ Open http://127.0.0.1:5173. The API listens on http://127.0.0.1:3001. Vite proxi
 
 `WINDOW_SECONDS` and `MARKET_SECONDS` both default to 5. `VIEW_SECONDS` defaults to 5 and is the scrolling chart width. `PRICE_SOURCE=binance` (or `coinbase`, or `average`) is the only price feed for the process. `FEE_BPS` defaults to 0. `DB_PATH` defaults to `data/quick-market.sqlite`.
 
-`CHAIN=base-sepolia` (or `base`) picks the only chain this process accepts. `TREASURY_PRIVATE_KEY` is the hot wallet that receives deposits and pays withdrawals. The server will not listen without it. `bun run treasury` generates that key when the line is empty, writes it into `.env`, and prints only the address. Use a different key for mainnet than for Base Sepolia. `WALLETCONNECT_PROJECT_ID` is from [cloud.reown.com](https://cloud.reown.com). `RPC_URL` overrides the public Base RPC for the server and the agents. Copy `.env.example` to `.env`.
+`CHAIN=base-sepolia` (or `base`) picks the only chain this process accepts. `TREASURY_PRIVATE_KEY` is the hot wallet that receives deposits and pays withdrawals. The server will not listen without it. `bun run treasury` generates that key when the line is empty, writes it into `.env`, and prints only the address. Use a different key for mainnet than for Base Sepolia. Connect uses the Phantom extension. `RPC_URL` overrides the public Base RPC for the server and the agents. Copy `.env.example` to `.env`.
 
 `bun run agent` keeps `AGENT_COUNT` wallets in `agent/keys.json` and trades with them. On Base Sepolia it asks the Coinbase faucet for ETH and USDC (`CDP_API_KEY_ID`, `CDP_API_KEY_SECRET`). `AGENT_SECRET` marks those sessions as bots so they can bet every window. `CHAIN=base` does nothing unless `AGENT_MAINNET=1`.
 
@@ -52,7 +52,7 @@ After a bet, the clock reads Settles and counts down to settlement. Until the st
 
 Dragging pans the chart and hides the scrub. Now returns to the follow span. Hover shows the time, the held price, the change from the previous print, and Up, Down, or Push versus the open.
 
-Connect opens RainbowKit. The stake amount is white. A + next to the address opens the deposit overlay: +$10, +$1,000, and a custom amount, each a USDC transfer. The backdrop or Escape closes it. Withdraw sends USDC back to that wallet, and its error stays on the withdraw box. The balance flashes green or red when it moves.
+Connect opens the Phantom modal. The stake amount is white. A + next to the address opens the deposit overlay: +$10, +$1,000, and a custom amount, each a USDC transfer. The backdrop or Escape closes it. Withdraw sends USDC back to that wallet, and its error stays on the withdraw box. The balance flashes green or red when it moves.
 
 A result toast appears only for a round this address played. Clicking a previous round opens a still replay from the betting open through the settle. Escape, the backdrop, or Close dismisses it.
 
