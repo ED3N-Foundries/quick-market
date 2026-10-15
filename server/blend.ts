@@ -1,8 +1,10 @@
-import { LIVE_MS } from "./config"
+import { LIVE_MS, type PriceSource } from "./config"
 
 const PRICE = /^\d+(\.\d+)?$/
 
 export type Leg = { price: string; receivedAt: number }
+
+export type Quote = { price: string; source: PriceSource }
 
 /** Equal-weight mean of two decimal price strings. An odd sum keeps one extra digit. */
 export function averagePrice(left: string, right: string): string | null {
@@ -35,6 +37,34 @@ export function blendLegs(
   // |a-b| / midpoint <= 1%. Midpoint is sum/2, so |a-b| * 200 <= sum.
   if (diff * 200n > sum) return null
   return averagePrice(binance.price, coinbase.price)
+}
+
+/**
+ * Average when both legs are fresh and within 1%. A missing or stale leg
+ * falls back to the one that is still live. Nothing, when neither is.
+ */
+export function quoteFromLegs(
+  binance: Leg | null,
+  coinbase: Leg | null,
+  now: number,
+  maxAge = LIVE_MS,
+): Quote | null {
+  const left = fresh(binance, now, maxAge)
+  const right = fresh(coinbase, now, maxAge)
+  if (left && right) {
+    const price = blendLegs(left, right, now, maxAge)
+    if (!price) return null
+    return { price, source: "average" }
+  }
+  if (left) return { price: left.price, source: "binance" }
+  if (right) return { price: right.price, source: "coinbase" }
+  return null
+}
+
+function fresh(leg: Leg | null, now: number, maxAge: number): Leg | null {
+  if (!leg) return null
+  if (now - leg.receivedAt > maxAge) return null
+  return leg
 }
 
 function scalePair(left: string, right: string): { left: bigint; right: bigint; scale: number } | null {

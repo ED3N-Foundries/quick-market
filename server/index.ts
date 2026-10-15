@@ -29,7 +29,12 @@ getDb()
 let pending: { price: string; exchangeTs: number; source: PriceSource } | null = null
 let lastFeed: "live" | "stale" | null = null
 
-startOracle((print) => {
+const runtime = globalThis as unknown as {
+  quickMarketTimer?: ReturnType<typeof setInterval>
+  quickMarketStopOracle?: () => void
+}
+runtime.quickMarketStopOracle?.()
+runtime.quickMarketStopOracle = startOracle((print) => {
   notePrint(print)
   pending = { price: print.price, exchangeTs: print.exchangeTs, source: print.source }
 })
@@ -40,7 +45,6 @@ function publishRound(now = Date.now()) {
   hub.broadcast({ type: "round", serverNow: now, feed, source: priceSource(), board: board(now) })
 }
 
-const runtime = globalThis as unknown as { quickMarketTimer?: ReturnType<typeof setInterval> }
 if (runtime.quickMarketTimer) clearInterval(runtime.quickMarketTimer)
 runtime.quickMarketTimer = setInterval(() => {
   try {

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { averagePrice, blendLegs, type Leg } from "./blend"
+import { averagePrice, blendLegs, quoteFromLegs, type Leg } from "./blend"
 
 function leg(price: string, receivedAt: number): Leg {
   return { price, receivedAt }
@@ -42,4 +42,20 @@ test("blendLegs drops a pair more than 1% apart and keeps a pair at 1%", () => {
   expect(blendLegs(leg("19900", now), leg("20100", now), now)).toBe("20000")
   expect(blendLegs(leg("19900", now), leg("20101", now), now)).toBeNull()
   expect(blendLegs(leg("100", now), leg("200", now), now)).toBeNull()
+})
+
+test("quoteFromLegs uses the live venue when the other is missing or stale", () => {
+  const now = 10_000
+  expect(quoteFromLegs(leg("100.5", now), null, now)).toEqual({ price: "100.5", source: "binance" })
+  expect(quoteFromLegs(null, leg("100.25", now), now)).toEqual({ price: "100.25", source: "coinbase" })
+  expect(quoteFromLegs(leg("100", now - 5_001), leg("101", now), now)).toEqual({ price: "101", source: "coinbase" })
+  expect(quoteFromLegs(leg("100", now), leg("101", now - 5_001), now)).toEqual({ price: "100", source: "binance" })
+  expect(quoteFromLegs(null, null, now)).toBeNull()
+  expect(quoteFromLegs(leg("100", now - 5_001), leg("101", now - 5_001), now)).toBeNull()
+})
+
+test("quoteFromLegs averages two fresh legs and drops a pair more than 1% apart", () => {
+  const now = 10_000
+  expect(quoteFromLegs(leg("100.1", now), leg("100.2", now), now)).toEqual({ price: "100.15", source: "average" })
+  expect(quoteFromLegs(leg("100", now), leg("200", now), now)).toBeNull()
 })
