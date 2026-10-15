@@ -1,12 +1,16 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type PointerEvent as ReactPointerEvent, type RefObject } from "react"
 import { mountChart, priceY, type ChartScale, type TapeChart, type TapeSample } from "./chart"
 import { chartMarket, focusPool, followWindow, heldMarket, heldStrike } from "./focus"
-import { botLabel, formatClock, formatDollarMove, formatGainLoss, formatMoney, formatPrice, formatPriceDelta, formatSigned, microsToInput, moneyShare, parseAmountMicros, payoutMicros, quoteDollar, quotePair, randomAddress, shortAddress, sourceLabel } from "./format"
+import { formatClock, formatDollarMove, formatGainLoss, formatMoney, formatPrice, formatPriceDelta, formatSigned, microsToInput, moneyShare, parseAmountMicros, payoutMicros, quoteDollar, quotePair, shortAddress, sourceLabel } from "./format"
 import type { Band, Board, HistoryRound, OpenBet, SettledMessage, Side } from "./types"
 import { useMarket } from "./useMarket"
+import { ConnectButton, useSession } from "./wallet"
 
 export function App() {
-  const market = useMarket()
+  const session = useSession()
+  const market = useMarket(session.token)
+  const expireRef = useRef(session.expire)
+  expireRef.current = session.expire
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const chartRef = useRef<TapeChart | null>(null)
   const viewRef = useRef({ follow: true, start: 0, end: 0 })
@@ -17,6 +21,8 @@ export function App() {
   const [stake, setStake] = useState("10")
   const [fundAmount, setFundAmount] = useState("")
   const [fundOpen, setFundOpen] = useState(false)
+  const [fundError, setFundError] = useState<string | null>(null)
+  const [funding, setFunding] = useState(false)
   const [withdrawAmount, setWithdrawAmount] = useState("")
   const [withdrawError, setWithdrawError] = useState<string | null>(null)
   const [following, setFollowing] = useState(true)
@@ -24,6 +30,10 @@ export function App() {
   boardRef.current = market.board
   openBetsRef.current = market.you?.openBets ?? []
   viewSecondsRef.current = market.config.viewSeconds
+
+  useEffect(() => {
+    if (market.unauthorized) expireRef.current()
+  }, [market.unauthorized])
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -140,6 +150,12 @@ export function App() {
           </div>
         </div>
       </header>
+      {session.chainError && <p className="note bad">{session.chainError}</p>}
+      {session.pageChain && market.config.treasury && market.config.chainId !== session.pageChain.id && (
+        <p className="note bad">
+          This page is on {session.pageChain.name} and the server is on {market.config.chainName}.
+        </p>
+      )}
 
       <section className="chart-wrap" onPointerDown={onPointerDown} onPointerMove={scrub.move} onPointerLeave={scrub.clear}>
         <canvas ref={canvasRef} />
@@ -182,20 +198,59 @@ export function App() {
         <div className="stake">
           <div className="balance-label">
             <span>Spendable</span>
-            {market.address ? (
-              <span className="who">
-                <span className="who-line">
-                  {shortAddress(market.address)}
-                  <button type="button" className="fund-plus" aria-label="Fund" onClick={() => setFundOpen(true)}>
-                    +
-                  </button>
-                </span>
-                <small>Demo</small>
-              </span>
+            {session.projectReady && session.address ? (
+              <ConnectButton.Custom>
+                {({ account, chain, openAccountModal, openChainModal, mounted }) => {
+                  if (!mounted || !account) {
+                    return (
+                      <button type="button" className="primary" onClick={session.connect}>
+                        Connect
+                      </button>
+                    )
+                  }
+                  const wrong = Boolean(chain?.unsupported || chain?.id !== market.config.chainId)
+                  return (
+                    <span className="who">
+                      <span className="who-line">
+                        <button type="button" className="plain" onClick={openAccountModal}>
+                          {shortAddress(account.address)}
+                        </button>
+                        <button
+                          type="button"
+                          className="fund-plus"
+                          aria-label="Deposit"
+                          onClick={() => {
+                            setFundError(null)
+                            setFundOpen(true)
+                          }}
+                          disabled={!session.token || funding}
+                        >
+                          +
+                        </button>
+                      </span>
+                      {wrong ? (
+                        <button type="button" className="plain" onClick={openChainModal}>
+                          Switch network
+                        </button>
+                      ) : (
+                        <small>{session.signing ? "Signing" : session.signError ? "Sign in" : market.config.chainName}</small>
+                      )}
+                      {session.signError && !session.token && (
+                        <button type="button" className="plain" onClick={session.signIn}>
+                          Sign in
+                        </button>
+                      )}
+                    </span>
+                  )
+                }}
+              </ConnectButton.Custom>
             ) : (
-              <button type="button" className="primary" onClick={() => market.connect(randomAddress())}>
-                Connect
-              </button>
+              <span className="who">
+                <button type="button" className="primary" onClick={session.connect} disabled={!session.projectReady}>
+                  Connect
+                </button>
+                {!session.projectReady && !session.chainError && <small>Set WALLETCONNECT_PROJECT_ID</small>}
+              </span>
             )}
           </div>
           <BalanceFigure micros={you?.balanceMicros ?? null} />
@@ -241,12 +296,28 @@ export function App() {
       {fundOpen && (
         <FundOverlay
           amount={fundAmount}
-          disabled={!you}
-          customDisabled={!you || fundMicros === null}
+          disabled={!session.token || funding}
+          customDisabled={!session.token || funding || fundMicros === null}
+          error={fundError}
           onAmount={setFundAmount}
           onClose={() => setFundOpen(false)}
           onFund={(amount) => {
-            void market.fundWallet(amount)
+            const micros = parseAmountMicros(amount)
+            if (micros === null) return
+            const target = (you?.balanceMicros ?? 0) + micros
+            setFunding(true)
+            setFundError(null)
+            void session.deposit(amount, market.config.treasury, market.config.usdc, market.config.chainId).then(async (message) => {
+              if (message) {
+                setFundError(message)
+                setFunding(false)
+                return
+              }
+              const updated = await market.waitForBalance(target)
+              setFunding(false)
+              if (!updated) setFundError("Deposit sent. It will show after confirmation.")
+              else setFundOpen(false)
+            })
           }}
         />
       )}
@@ -260,7 +331,7 @@ export function App() {
           <ul>
             {focus.tray.map((row) => (
               <li key={row.address}>
-                <span className={row.bot ? "bot" : "addr"}>{row.bot ? botLabel(row.address) : shortAddress(row.address)}</span>
+                <span className={row.bot ? "bot" : "addr"}>{row.bot ? "Bot" : shortAddress(row.address)}</span>
                 <span className={row.side}>{row.side === "up" ? "▲ Up" : "▼ Down"}</span>
                 <span className="amt">{formatMoney(row.stakeMicros)}</span>
               </li>
@@ -271,7 +342,7 @@ export function App() {
         )}
       </details>
 
-      <History address={market.address} version={market.historyVersion} windowMs={market.config.windowSeconds * 1000} />
+      <History token={session.token} version={market.historyVersion} windowMs={market.config.windowSeconds * 1000} />
       {market.notices.length > 0 && (
         <div className="toasts">
           {market.notices.map((event) => (
@@ -601,6 +672,7 @@ function FundOverlay({
   amount,
   disabled,
   customDisabled,
+  error,
   onAmount,
   onClose,
   onFund,
@@ -608,6 +680,7 @@ function FundOverlay({
   amount: string
   disabled: boolean
   customDisabled: boolean
+  error: string | null
   onAmount: (amount: string) => void
   onClose: () => void
   onFund: (amount: string) => void
@@ -621,7 +694,7 @@ function FundOverlay({
   }, [onClose])
   return (
     <div className="fund-back" onClick={onClose}>
-      <div className="fund-overlay" role="dialog" aria-modal="true" aria-label="Fund" onClick={(event) => event.stopPropagation()}>
+      <div className="fund-overlay" role="dialog" aria-modal="true" aria-label="Deposit" onClick={(event) => event.stopPropagation()}>
         <div className="funds">
           <button type="button" onClick={() => onFund("10")} disabled={disabled}>
             +$10
@@ -640,9 +713,10 @@ function FundOverlay({
             disabled={disabled}
           />
           <button type="button" onClick={() => onFund(amount)} disabled={customDisabled}>
-            Fund
+            Deposit
           </button>
         </div>
+        {error && <p className="note bad">{error}</p>}
       </div>
     </div>
   )
@@ -702,19 +776,17 @@ function SideCard(props: {
   )
 }
 
-function History({ address, version, windowMs }: { address: string | null; version: number; windowMs: number }) {
+function History({ token, version, windowMs }: { token: string | null; version: number; windowMs: number }) {
   const [mine, setMine] = useState(false)
   const [rows, setRows] = useState<HistoryRound[]>([])
   const [replay, setReplay] = useState<HistoryRound | null>(null)
 
   useEffect(() => {
     const params = new URLSearchParams({ limit: "30" })
-    if (mine && address) {
-      params.set("mine", "1")
-      params.set("address", address)
-    }
+    if (mine && token) params.set("mine", "1")
     let cancel = false
-    fetch(`/api/rounds?${params}`)
+    const headers: HeadersInit = mine && token ? { authorization: `Bearer ${token}` } : {}
+    fetch(`/api/rounds?${params}`, { headers })
       .then((response) => response.json())
       .then((body) => {
         if (!cancel) setRows(body.rounds ?? [])
@@ -723,7 +795,7 @@ function History({ address, version, windowMs }: { address: string | null; versi
     return () => {
       cancel = true
     }
-  }, [address, mine, version])
+  }, [token, mine, version])
 
   return (
     <section className="history">
@@ -733,7 +805,7 @@ function History({ address, version, windowMs }: { address: string | null; versi
           <button type="button" className={!mine ? "on" : ""} onClick={() => setMine(false)}>
             All
           </button>
-          <button type="button" className={mine ? "on" : ""} onClick={() => setMine(true)} disabled={!address}>
+          <button type="button" className={mine ? "on" : ""} onClick={() => setMine(true)} disabled={!token}>
             My plays
           </button>
         </div>
@@ -904,7 +976,7 @@ function Replay({ row, windowMs, onClose }: { row: HistoryRound; windowMs: numbe
             <ul>
               {bets.map((bet) => (
                 <li key={bet.address}>
-                  <span className={bet.bot ? "bot" : ""}>{bet.bot ? botLabel(bet.address) : shortAddress(bet.address)}</span>
+                  <span className={bet.bot ? "bot" : ""}>{bet.bot ? "Bot" : shortAddress(bet.address)}</span>
                   <span className={bet.side}>{bet.side === "up" ? "▲ Up" : "▼ Down"}</span>
                   <span>{formatMoney(bet.stakeMicros)}</span>
                   <span className={bet.payoutMicros === null ? "" : gainTone(bet.stakeMicros, bet.payoutMicros)}>

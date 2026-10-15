@@ -3,6 +3,7 @@ import react from "@vitejs/plugin-react"
 
 export default defineConfig({
   root: "web",
+  envPrefix: ["VITE_", "CHAIN", "WALLETCONNECT_PROJECT_ID"],
   plugins: [react()],
   server: {
     port: 5173,

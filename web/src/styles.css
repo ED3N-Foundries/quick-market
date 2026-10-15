@@ -29,9 +29,9 @@ body {
     var(--bg);
 }
 
-button, input { font: inherit; color: inherit; }
+.app button, .app input { font: inherit; color: inherit; }
 
-button {
+.app button {
   border: 1px solid var(--line);
   background: var(--raise-2);
   border-radius: 10px;
@@ -39,9 +39,16 @@ button {
   cursor: pointer;
 }
 
-button:disabled { cursor: default; opacity: 0.38; }
+.app button:disabled { cursor: default; opacity: 0.38; }
 
-button.primary, .wallet .primary {
+.app button.plain {
+  border: 0;
+  background: none;
+  padding: 0;
+  border-radius: 0;
+}
+
+.app button.primary, .app .wallet .primary {
   background: var(--text);
   color: #111;
   border-color: transparent;

@@ -1,5 +1,4 @@
 export const MIN_STAKE_MICROS = 1_000_000
-export const STARTING_BALANCE_MICROS = 10_000_000_000
 export const LIVE_MS = 5_000
 export const TAPE_MS = 15 * 60 * 1000
 
@@ -30,15 +29,9 @@ export function viewMs(): number {
   return seconds * 1000
 }
 
-export function botCount(): number {
-  const n = Number(process.env.BOT_COUNT ?? 8)
-  if (!Number.isInteger(n) || n < 0 || n > 40) return 8
-  return n
-}
-
 export function feeBps(): number {
-  const n = Number(process.env.FEE_BPS ?? 25)
-  if (!Number.isInteger(n) || n < 0 || n > 10_000) return 25
+  const n = Number(process.env.FEE_BPS ?? 0)
+  if (!Number.isInteger(n) || n < 0 || n > 10_000) return 0
   return n
 }
 

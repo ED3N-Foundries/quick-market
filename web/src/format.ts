@@ -106,12 +106,6 @@ export function formatClock(ms: number): string {
   })
 }
 
-export function botLabel(address: string): string {
-  if (!address.startsWith("0xb07")) return "Bot"
-  const index = Number.parseInt(address.slice(5), 16)
-  return Number.isFinite(index) ? `Bot ${index + 1}` : "Bot"
-}
-
 export function sourceLabel(source: string): string {
   if (source === "coinbase") return "Coinbase BTC-USD"
   if (source === "binance") return "Binance BTCUSDT"
@@ -152,7 +146,3 @@ export function moneyShare(side: number, total: number): string {
   return `${Math.round((side / total) * 100)}%`
 }
 
-export function randomAddress(): string {
-  const bytes = crypto.getRandomValues(new Uint8Array(20))
-  return `0x${[...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("")}`
-}

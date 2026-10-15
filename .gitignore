@@ -4,3 +4,7 @@ data/*.sqlite
 data/*.sqlite-wal
 data/*.sqlite-shm
 .DS_Store
+.env
+.env.*
+!.env.example
+agent/keys.json

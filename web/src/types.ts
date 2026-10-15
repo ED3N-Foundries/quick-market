@@ -8,7 +8,10 @@ export type Config = {
   feeBps: number
   minStakeMicros: number
   source: PriceSource
-  botCount: number
+  chainId: number
+  chainName: string
+  usdc: string
+  treasury: string
 }
 
 export type TrayRow = {

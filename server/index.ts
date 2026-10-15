@@ -1,30 +1,37 @@
 import { existsSync } from "node:fs"
 import { join, normalize, sep } from "node:path"
-import { botCount, feeBps, marketMs, MIN_STAKE_MICROS, priceSource, viewMs, windowMs, type PriceSource } from "./config"
+import { chainFromEnv } from "../shared/chain"
+import { feeBps, marketMs, MIN_STAKE_MICROS, priceSource, viewMs, windowMs, type PriceSource } from "./config"
+import { requestWithdraw, startCustody, treasuryAddress } from "./custody"
 import { getDb } from "./db"
 import { hub } from "./hub"
-import { normalizeAddress, parseMicros } from "./money"
+import { parseMicros } from "./money"
 import { startOracle } from "./oracle"
-import {
-  advance,
-  board,
-  ensureUser,
-  feedStatus,
-  fund,
-  listRounds,
-  notePrint,
-  placeBet,
-  roundDetail,
-  tapePoints,
-  withdraw,
-  type Side,
-} from "./rounds"
+import { advance, board, feedStatus, listRounds, notePrint, placeBet, roundDetail, tapePoints, youFor, type Side } from "./rounds"
+import { endSession, openSession, readSession } from "./session"
+
+let chain: ReturnType<typeof chainFromEnv>
+try {
+  chain = chainFromEnv(process.env.CHAIN)
+} catch (error) {
+  console.error(error instanceof Error ? error.message : error)
+  process.exit(1)
+}
+
+let treasury: string
+try {
+  treasury = treasuryAddress()
+} catch (error) {
+  console.error(error instanceof Error ? error.message : error)
+  process.exit(1)
+}
 
 const port = Number(process.env.PORT ?? 3001)
 const distDir = join(import.meta.dir, "..", "dist")
 const serveUi = process.env.NODE_ENV === "production"
 
 getDb()
+startCustody()
 
 let pending: { price: string; exchangeTs: number; source: PriceSource } | null = null
 let lastFeed: "live" | "stale" | null = null
@@ -86,7 +93,10 @@ function publicConfig() {
     feeBps: feeBps(),
     minStakeMicros: MIN_STAKE_MICROS,
     source: priceSource(),
-    botCount: botCount(),
+    chainId: chain.id,
+    chainName: chain.name,
+    usdc: chain.usdc,
+    treasury,
   }
 }
 
@@ -97,55 +107,58 @@ async function handle(req: Request): Promise<Response> {
 
   if (req.method === "GET" && url.pathname === "/api/state") {
     const now = Date.now()
-    const address = normalizeAddress(url.searchParams.get("address"))
+    const session = readSession(req, now)
+    if (session.rejected) return json({ error: "Sign in again" }, 401)
     return json({
       serverNow: now,
       feed: feedStatus(now),
       config: publicConfig(),
       board: board(now),
-      you: address ? ensureUser(address) : null,
+      you: session.address ? youFor(session.address) : null,
       tape: tapePoints(),
     })
   }
 
   if (req.method === "POST" && url.pathname === "/api/session") {
     const body = await readJson(req)
-    const address = normalizeAddress(body?.address)
-    if (!address) return json({ error: "Address is invalid" }, 400)
-    return json({ you: ensureUser(address) })
+    const issued = body?.issued
+    if (typeof issued !== "number") return json({ error: "Sign-in expired" }, 400)
+    const result = await openSession({
+      address: String(body?.address ?? ""),
+      signature: String(body?.signature ?? ""),
+      issued,
+      now: Date.now(),
+      botSecret: body?.botSecret,
+    })
+    if (!result.ok) return json({ error: result.error }, 400)
+    return json({ token: result.token, you: result.you })
   }
 
-  if (req.method === "POST" && url.pathname === "/api/fund") {
-    const body = await readJson(req)
-    const address = normalizeAddress(body?.address)
-    const amount = parseMicros(body?.amount)
-    if (!address) return json({ error: "Address is invalid" }, 400)
-    if (amount === null || amount <= 0) return json({ error: "Amount is invalid" }, 400)
-    const result = fund(address, amount)
-    if (!result.ok) return json({ error: result.error }, 400)
-    return json({ you: result.you })
+  if (req.method === "DELETE" && url.pathname === "/api/session") {
+    endSession(req)
+    return json({ ok: true })
   }
 
   if (req.method === "POST" && url.pathname === "/api/withdraw") {
+    const session = readSession(req)
+    if (!session.address) return json({ error: "Connect a wallet first" }, 401)
     const body = await readJson(req)
-    const address = normalizeAddress(body?.address)
     const amount = parseMicros(body?.amount)
-    if (!address) return json({ error: "Address is invalid" }, 400)
     if (amount === null) return json({ error: "Amount is invalid" }, 400)
-    const result = withdraw(address, amount)
-    if (!result.ok) return json({ error: result.error }, 400)
-    return json({ you: result.you })
+    const result = await requestWithdraw(session.address, amount)
+    if (!result.ok) return json({ error: result.error, you: result.you ?? null }, 400)
+    return json({ you: result.you, txHash: result.txHash })
   }
 
   if (req.method === "POST" && url.pathname === "/api/bets") {
+    const session = readSession(req)
+    if (!session.address) return json({ error: "Connect a wallet first" }, 401)
     const body = await readJson(req)
-    const address = normalizeAddress(body?.address)
     const stake = parseMicros(body?.stake)
     const side = body?.side
-    if (!address) return json({ error: "Address is invalid" }, 400)
     if (side !== "up" && side !== "down") return json({ error: "Side is invalid" }, 400)
     if (stake === null) return json({ error: "Stake is invalid" }, 400)
-    const result = placeBet({ address, side: side as Side, stakeMicros: stake, now: Date.now() })
+    const result = placeBet({ address: session.address, side: side as Side, stakeMicros: stake, now: Date.now() })
     if (!result.ok) return json({ error: result.error }, 400)
     publishRound()
     return json({ you: result.you, board: result.board })
@@ -153,9 +166,10 @@ async function handle(req: Request): Promise<Response> {
 
   if (req.method === "GET" && url.pathname === "/api/rounds") {
     const limit = Number(url.searchParams.get("limit") ?? 30)
-    const address = normalizeAddress(url.searchParams.get("address"))
     const mine = url.searchParams.get("mine") === "1"
-    return json({ rounds: listRounds(Number.isFinite(limit) ? limit : 30, address, mine) })
+    const session = mine ? readSession(req) : { address: null, rejected: false }
+    if (mine && !session.address) return json({ error: "Connect a wallet first" }, 401)
+    return json({ rounds: listRounds(Number.isFinite(limit) ? limit : 30, session.address, mine) })
   }
 
   const detailMatch = url.pathname.match(/^\/api\/rounds\/(\d+)$/)

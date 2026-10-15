@@ -1,14 +1,4 @@
-import {
-  botCount,
-  clockAt,
-  feeBps,
-  LIVE_MS,
-  marketBounds,
-  MIN_STAKE_MICROS,
-  STARTING_BALANCE_MICROS,
-  TAPE_MS,
-  type PriceSource,
-} from "./config"
+import { clockAt, feeBps, LIVE_MS, marketBounds, MIN_STAKE_MICROS, TAPE_MS, type PriceSource } from "./config"
 import { getDb } from "./db"
 import { settleRound, type Resolution, type Side } from "./settle"
 
@@ -113,20 +103,12 @@ const prints: Print[] = []
 let lastReceivedAt = 0
 let secondBucket: { sec: number; price: string; source: string; exchangeTs: number } | null = null
 let cachedKey = ""
-let seatedMarket = -1
-
-const STAKE_LADDER = [5, 10, 25, 50]
 
 export function resetRuntime() {
   prints.length = 0
   lastReceivedAt = 0
   secondBucket = null
   cachedKey = ""
-  seatedMarket = -1
-}
-
-export function botAddress(index: number): string {
-  return `0xb07${index.toString(16).padStart(37, "0")}`
 }
 
 export function notePrint(print: Print) {
@@ -333,29 +315,12 @@ export function ensureUser(address: string): You {
   const existing = youFor(address)
   if (existing) return existing
   getDb()
-    .query("INSERT INTO users (address, balance_micros, created_at, is_bot) VALUES (?, ?, ?, 0)")
-    .run(address, STARTING_BALANCE_MICROS, Date.now())
+    .query("INSERT INTO users (address, balance_micros, created_at, is_bot) VALUES (?, 0, ?, 0)")
+    .run(address, Date.now())
   return youFor(address)!
 }
 
-function ensureBot(address: string, now: number) {
-  const row = getDb().query("SELECT balance_micros FROM users WHERE address = ?").get(address) as
-    | { balance_micros: number }
-    | null
-  if (!row) {
-    getDb()
-      .query("INSERT INTO users (address, balance_micros, created_at, is_bot) VALUES (?, ?, ?, 1)")
-      .run(address, STARTING_BALANCE_MICROS, now)
-    return
-  }
-  if (row.balance_micros < 1_000 * MIN_STAKE_MICROS) {
-    getDb()
-      .query("UPDATE users SET balance_micros = ?, is_bot = 1 WHERE address = ?")
-      .run(STARTING_BALANCE_MICROS, address)
-  }
-}
-
-export function fund(
+export function credit(
   address: string,
   amountMicros: number,
 ): { ok: true; you: You } | { ok: false; error: string } {
@@ -538,49 +503,6 @@ function closeRound(round: RoundRow): SettledEvent {
   }
 }
 
-function mix(seed: number) {
-  let state = seed >>> 0
-  return () => {
-    state = (Math.imul(state, 1664525) + 1013904223) >>> 0
-    return state / 4294967296
-  }
-}
-
-function seatBots(marketId: number, now: number): boolean {
-  const requested = botCount()
-  if (requested <= 0) return false
-  if (seatedMarket === marketId) return false
-  const seats = Math.max(requested, 2)
-  const present = new Set(
-    (
-      getDb()
-        .query(
-          `SELECT b.address FROM bets b JOIN users u ON u.address = b.address
-           WHERE b.round_id = ? AND u.is_bot = 1`,
-        )
-        .all(marketId) as { address: string }[]
-    ).map((row) => row.address),
-  )
-  const rng = mix(marketId + 1)
-  let seated = false
-  let missing = 0
-  for (let index = 0; index < seats; index++) {
-    const address = botAddress(index)
-    const side: Side = index === 0 ? "up" : index === 1 ? "down" : rng() < 0.5 ? "up" : "down"
-    const stake = STAKE_LADDER[Math.floor(rng() * STAKE_LADDER.length)]! * MIN_STAKE_MICROS
-    if (present.has(address)) continue
-    missing += 1
-    ensureBot(address, now)
-    const result = placeBet({ address, side, stakeMicros: stake, now })
-    if (result.ok) {
-      seated = true
-      missing -= 1
-    }
-  }
-  if (missing === 0) seatedMarket = marketId
-  return seated
-}
-
 export function advance(now: number): { settled: SettledEvent[]; broadcastRound: boolean } {
   const clock = clockAt(now)
   const settled: SettledEvent[] = []
@@ -606,8 +528,6 @@ export function advance(now: number): { settled: SettledEvent[]; broadcastRound:
       .run(print.price, round.id)
     if (result.changes > 0) broadcastRound = true
   }
-
-  if (clock.joinId >= 0 && feedStatus(now) === "live" && seatBots(clock.joinId, now)) broadcastRound = true
 
   const key = `${clock.cycle}`
   if (key !== cachedKey) {

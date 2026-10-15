@@ -1,7 +1,7 @@
 import { beforeEach, expect, test } from "bun:test"
-import { useDatabase } from "./db"
+import { getDb, useDatabase } from "./db"
 import { parseMicros } from "./money"
-import { advance, board, ensureUser, feedStatus, fund, notePrint, placeBet, resetRuntime, roundDetail, withdraw, youFor, type Print } from "./rounds"
+import { advance, board, credit, ensureUser, feedStatus, notePrint, placeBet, resetRuntime, roundDetail, withdraw, youFor, type Print } from "./rounds"
 
 const USDC = 1_000_000
 const T = 10_000_000_000_000
@@ -15,6 +15,11 @@ function print(price: string, at: number): Print {
 
 function address(n: number) {
   return `0x${n.toString(16).padStart(40, "0")}`
+}
+
+function grant(who: string, micros = 10_000 * USDC) {
+  const result = credit(who, micros)
+  if (!result.ok) throw new Error(result.error)
 }
 
 beforeEach(() => {
@@ -34,20 +39,21 @@ test("parseMicros keeps six decimal places", () => {
   expect(parseMicros("10")).toBe(10_000_000)
 })
 
-test("fund adds the requested amount and rejects a non-positive one", () => {
+test("a new user starts at zero and credit adds a deposit", () => {
   const you = address(7)
-  ensureUser(you)
-  const before = youFor(you)!.balanceMicros
-  const funded = fund(you, 10 * USDC)
+  expect(ensureUser(you).balanceMicros).toBe(0)
+  const funded = credit(you, 10 * USDC)
   expect(funded.ok).toBe(true)
-  if (funded.ok) expect(funded.you.balanceMicros).toBe(before + 10 * USDC)
-  expect(fund(you, 0).ok).toBe(false)
-  expect(youFor(you)!.balanceMicros).toBe(before + 10 * USDC)
+  if (funded.ok) expect(funded.you.balanceMicros).toBe(10 * USDC)
+  expect(credit(you, 0).ok).toBe(false)
+  expect(youFor(you)!.balanceMicros).toBe(10 * USDC)
 })
 
 test("strike locks when the window closes and a winner is paid once", () => {
   const you = address(1)
   const them = address(2)
+  grant(you)
+  grant(them)
   notePrint(print("100.00", T - 20))
   advance(T + 10)
   expect(placeBet({ address: you, side: "up", stakeMicros: 50 * USDC, now: T + 100 }).ok).toBe(true)
@@ -77,6 +83,7 @@ test("strike locks when the window closes and a winner is paid once", () => {
 
 test("same-side adds stack and the other side is rejected", () => {
   const you = address(3)
+  grant(you)
   notePrint(print("100", T - 20))
   advance(T + 10)
   expect(placeBet({ address: you, side: "up", stakeMicros: 10 * USDC, now: T + 100 }).ok).toBe(true)
@@ -96,7 +103,9 @@ test("the next window is open at the boundary, and a stale feed rejects the bet"
   notePrint(print("100", T - 20))
   advance(T + 10)
   notePrint(print("100", T + WINDOW - 20))
-  const next = placeBet({ address: address(9), side: "up", stakeMicros: USDC, now: T + WINDOW })
+  const nextAddress = address(9)
+  grant(nextAddress)
+  const next = placeBet({ address: nextAddress, side: "up", stakeMicros: USDC, now: T + WINDOW })
   expect(next.ok).toBe(true)
   if (next.ok) expect(next.you.openBets[0]?.roundId).toBe(MARKET_ID + 1)
 
@@ -110,6 +119,7 @@ test("the next window is open at the boundary, and a stale feed rejects the bet"
 
 test("a market voids only when its whole life has no print", () => {
   const you = address(5)
+  grant(you)
   notePrint(print("100", T - 20))
   advance(T + 10)
   expect(placeBet({ address: you, side: "down", stakeMicros: 100 * USDC, now: T + 100 }).ok).toBe(true)
@@ -127,6 +137,8 @@ test("a market voids only when its whole life has no print", () => {
 test("a print a few seconds before the close still settles, and a tie is a push", () => {
   const you = address(7)
   const them = address(8)
+  grant(you)
+  grant(them)
   notePrint(print("100", T - 20))
   advance(T + 10)
   placeBet({ address: you, side: "up", stakeMicros: 10 * USDC, now: T + 100 })
@@ -140,41 +152,17 @@ test("a print a few seconds before the close still settles, and a tie is a push"
   expect(youFor(you)?.balanceMicros).toBe(10_000 * USDC)
 })
 
-test("bots take both sides once per window", () => {
-  process.env.BOT_COUNT = "4"
+test("a bot can bet the next window while a bet is still open", () => {
+  const bot = address(11)
+  grant(bot, 10 * USDC)
+  getDb().query("UPDATE users SET is_bot = 1 WHERE address = ?").run(bot)
   notePrint(print("100", T - 20))
   advance(T + 10)
-  const card = board(T + 50).join
-  const bots = card?.tray.filter((row) => row.bot) ?? []
-  expect(bots).toHaveLength(4)
-  expect(bots.some((row) => row.side === "up")).toBe(true)
-  expect(bots.some((row) => row.side === "down")).toBe(true)
-  const pot = (card?.poolUpMicros ?? 0) + (card?.poolDownMicros ?? 0)
-  advance(T + 80)
-  const again = board(T + 90).join
-  expect((again?.poolUpMicros ?? 0) + (again?.poolDownMicros ?? 0)).toBe(pot)
-
+  expect(placeBet({ address: bot, side: "up", stakeMicros: USDC, now: T + 100 }).ok).toBe(true)
   notePrint(print("100", T + WINDOW - 20))
-  advance(T + WINDOW + 10)
-  const next = board(T + WINDOW + 50).join
-  const nextBots = next?.tray.filter((row) => row.bot) ?? []
-  expect(nextBots).toHaveLength(4)
-  expect(nextBots.some((row) => row.side === "up")).toBe(true)
-  expect(nextBots.some((row) => row.side === "down")).toBe(true)
-})
-
-test("bots fill the next window while the previous market is still resolving", () => {
-  process.env.MARKET_SECONDS = "10"
-  process.env.BOT_COUNT = "2"
-  notePrint(print("100", T - 20))
-  advance(T + 10)
-  notePrint(print("100", T + WINDOW - 20))
-  advance(T + WINDOW + 10)
-  const riding = board(T + WINDOW + 50)
-  expect(riding.live?.id).toBe(MARKET_ID)
-  expect(riding.live?.status).toBe("open")
-  const nextBots = riding.join?.tray.filter((row) => row.bot) ?? []
-  expect(nextBots).toHaveLength(2)
+  const next = placeBet({ address: bot, side: "down", stakeMicros: USDC, now: T + WINDOW + 10 })
+  expect(next.ok).toBe(true)
+  expect(board(T + WINDOW + 10).join?.tray.some((row) => row.bot && row.side === "down")).toBe(true)
 })
 
 test("round detail includes the tape and the price held into the open", () => {
@@ -194,7 +182,7 @@ test("round detail includes the tape and the price held into the open", () => {
 
 test("insufficient balance does not open a bet", () => {
   const you = address(6)
-  ensureUser(you)
+  grant(you)
   notePrint(print("100", T - 20))
   advance(T + 10)
   const result = placeBet({ address: you, side: "up", stakeMicros: 10_001 * USDC, now: T + 100 })

@@ -44,6 +44,41 @@ CREATE TABLE IF NOT EXISTS ticks (
 
 CREATE INDEX IF NOT EXISTS bets_round ON bets(round_id);
 CREATE INDEX IF NOT EXISTS bets_address ON bets(address);
+
+CREATE TABLE IF NOT EXISTS sessions (
+  token TEXT PRIMARY KEY,
+  address TEXT NOT NULL,
+  expires_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS login_sigs (
+  signature TEXT PRIMARY KEY,
+  expires_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS deposits (
+  tx_hash TEXT NOT NULL,
+  log_index INTEGER NOT NULL,
+  address TEXT NOT NULL,
+  amount_micros INTEGER NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (tx_hash, log_index)
+);
+
+CREATE TABLE IF NOT EXISTS withdrawals (
+  id TEXT PRIMARY KEY,
+  address TEXT NOT NULL,
+  amount_micros INTEGER NOT NULL,
+  tx_hash TEXT,
+  raw_tx TEXT,
+  status TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS meta (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
 `
 
 let database: Database | null = null
@@ -58,7 +93,20 @@ function openDatabase(path: string): Database {
   if (!columns.some((column) => column.name === "is_bot")) {
     db.exec("ALTER TABLE users ADD COLUMN is_bot INTEGER NOT NULL DEFAULT 0")
   }
+  migrateCustody(db)
   return db
+}
+
+/** Demo balances were minted. Drop them once so they cannot be withdrawn as USDC. */
+export function migrateCustody(db: Database) {
+  const row = db.query("SELECT value FROM meta WHERE key = ?").get("custody_v1") as { value: string } | null
+  if (row) return
+  const tx = db.transaction(() => {
+    db.exec("UPDATE users SET balance_micros = 0")
+    db.exec("DELETE FROM bets WHERE round_id IN (SELECT id FROM rounds WHERE status = 'open')")
+    db.query("INSERT INTO meta (key, value) VALUES ('custody_v1', '1')").run()
+  })
+  tx()
 }
 
 export function getDb(): Database {

@@ -1,21 +1,39 @@
 import { useCallback, useEffect, useRef, useState } from "react"
+import { chainFromEnv, type ChainConfig } from "../../shared/chain"
 import type { TapeChart, TapePoint } from "./chart"
 import type { Board, Config, SettledMessage, Side, You } from "./types"
 
-const ADDRESS_KEY = "qm.address"
+function configuredChain(): ChainConfig {
+  try {
+    return chainFromEnv(import.meta.env.CHAIN)
+  } catch {
+    return chainFromEnv(undefined)
+  }
+}
+
+const pageChain = configuredChain()
 
 const defaultConfig: Config = {
   windowSeconds: 5,
   marketSeconds: 5,
   viewSeconds: 5,
-  feeBps: 25,
+  feeBps: 0,
   minStakeMicros: 1_000_000,
   source: "binance",
-  botCount: 8,
+  chainId: pageChain.id,
+  chainName: pageChain.name,
+  usdc: pageChain.usdc,
+  treasury: "",
 }
 
-export function useMarket() {
-  const [address, setAddress] = useState<string | null>(() => localStorage.getItem(ADDRESS_KEY))
+function headers(token: string | null, json = false): HeadersInit {
+  const result: Record<string, string> = {}
+  if (json) result["content-type"] = "application/json"
+  if (token) result.authorization = `Bearer ${token}`
+  return result
+}
+
+export function useMarket(token: string | null) {
   const [board, setBoard] = useState<Board | null>(null)
   const [you, setYou] = useState<You | null>(null)
   const [config, setConfig] = useState<Config>(defaultConfig)
@@ -25,15 +43,18 @@ export function useMarket() {
   const [historyVersion, setHistoryVersion] = useState(0)
   const [notices, setNotices] = useState<SettledMessage[]>([])
   const [pulse, setPulse] = useState(0)
+  const [unauthorized, setUnauthorized] = useState(false)
 
   const offsetRef = useRef(0)
   const priceRef = useRef<string | null>(null)
   const chartRef = useRef<TapeChart | null>(null)
-  const addressRef = useRef(address)
+  const tokenRef = useRef(token)
+  const youRef = useRef<You | null>(null)
   const seedRef = useRef<TapePoint[] | null>(null)
   const bufferRef = useRef<TapePoint[]>([])
   const seededRef = useRef(false)
-  addressRef.current = address
+  tokenRef.current = token
+  youRef.current = you
 
   const applySeed = useCallback((chart: TapeChart) => {
     if (!seedRef.current) return
@@ -65,23 +86,62 @@ export function useMarket() {
     chart.push(point.t, point.price, point.text)
   }, [])
 
+  const reload = useCallback(async (): Promise<You | null> => {
+    const response = await fetch("/api/state", { headers: headers(tokenRef.current) })
+    if (response.status === 401) {
+      setUnauthorized(true)
+      setYou(null)
+      return null
+    }
+    const body = await response.json()
+    setBoard(body.board)
+    setConfig(body.config)
+    setFeed(body.feed)
+    offsetRef.current = body.serverNow - Date.now()
+    setYou(body.you ?? null)
+    return body.you ?? null
+  }, [])
+
+  const waitForBalance = useCallback(
+    async (minMicros: number) => {
+      const start = Date.now()
+      while (Date.now() - start < 30_000) {
+        const next = await reload()
+        if (next && next.balanceMicros >= minMicros) return next
+        await new Promise((resolve) => setTimeout(resolve, 1_000))
+      }
+      return null
+    },
+    [reload],
+  )
+
   useEffect(() => {
     const id = window.setInterval(() => setPulse((value) => value + 1), 200)
     return () => window.clearInterval(id)
   }, [])
 
   useEffect(() => {
+    setUnauthorized(false)
+    if (!token) setYou(null)
     let cancel = false
-    const query = address ? `?address=${encodeURIComponent(address)}` : ""
-    fetch(`/api/state${query}`)
-      .then((response) => response.json())
+    fetch("/api/state", { headers: headers(token) })
+      .then(async (response) => {
+        if (response.status === 401) {
+          if (!cancel) {
+            setUnauthorized(true)
+            setYou(null)
+          }
+          return null
+        }
+        return response.json()
+      })
       .then((body) => {
-        if (cancel) return
+        if (cancel || !body) return
         setBoard(body.board)
         setConfig(body.config)
         setFeed(body.feed)
         offsetRef.current = body.serverNow - Date.now()
-        if (body.you) setYou(body.you)
+        setYou(body.you ?? null)
         if (!seededRef.current) {
           seedRef.current = (body.tape as { t: number; price: string }[]).map((point) => ({
             t: point.t,
@@ -97,7 +157,7 @@ export function useMarket() {
     return () => {
       cancel = true
     }
-  }, [address, applySeed])
+  }, [token, applySeed])
 
   useEffect(() => {
     let stopped = false
@@ -121,8 +181,9 @@ export function useMarket() {
           setFeed(message.feed)
           setBoard(message.board)
         } else if (message.type === "settled") {
-          const mine = message.payouts.find((payout) => payout.address === addressRef.current)
-          const balance = message.balances.find((row) => row.address === addressRef.current)
+          const address = youRef.current?.address ?? null
+          const mine = address ? message.payouts.find((payout) => payout.address === address) : null
+          const balance = address ? message.balances.find((row) => row.address === address) : null
           setYou((current) =>
             current
               ? {
@@ -157,7 +218,7 @@ export function useMarket() {
   const openKey = you?.openBets.map((bet) => bet.roundId).join(",") ?? ""
   const caught = useRef("")
   useEffect(() => {
-    if (!address || !board || !you?.openBets.length) return
+    if (!token || !board || !you?.openBets.length) return
     const live = new Set<number>()
     if (board.live) live.add(board.live.id)
     if (board.join) live.add(board.join.id)
@@ -167,37 +228,25 @@ export function useMarket() {
       .join(",")
     if (!stuck || caught.current === stuck) return
     caught.current = stuck
-    let cancel = false
-    fetch(`/api/state?address=${encodeURIComponent(address)}`)
-      .then((response) => response.json())
-      .then((body) => {
-        if (!cancel && body.you) setYou(body.you)
-      })
-      .catch(() => {})
-    return () => {
-      cancel = true
-    }
-  }, [address, board, openKey, you?.openBets])
-
-  const connect = useCallback((nextAddress: string) => {
-    localStorage.setItem(ADDRESS_KEY, nextAddress)
-    setAddress(nextAddress)
-    setNotices([])
-    setError(null)
-  }, [])
+    reload().catch(() => {})
+  }, [token, board, openKey, you?.openBets, reload])
 
   const place = useCallback(
     async (side: Side, stake: string) => {
-      if (!address) return
+      if (!tokenRef.current) return
       setPending(true)
       setError(null)
       try {
         const response = await fetch("/api/bets", {
           method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ address, side, stake }),
+          headers: headers(tokenRef.current, true),
+          body: JSON.stringify({ side, stake }),
         })
         const body = await response.json()
+        if (response.status === 401) {
+          setUnauthorized(true)
+          return
+        }
         if (!response.ok) {
           setError(body.error ?? "Bet failed")
           return
@@ -210,68 +259,56 @@ export function useMarket() {
         setPending(false)
       }
     },
-    [address],
-  )
-
-  const fundWallet = useCallback(
-    async (amount: string) => {
-      if (!address) return
-      setError(null)
-      const response = await fetch("/api/fund", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ address, amount }),
-      })
-      const body = await response.json()
-      if (!response.ok) {
-        setError(body.error ?? "Fund failed")
-        return
-      }
-      setYou(body.you)
-    },
-    [address],
+    [],
   )
 
   const withdrawWallet = useCallback(async (amount: string): Promise<string | null> => {
-    if (!address) return "Connect a wallet first"
+    if (!tokenRef.current) return "Connect a wallet first"
     try {
       const response = await fetch("/api/withdraw", {
         method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ address, amount }),
+        headers: headers(tokenRef.current, true),
+        body: JSON.stringify({ amount }),
       })
       const body = await response.json()
+      if (body.you) setYou(body.you)
+      if (response.status === 401) {
+        setUnauthorized(true)
+        return "Connect a wallet first"
+      }
       if (!response.ok) return body.error ?? "Withdraw failed"
-      setYou(body.you)
       return null
     } catch {
       return "Can't reach the market server"
     }
-  }, [address])
+  }, [])
 
   const now = Date.now() + offsetRef.current
   void pulse
 
   return {
-    address,
+    address: you?.address ?? null,
     board,
     you,
     config,
     feed,
     error,
+    setError,
     pending,
     historyVersion,
     notices,
     dismissNotice: useCallback((roundId: number) => {
       setNotices((current) => current.filter((notice) => notice.roundId !== roundId))
     }, []),
+    unauthorized,
     now,
     offsetRef,
     priceRef,
-    connect,
     place,
-    fundWallet,
     withdrawWallet,
+    reload,
+    waitForBalance,
     bindChart,
+    token,
   }
 }
