@@ -9,5 +9,5 @@
     "skipLibCheck": true,
     "verbatimModuleSyntax": false
   },
-  "include": ["server", "shared", "agent", "vite.config.ts"]
+  "include": ["server", "shared", "agent", "scripts", "vite.config.ts"]
 }

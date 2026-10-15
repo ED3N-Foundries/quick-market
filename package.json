@@ -9,7 +9,8 @@
     "start": "NODE_ENV=production bun server/index.ts",
     "test": "bun test",
     "build": "vite build",
-    "agent": "bun run agent/index.ts"
+    "agent": "bun run agent/index.ts",
+    "treasury": "bun run scripts/treasury.ts"
   },
   "dependencies": {
     "@coinbase/cdp-sdk": "^1.58.0",
