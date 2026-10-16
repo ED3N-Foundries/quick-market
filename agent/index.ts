@@ -1,499 +1,821 @@
-import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs"
-import { join } from "node:path"
-import { createPublicClient, createWalletClient, http, type Address } from "viem"
-import { generatePrivateKey, privateKeyToAccount, type PrivateKeyAccount } from "viem/accounts"
-import { base, baseSepolia } from "viem/chains"
-import { chainFromEnv, requireSepoliaToken, type ChainConfig } from "../shared/chain"
-import { loginMessage } from "../shared/login"
-import { usdcAbi } from "../shared/usdc"
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
+import { dirname } from "node:path"
+import { privateKeyToAccount } from "viem/accounts"
+import { chainFromEnv, requireSepoliaToken } from "../shared/chain"
+import { botEnrollMessage } from "../shared/login"
+import { feeBps, windowMs } from "../server/config"
+import { bankAction, seedMicros } from "./bank"
+import { checkConfig, swarmConfig, type TapeStats } from "./config"
+import { decideWindow, freshGate, noteResult, tapeActivity, type GateState, type PrintPoint, type Side } from "./decide"
+import { createDirector, manilaHour, stepDirector, type DirectorState, type DirectorView } from "./director"
+import { growKeys, type StoredKey } from "./keys"
+import { personaFor, type Persona } from "./persona"
+import { openClock, stepPresence, type Arrival, type WalletClock } from "./presence"
+import { replayPayouts } from "./replay"
+import { histogram, manilaClock, parseControl, parseFlow, percentiles, type FlowFile, type SwarmSnapshot } from "./status"
+import { CONTROL_PATH, FLOW_PATH, KEYS_PATH, STATUS_PATH, SWARM_DB_PATH, SWARM_PATH, readJson, writeJsonAtomic } from "./store"
 import {
-  GAS_FLOOR,
-  ONE_USDC,
-  USDC,
-  applyFlow,
-  emptyFlow,
-  nextErrorStreak,
-  nextWindowsSinceBet,
-  noteLedger,
-  parseControl,
-  parseFlow,
-  parseStatus,
-  pendingOneShots,
-  seedChain,
-  statusRow,
-  type FlowFile,
-  type StatusRow,
-  type WalletFlow,
-} from "./status"
-import { CONTROL_PATH, FLOW_PATH, STATUS_PATH, readJson, writeJsonAtomic } from "./store"
+  loadWalletMap,
+  metaGet,
+  metaSet,
+  noteWindow,
+  openSwarm,
+  saveStakes,
+  saveWallets,
+  stakesFor,
+  type WalletRow,
+} from "./swarmdb"
 
-const KEYS_PATH = join(process.cwd(), "agent", "keys.json")
-const FAUCET_WAIT_MS = 10 * 60 * 1000
+type Book = {
+  joinId: number
+  windowEndsAt: number
+  poolUpMicros: number
+  poolDownMicros: number
+  feed: "live" | "stale"
+  tape: { t: number; price: string }[]
+  settled: {
+    id: number
+    strike: string | null
+    settle: string | null
+    feeMicros: number
+    poolUpMicros: number
+    poolDownMicros: number
+    winningSide: string | null
+    resolution: string | null
+  }[]
+}
 
-export type StoredKey = { address: string; privateKey: `0x${string}` }
+type LiveWallet = {
+  index: number
+  address: string
+  privateKey: `0x${string}`
+  clock: WalletClock
+  online: boolean
+  enrolled: boolean
+  bankroll: number
+  handled: boolean
+  gate: GateState
+  persona: Persona
+  lastSide: Side | null
+  lastStake: number | null
+  lastSkip: string | null
+  wins: number
+  losses: number
+  wokeAt: number | null
+  sleptAt: number | null
+  nextEnroll: number
+  dirty: boolean
+}
 
-export function planKeys(existing: StoredKey[], count: number): StoredKey[] {
-  const keys: StoredKey[] = []
-  for (const row of existing) {
-    if (keys.length >= count) break
-    if (!/^0x[0-9a-fA-F]{64}$/.test(row.privateKey)) continue
-    const account = privateKeyToAccount(row.privateKey)
-    keys.push({ address: account.address, privateKey: row.privateKey })
+type Pending = {
+  roundId: number
+  endsAt: number
+  orders: { address: string; side: Side; stakeMicros: number }[]
+  sent: number
+}
+
+const root = (process.env.API_URL ?? "http://127.0.0.1:3001").replace(/\/api\/session\/?$/, "").replace(/\/$/, "")
+
+async function main() {
+  if ((process.env.CHAIN ?? "").trim() === "base") {
+    console.error("The swarm refuses CHAIN=base. Real USDC is out of this mode.")
+    process.exit(1)
   }
-  while (keys.length < count) {
-    const privateKey = generatePrivateKey()
-    keys.push({ address: privateKeyToAccount(privateKey).address, privateKey })
+  const problem = checkConfig(swarmConfig)
+  if (problem) {
+    console.error(problem)
+    process.exit(1)
   }
-  return keys
+  if (!process.env.AGENT_SECRET) {
+    console.error("AGENT_SECRET is required")
+    process.exit(1)
+  }
+  const chain = chainFromEnv(process.env.CHAIN, process.env.USDC_ADDRESS)
+  requireSepoliaToken(chain)
+
+  const db = openSwarm(SWARM_DB_PATH)
+  let keys = growKeys(loadKeyFile(), 0, swarmConfig.runner.keyCap)
+  saveKeyFile(keys)
+  const wallets = new Map<string, LiveWallet>()
+  const stored = loadWalletMap(db)
+  keys.forEach((key, index) => remember(wallets, key, stored.get(key.address.toLowerCase()) ?? null, index))
+  const initialSteer = steering()
+  const initialSpring =
+    metaGet(db, "spring") !== null
+      ? Number(metaGet(db, "spring"))
+      : (initialSteer.pin ??
+        stepDirector(createDirector(swarmConfig.clock.floor), {
+          now: Date.now(),
+          dtSec: 0,
+          tape: { absReturn: 1, volatility: 1 },
+          config: swarmConfig.clock,
+          pin: initialSteer.pin,
+          hold: initialSteer.hold,
+        }).target)
+  const director = createDirector(initialSpring)
+  director.velocity = Number(metaGet(db, "velocity") ?? "0")
+  let lastAt = Date.now() - 1_000
+  let lastJoin = -1
+  let book: Book | null = null
+  let bookAt: number | null = null
+  let cursor = Number(metaGet(db, "settle_cursor") ?? "0")
+  let pending: Pending | null = null
+  let auditAt = 0
+  let auditCursor = 0
+  let bankAt = 0
+  let minute = Math.floor(Date.now() / 60_000)
+  let arrivedMinute = 0
+  let leftMinute = 0
+  let trace: number[] = []
+  try {
+    const parsed = JSON.parse(metaGet(db, "trace") ?? "[]") as unknown
+    if (Array.isArray(parsed)) trace = parsed.filter((item): item is number => typeof item === "number")
+  } catch {
+    trace = []
+  }
+  const recent: Arrival[] = []
+  let flow = parseFlow(readJson(FLOW_PATH))
+  let lastError: string | null = null
+  let windowStats = { roundId: null as number | null, bets: 0, skips: 0, up: 0, down: 0, stakes: [] as number[] }
+  let decidedJoin = -1
+  let lastView: DirectorView | null = null
+  let stopping = false
+
+  const flush = () => {
+    const dirty = [...wallets.values()].filter((wallet) => wallet.dirty).map((wallet) => toRow(wallet))
+    saveWallets(db, dirty)
+    for (const wallet of wallets.values()) wallet.dirty = false
+    metaSet(db, "spring", String(director.value))
+    metaSet(db, "velocity", String(director.velocity))
+    metaSet(db, "settle_cursor", String(cursor))
+    metaSet(db, "trace", JSON.stringify(trace.slice(-180)))
+    const snapshot = buildSnapshot({
+      now: Date.now(),
+      view: lastView,
+      director,
+      wallets,
+      flow,
+      lastError,
+      book,
+      bookAt,
+      arrivedMinute,
+      leftMinute,
+      trace,
+      windowStats,
+    })
+    writeJsonAtomic(SWARM_PATH, snapshot)
+    writeJsonAtomic(STATUS_PATH, snapshot)
+    writeJsonAtomic(FLOW_PATH, flow)
+  }
+
+  const stop = () => {
+    if (stopping) return
+    stopping = true
+    flush()
+    process.exit(0)
+  }
+  process.on("SIGINT", stop)
+  process.on("SIGTERM", stop)
+
+  while (!stopping) {
+    const now = Date.now()
+    const dt = Math.max(0, (now - lastAt) / 1000)
+    lastAt = now
+    const thisMinute = Math.floor(now / 60_000)
+    if (thisMinute !== minute) {
+      trace.push(walletsOnline(wallets))
+      if (trace.length > 180) trace = trace.slice(-180)
+      arrivedMinute = 0
+      leftMinute = 0
+      minute = thisMinute
+    }
+    try {
+      const steered = steering()
+      const points = pointsOf(book?.tape ?? [], now)
+      const tape = directorTape(points)
+      const view = stepDirector(director, {
+        now,
+        dtSec: dt,
+        tape,
+        config: swarmConfig.clock,
+        pin: steered.pin,
+        hold: steered.hold,
+      })
+      lastView = view
+      const room = Math.max(0, Math.floor(swarmConfig.clock.perSecond * Math.max(dt, 0)))
+      const wanted = Math.min(
+        swarmConfig.runner.keyCap,
+        Math.max(Math.ceil(view.window[1]) + 15, Math.ceil(view.window[1] * 1.4)),
+      )
+      if (keys.length < wanted && room > 0) {
+        const next = growKeys(keys, Math.min(wanted, keys.length + room), swarmConfig.runner.keyCap)
+        if (next.length !== keys.length || next.some((key, index) => key.privateKey !== keys[index]?.privateKey)) {
+          keys = next
+          saveKeyFile(keys)
+        }
+      }
+      keys.forEach((key, index) => {
+        if (!wallets.has(key.address.toLowerCase())) remember(wallets, key, null, index)
+      })
+      const hour = manilaHour(now, swarmConfig.clock.timeZoneOffsetHours)
+      const clocks = [...wallets.values()].sort((left, right) => left.index - right.index).map((wallet) => wallet.clock)
+      const seated = new Set([...wallets.values()].filter((wallet) => wallet.online).map((wallet) => wallet.address))
+      const bend = presenceBend(points, now)
+      const step = stepPresence({
+        clocks,
+        seated,
+        now,
+        dtSec: dt,
+        hour,
+        target: view.online,
+        window: view.window,
+        tape: bend,
+        recentArrivals: recent,
+        config: swarmConfig.presence,
+        perSecond: swarmConfig.clock.perSecond,
+      })
+      const byAddress = new Map(step.clocks.map((clock) => [clock.address, clock]))
+      for (const wallet of wallets.values()) {
+        const clock = byAddress.get(wallet.address)
+        if (!clock) continue
+        if (clock.cursor !== wallet.clock.cursor || clock.visitEnd !== wallet.clock.visitEnd || clock.gapEnd !== wallet.clock.gapEnd) {
+          wallet.dirty = true
+        }
+        wallet.clock = clock
+      }
+      const joinId = Math.floor(now / windowMs())
+      for (const address of step.arrived) {
+        const wallet = wallets.get(address)
+        if (!wallet || wallet.online) continue
+        wallet.online = true
+        wallet.wokeAt = now
+        if (wallet.gate.readyWindow < joinId) {
+          wallet.gate = {
+            ...wallet.gate,
+            burstLeft: 0,
+            refractory: false,
+            readyWindow: joinId + (wallet.index % 3),
+          }
+        }
+        wallet.dirty = true
+        arrivedMinute += 1
+        recent.push({ index: wallet.index, at: now })
+      }
+      for (const address of step.left) {
+        const wallet = wallets.get(address)
+        if (!wallet || !wallet.online) continue
+        wallet.online = false
+        wallet.sleptAt = now
+        wallet.dirty = true
+        leftMinute += 1
+      }
+      while (recent.length > 0 && now - recent[0]!.at > swarmConfig.presence.herdWindowMs) recent.shift()
+
+      flush()
+      await enrollDue(wallets, chain.id, now, flow, (message) => {
+        lastError = message
+      })
+
+      if (lastJoin !== joinId) {
+        const next = await fetchBook(cursor)
+        if (next) {
+          book = next
+          bookAt = Date.now()
+          lastJoin = joinId
+          lastError = null
+          await applySettled(db, wallets, book, () => cursor, (value) => {
+            cursor = value
+          })
+        } else lastError = "Book did not load"
+      }
+
+      if (pending && book && pending.roundId !== book.joinId) pending = null
+      if (!pending && decidedJoin !== joinId && book && book.feed === "live" && book.joinId === joinId && now < book.windowEndsAt - 250 && !steered.control.bettingPaused) {
+        const minds = [...wallets.values()]
+          .filter((wallet) => wallet.online && wallet.enrolled)
+          .map((wallet) => ({
+            index: wallet.index,
+            address: wallet.address,
+            persona: wallet.persona,
+            bankroll: wallet.bankroll,
+            gate: wallet.gate,
+            paused: steered.control.paused.includes(wallet.address),
+          }))
+        const decided = decideWindow({
+          roundId: book.joinId,
+          now,
+          windowMs: windowMs(),
+          points,
+          poolUp: book.poolUpMicros,
+          poolDown: book.poolDownMicros,
+          wallets: minds,
+          config: swarmConfig.persona,
+          stake: swarmConfig.stake,
+          cap: swarmConfig.runner.orderCap,
+        })
+        for (const wallet of wallets.values()) {
+          const gate = decided.gates.get(wallet.address)
+          if (!gate) continue
+          wallet.gate = gate
+          wallet.dirty = true
+        }
+        for (const skip of decided.skips) {
+          const wallet = wallets.get(skip.address)
+          if (!wallet) continue
+          wallet.lastSkip = skip.reason
+          wallet.dirty = true
+        }
+        windowStats = {
+          roundId: book.joinId,
+          bets: 0,
+          skips: decided.skips.length,
+          up: 0,
+          down: 0,
+          stakes: [],
+        }
+        decidedJoin = book.joinId
+        pending = {
+          roundId: book.joinId,
+          endsAt: book.windowEndsAt,
+          orders: decided.orders.map((order) => ({ address: order.address, side: order.side, stakeMicros: order.stakeMicros })),
+          sent: 0,
+        }
+        if (pending.orders.length === 0) {
+          noteWindow(db, { id: book.joinId, bets: 0, skips: decided.skips.length, upMicros: 0, downMicros: 0, at: now })
+          pending = null
+        }
+      }
+      if (pending && now < pending.endsAt - 150) {
+        const posted = await postOrders(db, pending, wallets, flow, (message) => {
+          lastError = message
+        })
+        windowStats.bets += posted.count
+        windowStats.up += posted.up
+        windowStats.down += posted.down
+        windowStats.stakes.push(...posted.stakes)
+        if (posted.done) {
+          noteWindow(db, {
+            id: pending.roundId,
+            bets: windowStats.bets,
+            skips: windowStats.skips,
+            upMicros: windowStats.up,
+            downMicros: windowStats.down,
+            at: now,
+          })
+          pending = null
+        }
+      } else if (pending && now >= pending.endsAt - 150) pending = null
+
+      if (now - auditAt >= swarmConfig.runner.auditEveryMs) {
+        await audit(wallets, auditCursor, (next) => {
+          auditCursor = next
+        })
+        auditAt = now
+      }
+      if (steered.control.bleed && now - bankAt >= swarmConfig.runner.bankEveryMs) {
+        await bankPass(wallets, flow, (message) => {
+          lastError = message
+        })
+        bankAt = now
+      }
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : "Swarm tick failed"
+    }
+    flush()
+    const remain = book ? book.windowEndsAt - Date.now() : swarmConfig.runner.presenceTickMs
+    const wait = Math.min(swarmConfig.runner.snapshotEveryMs, Math.max(40, remain))
+    await sleep(wait)
+  }
 }
 
-export function sideFor(index: number, roundId: number, address: string): "up" | "down" {
-  if (index === 0) return "up"
-  if (index === 1) return "down"
-  let hash = roundId
-  for (let i = 0; i < address.length; i++) hash = Math.imul(hash, 33) ^ address.charCodeAt(i)
-  return (hash >>> 0) % 2 === 0 ? "up" : "down"
+function steering(): { pin: number | null; hold: "off-peak" | "peak" | null; control: ReturnType<typeof parseControl> } {
+  const control = parseControl(readJson(CONTROL_PATH))
+  const env = process.env.SWARM_PIN?.trim()
+  if (env) {
+    const pin = Number(env)
+    if (Number.isFinite(pin)) return { pin: Math.max(1, Math.round(pin)), hold: null, control }
+  }
+  if (control.mode === "pin") return { pin: control.pin ?? 1, hold: null, control }
+  if (control.mode === "off-peak") return { pin: null, hold: "off-peak", control }
+  if (control.mode === "peak") return { pin: null, hold: "peak", control }
+  return { pin: null, hold: null, control }
 }
 
-export function needsFaucet(faucet: boolean, eth: bigint, usdc: bigint): { eth: boolean; usdc: boolean } {
-  if (!faucet) return { eth: false, usdc: false }
-  return { eth: eth < GAS_FLOOR, usdc: usdc < ONE_USDC }
+function remember(wallets: Map<string, LiveWallet>, key: StoredKey, row: WalletRow | null, index: number) {
+  const address = key.address.toLowerCase()
+  if (wallets.has(address)) return
+  const persona = personaFor(row?.idx ?? index, swarmConfig.persona)
+  const storedIndex = row?.idx ?? index
+  const hour = manilaHour(Date.now(), swarmConfig.clock.timeZoneOffsetHours)
+  const clock = row
+    ? { index: storedIndex, address, cursor: row.cursor, visitStart: row.visitStart, visitEnd: row.visitEnd, gapEnd: row.gapEnd }
+    : openClock(storedIndex, address, Date.now(), hour, swarmConfig.presence)
+  wallets.set(address, {
+    index: storedIndex,
+    address,
+    privateKey: key.privateKey,
+    clock,
+    online: row?.online === 1,
+    enrolled: row?.enrolled === 1,
+    bankroll: row?.bankroll ?? 0,
+    handled: row?.handled === 1,
+    gate: gateFrom(row?.gateJson ?? "", storedIndex, persona),
+    persona,
+    lastSide: row?.lastSide === "up" || row?.lastSide === "down" ? row.lastSide : null,
+    lastStake: row?.lastStake ?? null,
+    lastSkip: row?.lastSkip ?? null,
+    wins: row?.wins ?? 0,
+    losses: row?.losses ?? 0,
+    wokeAt: row?.wokeAt ?? null,
+    sleptAt: row?.sleptAt ?? null,
+    nextEnroll: 0,
+    dirty: row === null,
+  })
 }
 
-type State = {
-  config: { chainId: number; treasury: Address; usdc: Address }
-  you: { balanceMicros: number } | null
-  board: { join: { id: number } | null }
+function gateFrom(json: string, index: number, persona: Persona): GateState {
+  const nowWindow = Math.floor(Date.now() / windowMs())
+  const stagger = index % Math.max(2, Math.round(persona.tempoWindows * 0.5))
+  const fresh = { ...freshGate(index, nowWindow, persona, swarmConfig.persona), readyWindow: nowWindow + stagger }
+  if (!json) return fresh
+  try {
+    const parsed = JSON.parse(json) as Partial<GateState>
+    if (typeof parsed.rngA !== "number" || typeof parsed.readyWindow !== "number") return fresh
+    return {
+      readyWindow: parsed.readyWindow < nowWindow - 20 ? nowWindow + stagger : parsed.readyWindow,
+      burstLeft: typeof parsed.burstLeft === "number" ? parsed.burstLeft : 0,
+      refractory: parsed.refractory === true,
+      results: Array.isArray(parsed.results) ? parsed.results.filter((item): item is boolean => typeof item === "boolean").slice(-32) : [],
+      edgeNudge: typeof parsed.edgeNudge === "number" ? parsed.edgeNudge : 0,
+      tempoNudge: typeof parsed.tempoNudge === "number" ? parsed.tempoNudge : 0,
+      bias: typeof parsed.bias === "number" ? parsed.bias : 0,
+      rngA: parsed.rngA,
+    }
+  } catch {
+    return fresh
+  }
 }
 
-type Memory = {
-  error: string | null
-  errorStreak: number
-  faucetRequestedAt: number | null
-  sweepError: boolean
-  signInError: boolean
-  chainMismatch: boolean
-  windowsSinceBet: number
-  countedRound: number | null
-  roundId: number | null
-  side: "up" | "down" | null
-  eth: bigint
-  chainUsdc: bigint
-  ledgerMicros: number
+function toRow(wallet: LiveWallet): WalletRow {
+  return {
+    address: wallet.address,
+    idx: wallet.index,
+    online: wallet.online ? 1 : 0,
+    phase: "",
+    bankroll: wallet.bankroll,
+    lastSide: wallet.lastSide,
+    lastStake: wallet.lastStake,
+    lastSkip: wallet.lastSkip,
+    wins: wallet.wins,
+    losses: wallet.losses,
+    mind: wallet.persona.mind,
+    tempo: wallet.persona.tempoWindows,
+    visitEnd: wallet.clock.visitEnd,
+    enrolled: wallet.enrolled ? 1 : 0,
+    rngA: wallet.gate.rngA,
+    gateJson: JSON.stringify(wallet.gate),
+    cursor: wallet.clock.cursor,
+    visitStart: wallet.clock.visitStart,
+    gapEnd: wallet.clock.gapEnd,
+    handled: wallet.handled ? 1 : 0,
+    wokeAt: wallet.wokeAt,
+    sleptAt: wallet.sleptAt,
+    updatedAt: Date.now(),
+  }
 }
 
-function agentCount(): number {
-  const count = Number(process.env.AGENT_COUNT ?? 8)
-  if (!Number.isInteger(count) || count < 1 || count > 40) return 8
+async function enrollDue(wallets: Map<string, LiveWallet>, chainId: number, now: number, flow: FlowFile, fail: (message: string) => void) {
+  const due = [...wallets.values()].filter((wallet) => wallet.online && !wallet.enrolled && wallet.nextEnroll <= now)
+  await pool(due, swarmConfig.runner.enrollWidth, async (wallet) => {
+    const seed = seedMicros(wallet.index, swarmConfig.bank)
+    const issued = Date.now()
+    const account = privateKeyToAccount(wallet.privateKey)
+    const signature = await account.signMessage({ message: botEnrollMessage(chainId, wallet.address, issued, seed) })
+    const response = await api("/api/agents/enroll", {
+      method: "POST",
+      body: JSON.stringify({ address: wallet.address, signature, issued, seedMicros: seed }),
+    })
+    const body = response.body as { balanceMicros?: number; seeded?: boolean; error?: string } | null
+    if (!response.ok || !body || typeof body.balanceMicros !== "number") {
+      wallet.nextEnroll = Date.now() + 5_000
+      fail(body?.error ?? "Enroll failed")
+      return
+    }
+    if (body.seeded) flow.seedMicros += seed
+    wallet.enrolled = true
+    wallet.bankroll = body.balanceMicros
+    wallet.dirty = true
+  })
+}
+
+async function applySettled(
+  db: ReturnType<typeof openSwarm>,
+  wallets: Map<string, LiveWallet>,
+  book: Book,
+  readCursor: () => number,
+  writeCursor: (value: number) => void,
+) {
+  let cursor = readCursor()
+  for (const settled of book.settled) {
+    if (settled.id <= cursor) continue
+    const ours = stakesFor(db, settled.id)
+    if (ours.length > 0) {
+      const outcome = replayPayouts({
+        ours,
+        poolUpMicros: settled.poolUpMicros,
+        poolDownMicros: settled.poolDownMicros,
+        strike: settled.strike,
+        settle: settled.settle,
+        feeBps: feeBps(),
+        voided: settled.resolution === "void",
+      })
+      const payouts = outcome.payouts.filter((payout) => payout.address !== "other")
+      const balances = await fetchBalances(payouts.map((payout) => payout.address))
+      const byAddress = new Map(balances.map((row) => [row.address, row.balanceMicros]))
+      for (const payout of payouts) {
+        const wallet = wallets.get(payout.address)
+        if (!wallet) continue
+        const audited = byAddress.get(payout.address)
+        wallet.bankroll = audited ?? wallet.bankroll + payout.payoutMicros
+        if (outcome.resolution === "paid") {
+          const won = payout.payoutMicros > 0
+          wallet.gate = noteResult(wallet.gate, won, wallet.persona, swarmConfig.persona)
+          if (won) wallet.wins += 1
+          else wallet.losses += 1
+        }
+        wallet.dirty = true
+      }
+    }
+    cursor = settled.id
+  }
+  writeCursor(cursor)
+}
+
+async function postOrders(
+  db: ReturnType<typeof openSwarm>,
+  pending: Pending,
+  wallets: Map<string, LiveWallet>,
+  flow: FlowFile,
+  fail: (message: string) => void,
+): Promise<{ done: boolean; count: number; up: number; down: number; stakes: number[] }> {
+  let count = 0
+  let up = 0
+  let down = 0
+  const stakes: number[] = []
+  const accepted: { address: string; side: Side; stakeMicros: number }[] = []
+  while (pending.sent < pending.orders.length) {
+    if (Date.now() >= pending.endsAt - 150) return { done: false, count, up, down, stakes }
+    const part = pending.orders.slice(pending.sent, pending.sent + swarmConfig.runner.betChunk)
+    const response = await api("/api/agents/bets", { method: "POST", body: JSON.stringify({ orders: part }) })
+    const body = response.body as { error?: string; results?: { address: string; ok: boolean; error?: string }[] } | null
+    if (!response.ok || !body?.results) {
+      fail(body?.error ?? "Bet chunk failed")
+      if (body?.error === "Betting is closed" || body?.error === "Price feed is delayed") return { done: true, count, up, down, stakes }
+      return { done: false, count, up, down, stakes }
+    }
+    for (const result of body.results) {
+      if (!result.ok) continue
+      const order = part.find((item) => item.address === result.address)
+      const wallet = wallets.get(result.address)
+      if (!order || !wallet) continue
+      wallet.bankroll -= order.stakeMicros
+      wallet.lastSide = order.side
+      wallet.lastStake = order.stakeMicros
+      wallet.lastSkip = null
+      wallet.dirty = true
+      flow.stakeMicros += order.stakeMicros
+      accepted.push(order)
+      count += 1
+      stakes.push(order.stakeMicros)
+      if (order.side === "up") up += order.stakeMicros
+      else down += order.stakeMicros
+    }
+    pending.sent += part.length
+  }
+  if (accepted.length > 0) saveStakes(db, pending.roundId, accepted)
+  return { done: true, count, up, down, stakes }
+}
+
+async function audit(wallets: Map<string, LiveWallet>, cursor: number, setCursor: (value: number) => void) {
+  const enrolled = [...wallets.values()].filter((wallet) => wallet.enrolled)
+  if (enrolled.length === 0) return
+  const start = cursor >= enrolled.length ? 0 : cursor
+  const slice = enrolled.slice(start, start + swarmConfig.runner.auditSlice)
+  const balances = await fetchBalances(slice.map((wallet) => wallet.address))
+  for (const row of balances) {
+    const wallet = wallets.get(row.address)
+    if (!wallet) continue
+    wallet.bankroll = row.balanceMicros
+    wallet.dirty = true
+  }
+  const next = start + slice.length
+  setCursor(next >= enrolled.length ? 0 : next)
+}
+
+async function bankPass(wallets: Map<string, LiveWallet>, flow: FlowFile, fail: (message: string) => void) {
+  for (const wallet of wallets.values()) {
+    if (!wallet.enrolled) continue
+    const action = bankAction(wallet.bankroll, wallet.index, swarmConfig.bank, wallet.handled)
+    if (action.kind === "none") {
+      if (wallet.handled) {
+        wallet.handled = false
+        wallet.dirty = true
+      }
+      continue
+    }
+    if (action.kind === "mint") {
+      const response = await api("/api/agents/resurrect", {
+        method: "POST",
+        body: JSON.stringify({ address: wallet.address, amountMicros: action.amountMicros }),
+      })
+      const body = response.body as { balanceMicros?: number; error?: string } | null
+      if (!response.ok || typeof body?.balanceMicros !== "number") {
+        fail(body?.error ?? "Floor mint failed")
+        continue
+      }
+      wallet.bankroll = body.balanceMicros
+      wallet.handled = true
+      wallet.dirty = true
+      flow.mintMicros += action.amountMicros
+      continue
+    }
+    const response = await api("/api/agents/burn", {
+      method: "POST",
+      body: JSON.stringify({ address: wallet.address, amountMicros: action.amountMicros }),
+    })
+    const body = response.body as { you?: { balanceMicros?: number }; error?: string } | null
+    if (!response.ok || typeof body?.you?.balanceMicros !== "number") {
+      fail(body?.error ?? "Burn failed")
+      continue
+    }
+    wallet.bankroll = body.you.balanceMicros
+    wallet.handled = true
+    wallet.dirty = true
+    flow.burnMicros += action.amountMicros
+  }
+}
+
+async function fetchBalances(addresses: string[]): Promise<{ address: string; balanceMicros: number }[]> {
+  const out: { address: string; balanceMicros: number }[] = []
+  for (let index = 0; index < addresses.length; index += swarmConfig.runner.auditSlice) {
+    const slice = addresses.slice(index, index + swarmConfig.runner.auditSlice)
+    if (slice.length === 0) continue
+    const response = await api(`/api/agents/balances?addresses=${slice.join(",")}`)
+    const body = response.body as { balances?: { address: string; balanceMicros: number }[] } | null
+    if (response.ok && body?.balances) out.push(...body.balances)
+  }
+  return out
+}
+
+async function fetchBook(since: number): Promise<Book | null> {
+  const response = await api(`/api/agents/book?since=${since}&tail=${swarmConfig.runner.tapeTailMs}`)
+  if (!response.ok || !response.body) return null
+  const body = response.body as Partial<Book>
+  if (typeof body.joinId !== "number" || !Array.isArray(body.tape) || !Array.isArray(body.settled)) return null
+  return body as Book
+}
+
+async function api(path: string, init?: RequestInit): Promise<{ ok: boolean; body: unknown }> {
+  try {
+    const response = await fetch(`${root}${path}`, {
+      ...init,
+      headers: {
+        "content-type": "application/json",
+        "x-agent-secret": process.env.AGENT_SECRET ?? "",
+        ...(init?.headers ?? {}),
+      },
+    })
+    const body = await response.json().catch(() => null)
+    return { ok: response.ok, body }
+  } catch (error) {
+    return { ok: false, body: { error: error instanceof Error ? error.message : "The book is unreachable" } }
+  }
+}
+
+function pointsOf(tape: { t: number; price: string }[], now: number): PrintPoint[] {
+  const out: PrintPoint[] = []
+  for (const point of tape) {
+    const price = Number(point.price)
+    if (!Number.isFinite(price)) continue
+    if (point.t > now) continue
+    out.push({ t: point.t, price })
+  }
+  return out
+}
+
+function directorTape(points: PrintPoint[]): TapeStats {
+  if (points.length < 2) return { absReturn: 1, volatility: 1 }
+  const first = points[0]!.price
+  const last = points[points.length - 1]!.price
+  const absReturn = first === 0 ? 0 : Math.abs((last - first) / first)
+  let vol = 0
+  for (let index = 1; index < points.length; index++) {
+    const prev = points[index - 1]!.price
+    if (prev !== 0) vol += Math.abs(points[index]!.price - prev) / prev
+  }
+  vol /= points.length - 1
+  return { absReturn, volatility: Math.max(vol, 1e-6) }
+}
+
+function presenceBend(points: PrintPoint[], now: number): { moving: boolean; flat: boolean } {
+  if (points.length < 2) return { moving: false, flat: false }
+  const activity = tapeActivity(points, now, 8_000).activity
+  return { moving: activity >= swarmConfig.persona.movingBand, flat: activity <= swarmConfig.persona.flatBand }
+}
+
+function buildSnapshot(input: {
+  now: number
+  view: DirectorView | null
+  director: DirectorState
+  wallets: Map<string, LiveWallet>
+  flow: FlowFile
+  lastError: string | null
+  book: Book | null
+  bookAt: number | null
+  arrivedMinute: number
+  leftMinute: number
+  trace: number[]
+  windowStats: { roundId: number | null; bets: number; skips: number; up: number; down: number; stakes: number[] }
+}): SwarmSnapshot {
+  const steered = steering()
+  const view = input.view
+  const stakes = percentiles(input.windowStats.stakes)
+  const balances = [...input.wallets.values()].filter((wallet) => wallet.enrolled).map((wallet) => wallet.bankroll)
+  return {
+    at: input.now,
+    manila: manilaClock(input.now, swarmConfig.clock.timeZoneOffsetHours),
+    phase: view?.phase ?? "clock",
+    hour: view?.hour ?? 0,
+    window: view ? [view.window[0], view.window[1]] : [0, 0],
+    online: walletsOnline(input.wallets),
+    spring: input.director.value,
+    target: view?.target ?? input.director.value,
+    arrivedMinute: input.arrivedMinute,
+    leftMinute: input.leftMinute,
+    trace: input.trace,
+    book: {
+      roundId: input.book?.joinId ?? input.windowStats.roundId,
+      upMicros: input.book?.poolUpMicros ?? 0,
+      downMicros: input.book?.poolDownMicros ?? 0,
+      botUpMicros: input.windowStats.up,
+      botDownMicros: input.windowStats.down,
+      bets: input.windowStats.bets,
+      skips: input.windowStats.skips,
+      p50: stakes.p50,
+      p90: stakes.p90,
+    },
+    money: { ...input.flow, histogram: histogram(balances) },
+    lastError: input.lastError,
+    bookLagMs: input.bookAt === null ? null : input.now - input.bookAt,
+    bettingPaused: steered.control.bettingPaused,
+    bleed: steered.control.bleed,
+    mode: steered.pin !== null ? "pin" : steered.control.mode,
+    pin: steered.pin,
+  }
+}
+
+function walletsOnline(wallets: Map<string, LiveWallet>): number {
+  let count = 0
+  for (const wallet of wallets.values()) if (wallet.online) count += 1
   return count
 }
 
-function loadKeys(): StoredKey[] {
+function loadKeyFile(): StoredKey[] {
   if (!existsSync(KEYS_PATH)) return []
-  const parsed = JSON.parse(readFileSync(KEYS_PATH, "utf8")) as StoredKey[]
-  return Array.isArray(parsed) ? parsed : []
+  try {
+    const parsed = JSON.parse(readFileSync(KEYS_PATH, "utf8")) as unknown
+    if (!Array.isArray(parsed)) return []
+    return parsed.flatMap((row) => {
+      if (!row || typeof row !== "object" || typeof (row as { privateKey?: unknown }).privateKey !== "string") return []
+      const key = row as { address?: unknown; privateKey: string }
+      return [{ address: typeof key.address === "string" ? key.address : "", privateKey: key.privateKey as `0x${string}` }]
+    })
+  } catch {
+    return []
+  }
 }
 
-function saveKeys(keys: StoredKey[]) {
+function saveKeyFile(keys: StoredKey[]) {
+  mkdirSync(dirname(KEYS_PATH), { recursive: true })
   writeFileSync(KEYS_PATH, `${JSON.stringify(keys, null, 2)}\n`, { mode: 0o600 })
   chmodSync(KEYS_PATH, 0o600)
 }
 
-function viemChain(chain: ChainConfig) {
-  return chain.id === base.id ? base : baseSepolia
-}
-
-function microsOf(value: bigint): number {
-  return value > BigInt(Number.MAX_SAFE_INTEGER) ? Number.MAX_SAFE_INTEGER : Number(value)
-}
-
-function freshMemory(): Memory {
-  return {
-    error: null,
-    errorStreak: 0,
-    faucetRequestedAt: null,
-    sweepError: false,
-    signInError: false,
-    chainMismatch: false,
-    windowsSinceBet: 0,
-    countedRound: null,
-    roundId: null,
-    side: null,
-    eth: 0n,
-    chainUsdc: 0n,
-    ledgerMicros: 0,
-  }
-}
-
-function memoryFromRow(row: StatusRow): Memory {
-  return {
-    error: row.error,
-    errorStreak: row.errorStreak,
-    faucetRequestedAt: row.faucetRequestedAt,
-    sweepError: row.sweepError,
-    signInError: row.signInError,
-    chainMismatch: row.chainMismatch,
-    windowsSinceBet: row.windowsSinceBet,
-    countedRound: row.countedRound,
-    roundId: row.roundId,
-    side: row.side,
-    eth: BigInt(row.ethWei),
-    chainUsdc: BigInt(row.chainUsdcMicros),
-    ledgerMicros: row.ledgerMicros,
-  }
-}
-
-function failureKind(message: string): "chain" | "signin" | "sweep" | "other" {
-  if (message.startsWith("Server chain")) return "chain"
-  if (message.startsWith("Sign-in") || message === "Sign in again") return "signin"
-  if (message.startsWith("Sweep failed")) return "sweep"
-  return "other"
-}
-
-async function main() {
-  const chain = chainFromEnv(process.env.CHAIN, process.env.USDC_ADDRESS)
-  try {
-    requireSepoliaToken(chain)
-  } catch (error) {
-    console.error(error instanceof Error ? error.message : error)
-    process.exit(1)
-  }
-  const askFaucet = chain.key !== "base-sepolia" && chain.faucet
-  if (!chain.faucet && process.env.AGENT_MAINNET !== "1") {
-    console.error("CHAIN=base spends real USDC. Set AGENT_MAINNET=1 to run agents on mainnet.")
-    process.exit(1)
-  }
-  if (!process.env.AGENT_SECRET) console.error("AGENT_SECRET is unset, so agents keep the one-bet lock")
-
-  const keys = planKeys(loadKeys(), agentCount())
-  saveKeys(keys)
-  const accounts = keys.map((key) => privateKeyToAccount(key.privateKey))
-  console.log(accounts.map((account, index) => `${index} ${account.address}`).join("\n"))
-
-  const transport = http(process.env.RPC_URL || chain.rpc)
-  const publicClient = createPublicClient({ chain: viemChain(chain), transport })
-  const api = process.env.API_URL ?? "http://127.0.0.1:3001"
-  const cdpConfigured = Boolean(process.env.CDP_API_KEY_ID && process.env.CDP_API_KEY_SECRET)
-  const tokens = new Map<string, string>()
-  const betOn = new Map<string, number>()
-  const faucetAt = new Map<string, number>()
-  const once = new Set<string>()
-  const reportOnce = (address: string, message: string) => {
-    const key = `${address}:${message}`
-    if (once.has(key)) return
-    once.add(key)
-    console.error(address, message)
-  }
-  const previous = parseStatus(readJson(STATUS_PATH))
-  const memories = new Map<string, Memory>()
-  for (const row of previous?.rows ?? []) memories.set(row.address, memoryFromRow(row))
-  let applied = previous?.applied ?? []
-
-  async function readUsdc(address: Address): Promise<bigint> {
-    return publicClient.readContract({
-      address: chain.usdc,
-      abi: usdcAbi,
-      functionName: "balanceOf",
-      args: [address],
-    })
-  }
-
-  async function claim(address: Address, token: "eth" | "usdc"): Promise<`0x${string}` | "missing-keys"> {
-    if (!chain.faucet) return "missing-keys"
-    if (!cdpConfigured) return "missing-keys"
-    const { CdpClient } = await import("@coinbase/cdp-sdk")
-    const cdp = new CdpClient()
-    const result = await cdp.evm.requestFaucet({ address, network: "base-sepolia", token })
-    await publicClient.waitForTransactionReceipt({ hash: result.transactionHash })
-    console.log(`${address} faucet ${token} ${result.transactionHash}`)
-    return result.transactionHash
-  }
-
-  async function sweep(account: PrivateKeyAccount, treasury: Address, amount: bigint): Promise<`0x${string}`> {
-    try {
-      const wallet = createWalletClient({ account, chain: viemChain(chain), transport })
-      const hash = await wallet.writeContract({
-        address: chain.usdc,
-        abi: usdcAbi,
-        functionName: "transfer",
-        args: [treasury, amount],
-      })
-      await publicClient.waitForTransactionReceipt({ hash })
-      console.log(`${account.address} deposited ${hash}`)
-      return hash
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      throw new Error(message.startsWith("Sweep failed") ? message : `Sweep failed: ${message}`)
+async function pool<T>(items: T[], width: number, job: (item: T) => Promise<void>) {
+  let cursor = 0
+  const workers = Array.from({ length: Math.min(width, items.length) }, async () => {
+    while (cursor < items.length) {
+      const item = items[cursor]
+      cursor += 1
+      if (item === undefined) return
+      await job(item)
     }
-  }
+  })
+  await Promise.all(workers)
+}
 
-  async function session(account: PrivateKeyAccount): Promise<string> {
-    const cached = tokens.get(account.address)
-    if (cached) return cached
-    const issued = Date.now()
-    const signature = await account.signMessage({ message: loginMessage(chain.id, account.address, issued) })
-    const response = await fetch(`${api}/api/session`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        address: account.address,
-        signature,
-        issued,
-        botSecret: process.env.AGENT_SECRET,
-      }),
-    })
-    const body = (await response.json()) as { token?: string; error?: string }
-    if (!response.ok || !body.token) {
-      const detail = body.error ?? "no token"
-      throw new Error(detail.startsWith("Sign-in") ? detail : `Sign-in failed: ${detail}`)
-    }
-    tokens.set(account.address, body.token)
-    return body.token
-  }
-
-  async function getState(token: string): Promise<State> {
-    const response = await fetch(`${api}/api/state`, { headers: { authorization: `Bearer ${token}` } })
-    if (response.status === 401) throw new Error("Sign in again")
-    if (!response.ok) throw new Error("State failed")
-    return (await response.json()) as State
-  }
-
-  async function step(
-    index: number,
-    account: PrivateKeyAccount,
-    paused: boolean,
-    faucetNow: boolean,
-    flow: WalletFlow,
-    memory: Memory,
-  ): Promise<{ memory: Memory; flow: WalletFlow; faucetHandled: boolean }> {
-    let next = memory
-    let current = flow
-    let faucetHandled = false
-    let eth = memory.eth
-    let chainUsdc = memory.chainUsdc
-    let ledgerMicros = memory.ledgerMicros
-    let roundId = memory.roundId
-    let side = memory.side
-    let observedRound = false
-    try {
-      eth = await publicClient.getBalance({ address: account.address })
-      chainUsdc = await readUsdc(account.address)
-      let need = needsFaucet(askFaucet, eth, chainUsdc)
-      current = seedChain(current, account.address, microsOf(chainUsdc))
-      const waited = Date.now() - (faucetAt.get(account.address) ?? 0)
-      const short = need.eth || need.usdc
-      if (!paused && faucetNow && !short) faucetHandled = true
-      if (!paused && short && (faucetNow || waited > FAUCET_WAIT_MS)) {
-        faucetAt.set(account.address, Date.now())
-        faucetHandled = true
-        let loggedMissing = false
-        const noteMissing = () => {
-          if (loggedMissing) return
-          loggedMissing = true
-          reportOnce(account.address, "CDP keys missing")
-        }
-        if (need.eth) {
-          const hash = await claim(account.address, "eth")
-          if (hash === "missing-keys") noteMissing()
-          else {
-            eth = await publicClient.getBalance({ address: account.address })
-            next = { ...next, faucetRequestedAt: Date.now() }
-          }
-        }
-        if (need.usdc) {
-          const before = chainUsdc
-          const hash = await claim(account.address, "usdc")
-          if (hash === "missing-keys") noteMissing()
-          else {
-            chainUsdc = await readUsdc(account.address)
-            if (chainUsdc > before) {
-              current = applyFlow(current, [{ key: `faucet:${hash}`, direction: "in", micros: microsOf(chainUsdc - before) }])
-            }
-            next = { ...next, faucetRequestedAt: Date.now() }
-          }
-        }
-      }
-
-      need = needsFaucet(askFaucet, eth, chainUsdc)
-      if (!need.eth && !need.usdc) next = { ...next, faucetRequestedAt: null }
-
-      const token = await session(account)
-      const state = await getState(token)
-      if (state.config.chainId !== chain.id) {
-        throw new Error(`Server chain ${state.config.chainId} does not match ${chain.key}`)
-      }
-      ledgerMicros = state.you?.balanceMicros ?? 0
-      current = noteLedger(current, account.address, ledgerMicros, String(state.board.join?.id ?? "none"))
-      const joinId = state.board.join?.id
-      roundId = joinId ?? null
-      observedRound = true
-      if (!paused && chain.key !== "base-sepolia" && chainUsdc >= ONE_USDC) {
-        const amount = chainUsdc
-        const hash = await sweep(account, state.config.treasury, amount)
-        current = applyFlow(current, [{ key: `sweep:${hash}`, direction: "out", micros: microsOf(amount) }])
-        chainUsdc = 0n
-      }
-      const spendable = state.you?.balanceMicros ?? 0
-      let roundHandled = joinId !== undefined && betOn.get(account.address) === joinId
-      if (roundHandled) side = sideFor(index, joinId!, account.address)
-      if (!paused && joinId !== undefined && spendable >= USDC && !roundHandled) {
-        const picked = sideFor(index, joinId, account.address)
-        const response = await fetch(`${api}/api/bets`, {
-          method: "POST",
-          headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
-          body: JSON.stringify({ side: picked, stake: "1" }),
-        })
-        if (response.status === 401) {
-          tokens.delete(account.address)
-          throw new Error("Sign in again")
-        }
-        const body = (await response.json()) as { error?: string }
-        if (!response.ok) {
-          if (body.error === "You are already on the other side") {
-            betOn.set(account.address, joinId)
-            roundHandled = true
-            side = picked === "up" ? "down" : "up"
-          } else {
-            throw new Error(body.error ?? "Bet failed")
-          }
-        } else {
-          betOn.set(account.address, joinId)
-          roundHandled = true
-          side = picked
-          current = applyFlow(current, [{ key: `bet:${account.address.toLowerCase()}:${joinId}`, direction: "out", micros: USDC }])
-        }
-      }
-      const windows = nextWindowsSinceBet(
-        { windowsSinceBet: next.windowsSinceBet, countedRound: next.countedRound },
-        roundId,
-        spendable,
-        roundHandled,
-        paused,
-      )
-      const cleared = !paused || next.signInError || next.chainMismatch
-      next = {
-        ...next,
-        ...windows,
-        error: cleared ? null : next.error,
-        errorStreak: cleared ? 0 : next.errorStreak,
-        sweepError: paused ? next.sweepError : false,
-        signInError: false,
-        chainMismatch: false,
-        roundId,
-        side: roundHandled ? side : null,
-        eth,
-        chainUsdc,
-        ledgerMicros,
-      }
-      return { memory: next, flow: current, faucetHandled }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      const kind = failureKind(message)
-      const streak = nextErrorStreak({ error: next.error, streak: next.errorStreak }, message)
-      if (streak.streak === 1) console.error(account.address, message)
-      if (kind === "signin") tokens.delete(account.address)
-      const windows = observedRound
-        ? nextWindowsSinceBet(
-            { windowsSinceBet: next.windowsSinceBet, countedRound: next.countedRound },
-            roundId,
-            ledgerMicros,
-            false,
-            paused,
-          )
-        : { windowsSinceBet: next.windowsSinceBet, countedRound: next.countedRound }
-      return {
-        memory: {
-          ...next,
-          ...windows,
-          error: streak.error,
-          errorStreak: streak.streak,
-          sweepError: kind === "sweep",
-          signInError: kind === "signin",
-          chainMismatch: kind === "chain",
-          eth,
-          chainUsdc,
-          ledgerMicros,
-          roundId,
-          side,
-        },
-        flow: current,
-        faucetHandled,
-      }
-    }
-  }
-
-  function publish(rows: StatusRow[], flows: FlowFile) {
-    writeJsonAtomic(STATUS_PATH, { updatedAt: Date.now(), chain: chain.key, rows, applied })
-    writeJsonAtomic(FLOW_PATH, flows)
-  }
-
-  function view(index: number, account: PrivateKeyAccount, flow: WalletFlow, paused: boolean, now: number): StatusRow {
-    const memory = memories.get(account.address) ?? freshMemory()
-    const need = needsFaucet(askFaucet, memory.eth, memory.chainUsdc)
-    return statusRow({
-      index,
-      address: account.address,
-      ethWei: memory.eth,
-      chainUsdcMicros: memory.chainUsdc,
-      ledgerMicros: memory.ledgerMicros,
-      inflowMicros: flow.inflowMicros,
-      outflowMicros: flow.outflowMicros,
-      paused,
-      needsFaucet: need.eth || need.usdc,
-      error: memory.error,
-      errorStreak: memory.errorStreak,
-      cdpConfigured,
-      faucetRequestedAt: memory.faucetRequestedAt,
-      now,
-      sweepError: memory.sweepError,
-      signInError: memory.signInError,
-      chainMismatch: memory.chainMismatch,
-      windowsSinceBet: memory.windowsSinceBet,
-      countedRound: memory.countedRound,
-      roundId: memory.roundId,
-      side: memory.side,
-    })
-  }
-
-  for (;;) {
-    const control = parseControl(readJson(CONTROL_PATH))
-    const flows = parseFlow(readJson(FLOW_PATH))
-    const queue = pendingOneShots(control, applied)
-    const done: string[] = []
-    const now = Date.now()
-    const rows = accounts.map((account, index) =>
-      view(index, account, flows[account.address.toLowerCase()] ?? emptyFlow(), control.paused.includes(account.address.toLowerCase()), now),
-    )
-    publish(rows, flows)
-
-    for (let index = 0; index < accounts.length; index++) {
-      const account = accounts[index]!
-      const key = account.address.toLowerCase()
-      const paused = control.paused.includes(key)
-      for (const command of queue) {
-        if (command.action === "relogin" && command.address === key) {
-          tokens.delete(account.address)
-          done.push(command.id)
-        }
-      }
-      const faucetNow = queue.some((command) => command.action === "faucet" && command.address === key)
-      const memory = memories.get(account.address) ?? freshMemory()
-      const result = await step(index, account, paused, faucetNow, flows[key] ?? emptyFlow(), memory)
-      if (result.faucetHandled) {
-        for (const command of queue) {
-          if (command.action === "faucet" && command.address === key) done.push(command.id)
-        }
-      }
-      memories.set(account.address, result.memory)
-      flows[key] = result.flow
-      const fresh = done.filter((id) => !applied.includes(id))
-      applied = [...applied, ...fresh].slice(-100)
-      rows[index] = view(index, account, result.flow, paused, Date.now())
-      publish(rows, flows)
-    }
-
-    await Bun.sleep(1_000)
-  }
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 if (import.meta.main) await main()

@@ -78,9 +78,10 @@ async function grantOnce(
 }
 
 function due(address: string, now: number, intervalMs: number): boolean {
-  const row = getDb().query("SELECT grant_at FROM users WHERE address = ?").get(address) as
-    | { grant_at: number | null }
+  const row = getDb().query("SELECT grant_at, is_bot FROM users WHERE address = ?").get(address) as
+    | { grant_at: number | null; is_bot: number }
     | null
+  if (row?.is_bot === 1) return false
   return grantDue(row?.grant_at ?? null, now, intervalMs)
 }
 

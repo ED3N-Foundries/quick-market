@@ -20,6 +20,7 @@ import { credit, withdraw, youFor, type You } from "./rounds"
 const CONFIRMATIONS = 3n
 const LOG_RANGE = 199n
 const ZERO = "0x0000000000000000000000000000000000000000"
+export const DEAD = "0x000000000000000000000000000000000000dEaD" as Address
 const transferEvent = parseAbiItem("event Transfer(address indexed from, address indexed to, uint256 value)")
 
 type WithdrawRow = {
@@ -273,6 +274,126 @@ function withdrawRow(id: string): WithdrawRow | null {
   return (getDb().query("SELECT * FROM withdrawals WHERE id = ?").get(id) as WithdrawRow | null) ?? null
 }
 
+type BurnRow = {
+  id: string
+  address: string
+  amount_micros: number
+  tx_hash: string | null
+  raw_tx: string | null
+  status: string
+}
+
+export function holdBurn(address: string, amountMicros: number): { ok: true; id: string } | { ok: false; error: string } {
+  const who = normalizeAddress(address)
+  if (!who) return { ok: false, error: "Address is invalid" }
+  if (!Number.isSafeInteger(amountMicros) || amountMicros <= 0) return { ok: false, error: "Amount is invalid" }
+  const id = crypto.randomUUID()
+  try {
+    const tx = getDb().transaction(() => {
+      const row = getDb().query("SELECT balance_micros, is_bot FROM users WHERE address = ?").get(who) as
+        | { balance_micros: number; is_bot: number }
+        | null
+      if (!row || row.is_bot !== 1) throw new Error("Not a bot")
+      if (amountMicros > row.balance_micros) throw new Error("Insufficient balance")
+      getDb().query("UPDATE users SET balance_micros = balance_micros - ? WHERE address = ?").run(amountMicros, who)
+      getDb()
+        .query(
+          `INSERT INTO burns (id, address, amount_micros, tx_hash, raw_tx, status, created_at)
+           VALUES (?, ?, ?, NULL, NULL, 'pending', ?)`,
+        )
+        .run(id, who, amountMicros, Date.now())
+    })
+    tx()
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Burn failed"
+    if (message === "Not a bot" || message === "Insufficient balance") return { ok: false, error: message }
+    throw error
+  }
+  return { ok: true, id }
+}
+
+export function refundBurn(id: string) {
+  const tx = getDb().transaction(() => {
+    const row = burnRow(id)
+    if (!row || row.status !== "pending") return
+    const added = credit(row.address, row.amount_micros)
+    if (!added.ok) throw new Error(added.error)
+    getDb().query("UPDATE burns SET status = 'refunded' WHERE id = ? AND status = 'pending'").run(id)
+  })
+  tx()
+}
+
+export function markBurned(id: string, txHash: string) {
+  getDb().query("UPDATE burns SET status = 'burned', tx_hash = ? WHERE id = ? AND status = 'pending'").run(txHash, id)
+}
+
+function burnRow(id: string): BurnRow | null {
+  return (getDb().query("SELECT * FROM burns WHERE id = ?").get(id) as BurnRow | null) ?? null
+}
+
+export async function submitBurn(id: string): Promise<{ ok: true; txHash: string } | { ok: false; error: string }> {
+  const row = burnRow(id)
+  if (!row || row.status !== "pending") return { ok: false, error: "Burn is not pending" }
+  if (!row.raw_tx || !row.tx_hash) {
+    try {
+      const raw = await signedTransfer(DEAD, BigInt(row.amount_micros))
+      const hash = keccak256(raw)
+      getDb().query("UPDATE burns SET raw_tx = ?, tx_hash = ? WHERE id = ? AND status = 'pending'").run(raw, hash, id)
+    } catch (error) {
+      if (!(error instanceof TreasuryShort)) console.error(error)
+      refundBurn(id)
+      return { ok: false, error: treasuryFaultMessage(error, chainFromEnv(process.env.CHAIN, process.env.USDC_ADDRESS).name) }
+    }
+  }
+  return finishBurn(id)
+}
+
+export function requestBurn(
+  address: string,
+  amountMicros: number,
+): Promise<{ ok: true; txHash: string } | { ok: false; error: string }> {
+  return enqueue(async () => {
+    const held = holdBurn(address, amountMicros)
+    if (!held.ok) return held
+    return submitBurn(held.id)
+  })
+}
+
+export async function resumeBurns() {
+  const rows = getDb()
+    .query("SELECT id, raw_tx, created_at FROM burns WHERE status = 'pending' ORDER BY created_at ASC")
+    .all() as { id: string; raw_tx: string | null; created_at: number }[]
+  for (const row of rows) {
+    if (!row.raw_tx) {
+      if (Date.now() - row.created_at > 120_000) refundBurn(row.id)
+      continue
+    }
+    await enqueue(() => finishBurn(row.id))
+  }
+}
+
+async function finishBurn(id: string): Promise<{ ok: true; txHash: string } | { ok: false; error: string }> {
+  const row = burnRow(id)
+  if (!row) return { ok: false, error: "Burn failed" }
+  if (row.status === "burned" && row.tx_hash) return { ok: true, txHash: row.tx_hash }
+  if (row.status !== "pending" || !row.raw_tx || !row.tx_hash) return { ok: false, error: "Burn failed" }
+  const { publicClient, walletClient } = clients()
+  const hash = row.tx_hash as Hash
+  try {
+    await broadcast(publicClient, walletClient, row.raw_tx as Hex, hash)
+    const receipt = await publicClient.waitForTransactionReceipt({ hash, timeout: 30_000 })
+    if (receipt.status === "reverted") {
+      refundBurn(id)
+      return { ok: false, error: "Burn reverted" }
+    }
+    markBurned(id, hash)
+    return { ok: true, txHash: hash }
+  } catch (error) {
+    console.error(error)
+    return { ok: false, error: "Burn is pending" }
+  }
+}
+
 let polling = false
 
 export function startCustody() {
@@ -285,6 +406,7 @@ export function startCustody() {
     Promise.all([
       pollDeposits(publicClient, chain, account.address).catch((error) => console.error(error)),
       resumeWithdrawals().catch((error) => console.error(error)),
+      resumeBurns().catch((error) => console.error(error)),
     ]).finally(() => {
       polling = false
     })

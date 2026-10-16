@@ -39,7 +39,14 @@ export type Band = {
   playersDown: number
 }
 
-export type PoolCard = Band & { tray: TrayRow[] }
+export type BotSummary = {
+  upCount: number
+  downCount: number
+  upMicros: number
+  downMicros: number
+}
+
+export type PoolCard = Band & { tray: TrayRow[]; botSummary?: BotSummary }
 
 export type Board = {
   blockStart: number

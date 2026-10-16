@@ -85,6 +85,10 @@ function randomToken(): string {
   return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("")
 }
 
+export function agentAuthorized(header: string | null): boolean {
+  return botSecretOk(header)
+}
+
 function botSecretOk(given: unknown): boolean {
   const expected = process.env.AGENT_SECRET ?? ""
   if (!expected || typeof given !== "string" || given.length !== expected.length) return false

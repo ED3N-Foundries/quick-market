@@ -1,11 +1,23 @@
 # Agents
 
-`bun run agent` runs the wallets. On Base Sepolia each wallet receives the same quick-market USDC grant as a person, once every two minutes, then bets 1 on each open window. It does not call the Coinbase faucet or sweep. `AGENT_COUNT` is 1 to 40, default 8. `AGENT_SECRET` marks the session as a bot. `CHAIN=base` does nothing unless `AGENT_MAINNET=1`. On mainnet a wallet that holds USDC sweeps it to the treasury before betting.
+`bun run agent` is one Bun process for the whole swarm. It follows Asia/Manila (UTC+8, no daylight saving). The preference window is 300–600 wallets from 02:00 to 07:00, eases up through the morning, wanders inside 3,000–6,000 from 17:00 to 23:00, and eases back overnight. The live count chases that window and can trail it by minutes. Wallets sleep when the room shrinks. Their keys stay.
 
-`bun run agents` is the dashboard. Start the agent first. The agent writes `agent/status.json` and `agent/flow.json`. The dashboard writes `agent/control.json`. Those files are gitignored. Closing the dashboard leaves the agent running.
+Each wallet bets for itself. Stakes are uneven cents, usually a few dollars. A balance under $3 is refilled into a small pocket. A balance over $1,000 is burned down into a pocket between $80 and $600. The burn is a transfer of qmUSDC to the dead address. Bots do not take the human grant.
 
-Keys: ↑↓ or j/k select a wallet, p pauses or resumes it, P pauses or resumes every wallet, f asks the faucet once when that wallet is short, s signs it in again, q closes the dashboard. A paused wallet does not claim, sweep, or bet.
+`SWARM_PIN` pins the online count and bypasses the clock floor, which is how a 30-wallet check runs. Unset, the process follows the clock. The swarm refuses `CHAIN=base`. Real USDC is out of this mode. Sepolia agents do not call the CDP faucet and do not sweep. The ledger is the bankroll.
 
-The header shows how many wallets are paused or stuck, ledger USDC, inflow, and outflow. Inflow is faucet USDC and ledger credits. Outflow is sweeps to the treasury and accepted stakes. Totals start from the balance the agent first sees, then add each later receipt once.
+`AGENT_SECRET` is required. The runner signs each wallet in once through `POST /api/agents/enroll`.
 
-A row is stuck when the CDP keys are missing, a faucet receipt left the wallet short for two minutes, a sweep or sign-in failed, the server chain does not match, the same error happens three times, or the ledger has at least 1 USDC and three windows pass with no bet.
+Edit `agent/config.ts`. That file is the schedule, the minds, the stake shape, and the runner batch sizes. `agent/control.json` only steers a running swarm: follow the clock, hold off-peak, hold peak, pin a count, pause betting, or freeze mints and burns.
+
+`bun run agents` is the dashboard. It reads `agent/swarm.json` and `agent/swarm.sqlite`. It does not open `data/quick-market.sqlite`. Closing it leaves the runner up. A non-interactive run prints one page from `agent/status.json` and `agent/flow.json`.
+
+Keys:
+
+- `1` crowd, `2` book, `3` money, `4` roster, `5` one wallet
+- `j` / `k` move
+- `c` follow the clock, `o` hold off-peak, `e` hold peak
+- `[` / `]` step the pin by one, `-` / `=` step it by ten
+- `b` pause or resume swarm betting, `p` pause or resume the selected wallet
+- `m` bleed on or off, `f` cycle the roster filter
+- `q` closes the dashboard

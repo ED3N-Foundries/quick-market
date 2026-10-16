@@ -1,0 +1,315 @@
+export const USDC = 1_000_000
+
+export type Range = readonly [number, number]
+
+export type TapeStats = {
+  absReturn: number
+  volatility: number
+}
+
+export type ClockConfig = {
+  timeZoneOffsetHours: number
+  windowWidth: number
+  floor: number
+  ceiling: number
+  smoothTime: number
+  perSecond: number
+  offPeak: { fromHour: number; toHour: number; box: Range }
+  rise: { fromHour: number; toHour: number; fromCenter: number; toCenter: number }
+  peak: { fromHour: number; toHour: number; box: Range }
+  decline: { fromHour: number; toHour: number; toCenter: number }
+  noise: {
+    slow: number
+    fast: number
+    interest: number
+    slowHours: number
+    fastHours: number
+    octaves: number
+    lacunarity: number
+    gain: number
+  }
+}
+
+export type PresenceConfig = {
+  chronotypeHours: number
+  hysteresis: number
+  visitMinMs: number
+  visitMaxMs: number
+  gapMinMs: number
+  gapMaxMs: number
+  offHoursStretch: number
+  tapeStretch: number
+  tapeShrink: number
+  jitterMs: number
+  moodMs: number
+  almostMs: number
+  backfillMs: number
+  offHoursFloor: number
+  herdWindowMs: number
+  herdDecayMs: number
+  herdCap: number
+  herdSimilarityHours: number
+  earlyVisitMs: number
+}
+
+export type BankConfig = {
+  floorMicros: number
+  capMicros: number
+  seedMinMicros: number
+  seedMaxMicros: number
+  refillMinMicros: number
+  refillMaxMicros: number
+  burnMinMicros: number
+  burnMaxMicros: number
+}
+
+export type MindName = "tape" | "fade" | "price" | "restless"
+
+export type PersonaConfig = {
+  shares: Record<MindName, number>
+  secondRate: number
+  secondWeight: number
+  lookbackMinMs: number
+  lookbackMaxMs: number
+  slowLookbackMs: number
+  edgeMin: number
+  edgeMax: number
+  restlessEdge: number
+  kellyMin: number
+  kellyMax: number
+  shareMin: number
+  shareMax: number
+  restlessShare: number
+  noiseMin: number
+  noiseMax: number
+  restlessNoise: number
+  tempoMin: number
+  tempoMax: number
+  restlessTempoMin: number
+  restlessTempoMax: number
+  burstMin: number
+  burstMax: number
+  burstFire: number
+  hotScale: number
+  flatScale: number
+  scaleMin: number
+  scaleMax: number
+  movingBand: number
+  flatBand: number
+  herdBand: number
+  herdWeight: number
+  memory: number
+  memoryStep: number
+  looseRate: number
+  gateFire: number
+}
+
+export type StakeConfig = {
+  smallMin: number
+  smallMax: number
+  midMax: number
+  smallMass: number
+  midMass: number
+  offsetMinCents: number
+  offsetMaxCents: number
+  restlessMax: number
+}
+
+export type RunnerConfig = {
+  enrollWidth: number
+  betChunk: number
+  orderCap: number
+  auditSlice: number
+  auditEveryMs: number
+  bankEveryMs: number
+  snapshotEveryMs: number
+  tapeTailMs: number
+  presenceTickMs: number
+  keyCap: number
+}
+
+export type SwarmConfig = {
+  clock: ClockConfig
+  presence: PresenceConfig
+  bank: BankConfig
+  persona: PersonaConfig
+  stake: StakeConfig
+  runner: RunnerConfig
+}
+
+export const swarmConfig: SwarmConfig = {
+  clock: {
+    timeZoneOffsetHours: 8,
+    windowWidth: 300,
+    floor: 300,
+    ceiling: 6_000,
+    smoothTime: 180,
+    perSecond: 30,
+    offPeak: { fromHour: 2, toHour: 7, box: [300, 600] },
+    rise: { fromHour: 7, toHour: 17, fromCenter: 450, toCenter: 3_150 },
+    peak: { fromHour: 17, toHour: 23, box: [3_000, 6_000] },
+    decline: { fromHour: 23, toHour: 2, toCenter: 450 },
+    noise: {
+      slow: 0.72,
+      fast: 0.2,
+      interest: 0.08,
+      slowHours: 0.15,
+      fastHours: 1.7,
+      octaves: 4,
+      lacunarity: 2,
+      gain: 0.5,
+    },
+  },
+  presence: {
+    chronotypeHours: 2,
+    hysteresis: 40,
+    visitMinMs: 3 * 60_000,
+    visitMaxMs: 90 * 60_000,
+    gapMinMs: 12 * 60_000,
+    gapMaxMs: 5 * 60 * 60_000,
+    offHoursStretch: 2.6,
+    tapeStretch: 0.22,
+    tapeShrink: 0.28,
+    jitterMs: 90_000,
+    moodMs: 18 * 60_000,
+    almostMs: 4 * 60_000,
+    backfillMs: 12 * 60_000,
+    offHoursFloor: 0.2,
+    herdWindowMs: 60_000,
+    herdDecayMs: 3 * 60_000,
+    herdCap: 4,
+    herdSimilarityHours: 0.75,
+    earlyVisitMs: 90_000,
+  },
+  bank: {
+    floorMicros: 3 * USDC,
+    capMicros: 1_000 * USDC,
+    seedMinMicros: 8 * USDC,
+    seedMaxMicros: 250 * USDC,
+    refillMinMicros: 6 * USDC,
+    refillMaxMicros: 24 * USDC,
+    burnMinMicros: 80 * USDC,
+    burnMaxMicros: 600 * USDC,
+  },
+  persona: {
+    shares: { tape: 0.45, fade: 0.25, price: 0.2, restless: 0.1 },
+    secondRate: 0.2,
+    secondWeight: 0.16,
+    lookbackMinMs: 2_000,
+    lookbackMaxMs: 12_000,
+    slowLookbackMs: 90_000,
+    edgeMin: 0.012,
+    edgeMax: 0.06,
+    restlessEdge: 0.001,
+    kellyMin: 0.2,
+    kellyMax: 0.55,
+    shareMin: 0.01,
+    shareMax: 0.08,
+    restlessShare: 0.02,
+    noiseMin: 0.05,
+    noiseMax: 0.18,
+    restlessNoise: 0.9,
+    tempoMin: 8,
+    tempoMax: 36,
+    restlessTempoMin: 3,
+    restlessTempoMax: 9,
+    burstMin: 1,
+    burstMax: 3,
+    burstFire: 0.58,
+    hotScale: 0.84,
+    flatScale: 4.8,
+    scaleMin: 0.4,
+    scaleMax: 6,
+    movingBand: 0.55,
+    flatBand: 0.18,
+    herdBand: 0.04,
+    herdWeight: 0.12,
+    memory: 32,
+    memoryStep: 0.004,
+    looseRate: 0.15,
+    gateFire: 0.86,
+  },
+  stake: {
+    smallMin: 1,
+    smallMax: 8,
+    midMax: 40,
+    smallMass: 0.78,
+    midMass: 0.18,
+    offsetMinCents: 3,
+    offsetMaxCents: 40,
+    restlessMax: 8,
+  },
+  runner: {
+    enrollWidth: 16,
+    betChunk: 200,
+    orderCap: 800,
+    auditSlice: 200,
+    auditEveryMs: 4_000,
+    bankEveryMs: 5_000,
+    snapshotEveryMs: 250,
+    tapeTailMs: 90_000,
+    presenceTickMs: 1_000,
+    keyCap: 6_000,
+  },
+}
+
+function rangeOk(range: Range, label: string): string | null {
+  if (!(range[0] < range[1])) return `${label} has its low end second`
+  return null
+}
+
+export function checkConfig(config: SwarmConfig): string | null {
+  const shares = Object.values(config.persona.shares)
+  const shareSum = shares.reduce((sum, share) => sum + share, 0)
+  if (Math.abs(shareSum - 1) > 1e-6) return "Mind shares must sum to 1"
+  if (shares.some((share) => share < 0)) return "Mind shares must be positive"
+
+  const pairs: [number, number, string][] = [
+    [config.clock.offPeak.box[0], config.clock.offPeak.box[1], "Off-peak box"],
+    [config.clock.peak.box[0], config.clock.peak.box[1], "Peak box"],
+    [config.clock.rise.fromCenter, config.clock.rise.toCenter, "Morning rise"],
+    [config.presence.visitMinMs, config.presence.visitMaxMs, "Visit length"],
+    [config.presence.gapMinMs, config.presence.gapMaxMs, "Visit gap"],
+    [config.bank.seedMinMicros, config.bank.seedMaxMicros, "Seed"],
+    [config.bank.refillMinMicros, config.bank.refillMaxMicros, "Refill pocket"],
+    [config.bank.burnMinMicros, config.bank.burnMaxMicros, "Burn pocket"],
+    [config.persona.lookbackMinMs, config.persona.lookbackMaxMs, "Lookback"],
+    [config.persona.edgeMin, config.persona.edgeMax, "Edge"],
+    [config.persona.kellyMin, config.persona.kellyMax, "Kelly"],
+    [config.persona.shareMin, config.persona.shareMax, "Bankroll share"],
+    [config.persona.noiseMin, config.persona.noiseMax, "Noise"],
+    [config.persona.tempoMin, config.persona.tempoMax, "Tempo"],
+    [config.persona.restlessTempoMin, config.persona.restlessTempoMax, "Restless tempo"],
+    [config.persona.burstMin, config.persona.burstMax, "Burst"],
+    [config.persona.scaleMin, config.persona.scaleMax, "Gap scale"],
+    [config.stake.smallMin, config.stake.smallMax, "Small stakes"],
+    [config.stake.smallMax, config.stake.midMax, "Mid stakes"],
+    [config.stake.offsetMinCents, config.stake.offsetMaxCents, "Cent offset"],
+  ]
+  for (const [low, high, label] of pairs) {
+    if (!(low < high)) return `${label} has its low end second`
+  }
+
+  const { clock } = config
+  if (clock.offPeak.box[1] - clock.offPeak.box[0] !== clock.windowWidth) return "Off-peak window does not match its box"
+  if (clock.offPeak.box[0] < clock.floor || clock.offPeak.box[1] > clock.ceiling) return "Off-peak window leaves its legal box"
+  const half = clock.windowWidth / 2
+  if (clock.rise.fromCenter - half < clock.floor || clock.rise.toCenter + half > clock.ceiling) {
+    return "Morning window leaves its legal box"
+  }
+  if (clock.peak.box[1] - clock.peak.box[0] <= clock.windowWidth) return "Peak box has no spare room"
+  if (clock.peak.box[0] < clock.floor || clock.peak.box[1] > clock.ceiling) return "Peak window leaves its legal box"
+  if (clock.rise.toCenter !== clock.peak.box[0] + half) return "Morning rise misses the low end of the peak box"
+  if (clock.decline.toCenter - half < clock.floor) return "Decline window leaves its legal box"
+
+  const weights = [clock.noise.slow, clock.noise.fast, clock.noise.interest]
+  if (weights.some((weight) => weight < 0)) return "Noise weights must be positive"
+  if (weights.reduce((sum, weight) => sum + weight, 0) > 1) return "Noise weights do not fit in the spare room"
+
+  const bands = [config.persona.flatBand, config.persona.movingBand, config.persona.herdBand, config.persona.herdWeight]
+  if (bands.some((band) => band < 0 || band > 1)) return "Gate bands must sit inside 0–1"
+  if (!(config.persona.flatBand < config.persona.movingBand)) return "Flat gate sits above the moving gate"
+  if (config.bank.floorMicros >= config.bank.capMicros) return "Bank floor sits on the cap"
+  if (config.runner.keyCap !== clock.ceiling) return "Key cap and the crowd ceiling differ"
+  return rangeOk(clock.offPeak.box, "Off-peak")
+}

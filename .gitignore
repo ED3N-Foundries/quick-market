@@ -11,4 +11,8 @@ agent/keys.json
 agent/status.json
 agent/control.json
 agent/flow.json
+agent/swarm.json
+agent/swarm.sqlite
+agent/swarm.sqlite-wal
+agent/swarm.sqlite-shm
 agent/*.tmp

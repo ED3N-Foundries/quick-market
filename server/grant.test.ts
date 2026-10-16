@@ -1,5 +1,5 @@
 import { beforeEach, expect, test } from "bun:test"
-import { useDatabase } from "./db"
+import { getDb, useDatabase } from "./db"
 import { applyGrant, cutoverAmount, grantDue, grantSettings } from "./grant"
 import { youFor } from "./rounds"
 
@@ -39,6 +39,25 @@ test("a failed mint does not change the balance", async () => {
     }),
   ).rejects.toThrow("rpc down")
   expect(youFor(who)).toBeNull()
+})
+
+test("a bot session does not take the grant", async () => {
+  getDb().query("INSERT INTO users (address, balance_micros, created_at, is_bot) VALUES (?, 0, 0, 1)").run(who)
+  let minted = false
+  const credited = await applyGrant({
+    address: who,
+    now: 0,
+    chainKey: "base-sepolia",
+    amount: 100_000_000,
+    intervalMs: hour,
+    mint: async () => {
+      minted = true
+    },
+  })
+  expect(credited).toBe(false)
+  expect(minted).toBe(false)
+  expect(youFor(who)?.balanceMicros).toBe(0)
+  expect(youFor(who)?.grantAt).toBeNull()
 })
 
 test("Base does not grant", async () => {

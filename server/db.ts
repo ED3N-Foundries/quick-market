@@ -76,6 +76,16 @@ CREATE TABLE IF NOT EXISTS withdrawals (
   created_at INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS burns (
+  id TEXT PRIMARY KEY,
+  address TEXT NOT NULL,
+  amount_micros INTEGER NOT NULL,
+  tx_hash TEXT,
+  raw_tx TEXT,
+  status TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS meta (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL

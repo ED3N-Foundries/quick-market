@@ -2,6 +2,7 @@ import { existsSync } from "node:fs"
 import { join, normalize, sep } from "node:path"
 import { chainFromEnv, moneyLabel, requireSepoliaToken, tokenKind, tokenLabel } from "../shared/chain"
 import { feeBps, marketMs, MIN_STAKE_MICROS, priceSource, viewMs, windowMs, type PriceSource } from "./config"
+import { handleAgents } from "./agents"
 import { mintToTreasury, requestWithdraw, startCustody, treasuryAddress } from "./custody"
 import { getDb } from "./db"
 import { applyGrant, grantSettings } from "./grant"
@@ -9,7 +10,7 @@ import { hub } from "./hub"
 import { parseMicros } from "./money"
 import { startOracle } from "./oracle"
 import { advance, board, feedStatus, listRounds, notePrint, placeBet, roundDetail, tapePoints, youFor, type Side } from "./rounds"
-import { endSession, openSession, readSession } from "./session"
+import { agentAuthorized, endSession, openSession, readSession } from "./session"
 
 let chain: ReturnType<typeof chainFromEnv>
 try {
@@ -199,6 +200,11 @@ async function handle(req: Request): Promise<Response> {
     const result = await requestWithdraw(session.address, amount)
     if (!result.ok) return json({ error: result.error, you: result.you ?? null }, 400)
     return json({ you: result.you, txHash: result.txHash })
+  }
+
+  if (url.pathname.startsWith("/api/agents/")) {
+    if (!agentAuthorized(req.headers.get("x-agent-secret"))) return json({ error: "Unauthorized" }, 401)
+    return handleAgents(req, url, { mint: mintToTreasury, publish: () => publishRound() })
   }
 
   if (req.method === "POST" && url.pathname === "/api/bets") {

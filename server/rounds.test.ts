@@ -152,6 +152,48 @@ test("a print a few seconds before the close still settles, and a tie is a push"
   expect(youFor(you)?.balanceMicros).toBe(10_000 * USDC)
 })
 
+test("the tray keeps humans and summarizes bots", () => {
+  const human = address(30)
+  grant(human, 20 * USDC)
+  notePrint(print("100", T - 20))
+  advance(T + 10)
+  expect(placeBet({ address: human, side: "up", stakeMicros: 2 * USDC, now: T + 100 }).ok).toBe(true)
+  for (let index = 0; index < 6; index++) {
+    const bot = address(40 + index)
+    grant(bot, 10 * USDC)
+    getDb().query("UPDATE users SET is_bot = 1 WHERE address = ?").run(bot)
+    expect(placeBet({ address: bot, side: index % 2 === 0 ? "up" : "down", stakeMicros: USDC, now: T + 120 + index }).ok).toBe(true)
+  }
+  const card = board(T + 200).join
+  expect(card?.tray.filter((row) => !row.bot)).toHaveLength(1)
+  expect(card?.tray.filter((row) => row.bot).length).toBeLessThanOrEqual(4)
+  expect((card?.botSummary.upCount ?? 0) + (card?.botSummary.downCount ?? 0)).toBe(6)
+  expect(card?.playersUp).toBe(1 + 3)
+  expect(card?.playersDown).toBe(3)
+})
+
+test("settlement credits a bot and leaves that payout off the public event", () => {
+  const you = address(21)
+  const bot = address(22)
+  grant(you, 100 * USDC)
+  grant(bot, 100 * USDC)
+  getDb().query("UPDATE users SET is_bot = 1 WHERE address = ?").run(bot)
+  notePrint(print("100.00", T - 20))
+  advance(T + 10)
+  expect(placeBet({ address: bot, side: "up", stakeMicros: 50 * USDC, now: T + 100 }).ok).toBe(true)
+  expect(placeBet({ address: you, side: "down", stakeMicros: 50 * USDC, now: T + 110 }).ok).toBe(true)
+  notePrint(print("100.00", T + WINDOW - 20))
+  advance(T + WINDOW + 5)
+  notePrint(print("101.00", T + WINDOW + MARKET - 4_000))
+  const closed = advance(T + WINDOW + MARKET + 5)
+  const event = closed.settled.find((row) => row.roundId === MARKET_ID)
+  expect(event?.winningSide).toBe("up")
+  expect(event?.payouts.some((payout) => payout.address === bot)).toBe(false)
+  expect(event?.balances.some((row) => row.address === bot)).toBe(false)
+  expect(event?.payouts.find((payout) => payout.address === you)?.payoutMicros).toBe(0)
+  expect(youFor(bot)!.balanceMicros).toBeGreaterThan(100 * USDC - 50 * USDC)
+})
+
 test("a bot can bet the next window while a bet is still open", () => {
   const bot = address(11)
   grant(bot, 10 * USDC)
