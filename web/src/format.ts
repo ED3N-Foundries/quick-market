@@ -186,6 +186,67 @@ export function isTestnetChain(chainId: number): boolean {
   return chainId === 84532
 }
 
+export type GrantTiming = { due: boolean; waitMs: number }
+
+/** Whether the hourly testnet grant can be claimed, and how long remains when it cannot. */
+export function grantTiming(grantAt: number | null, now: number, intervalMs: number): GrantTiming {
+  if (!Number.isSafeInteger(intervalMs) || intervalMs <= 0) return { due: false, waitMs: 0 }
+  if (grantAt === null || !Number.isSafeInteger(grantAt)) return { due: true, waitMs: 0 }
+  const waitMs = grantAt + intervalMs - now
+  if (waitMs <= 0) return { due: true, waitMs: 0 }
+  return { due: false, waitMs }
+}
+
+/** Whole dollars when the amount is a whole token, otherwise the cent display. */
+export function formatGrantDollars(micros: number): string {
+  if (!Number.isSafeInteger(micros) || micros <= 0) return formatMoney(0)
+  if (micros % 1_000_000 === 0) return `$${(micros / 1_000_000).toLocaleString("en-US")}`
+  return formatMoney(micros)
+}
+
+export function formatGrantWait(waitMs: number): string {
+  const totalSeconds = Math.max(1, Math.ceil(Math.max(0, waitMs) / 1000))
+  if (totalSeconds >= 3600) {
+    const hours = Math.floor(totalSeconds / 3600)
+    const minutes = Math.floor((totalSeconds % 3600) / 60)
+    return minutes ? `${hours}h ${minutes}m` : `${hours}h`
+  }
+  if (totalSeconds >= 60) return `${Math.ceil(totalSeconds / 60)}m`
+  return `${totalSeconds}s`
+}
+
+export function grantPace(intervalMs: number): string {
+  if (intervalMs === 3_600_000) return "once an hour"
+  if (intervalMs > 0 && intervalMs % 3_600_000 === 0) {
+    const hours = intervalMs / 3_600_000
+    return `once every ${hours} hours`
+  }
+  if (intervalMs > 0 && intervalMs % 60_000 === 0) {
+    const minutes = intervalMs / 60_000
+    return minutes === 1 ? "once a minute" : `once every ${minutes} minutes`
+  }
+  const seconds = Math.max(1, Math.round(intervalMs / 1000))
+  return `once every ${seconds}s`
+}
+
+export function grantButtonLabel(timing: GrantTiming, amountMicros: number): string {
+  if (timing.due) return `Grant ${formatGrantDollars(amountMicros)}`
+  return `Next grant in ${formatGrantWait(timing.waitMs)}`
+}
+
+export function grantStatusLabel(timing: GrantTiming, amountMicros: number): string {
+  if (timing.due) return `Grant ready · ${formatGrantDollars(amountMicros)}`
+  return `Next grant in ${formatGrantWait(timing.waitMs)}`
+}
+
+export function grantNextLabel(timing: GrantTiming): string {
+  return timing.due ? "Ready" : formatGrantWait(timing.waitMs)
+}
+
+export function grantSentence(amountMicros: number, intervalMs: number): string {
+  return `Quick Market adds ${formatGrantDollars(amountMicros)} QM USDC to this balance ${grantPace(intervalMs)}. The wallet is not charged, and Phantom is not involved.`
+}
+
 export function chainMenuLabel(chainId: number, chainName = "Base"): string {
   if (isTestnetChain(chainId)) return "Base Sepolia · Testnet"
   return chainName || "Base"

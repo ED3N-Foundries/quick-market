@@ -53,6 +53,18 @@ export function moneyLabel(chain: Pick<ChainConfig, "key">): string {
   return chain.key === "base" ? "Circle USDC" : "quick-market USDC"
 }
 
+export type TokenKind = "circle" | "qm"
+
+/** Which coin mark the wallet shows. Mainnet is Circle USDC. Testnet is quick-market USDC. */
+export function tokenKind(chain: Pick<ChainConfig, "key">): TokenKind {
+  return chain.key === "base" ? "circle" : "qm"
+}
+
+/** Short name next to the coin mark. */
+export function tokenLabel(chain: Pick<ChainConfig, "key">): string {
+  return chain.key === "base" ? "USDC" : "QM USDC"
+}
+
 /** The running Sepolia server and agent must watch quick-market USDC, never Circle's contract. */
 export function requireSepoliaToken(chain: ChainConfig) {
   if (chain.key !== "base-sepolia") return

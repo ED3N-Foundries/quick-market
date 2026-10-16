@@ -20,6 +20,7 @@ test("a grant is 100, skips the same hour, and does not bank missed hours", asyn
   expect(await applyGrant({ ...input, now: hour - 1 })).toBe(false)
   expect(await applyGrant({ ...input, now: 5 * hour })).toBe(true)
   expect(youFor(who)?.balanceMicros).toBe(200_000_000)
+  expect(youFor(who)?.grantAt).toBe(5 * hour)
   expect(minted).toEqual([100_000_000, 100_000_000])
 })
 

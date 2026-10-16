@@ -13,6 +13,10 @@ export type Config = {
   usdc: string
   treasury: string
   moneyLabel: string
+  tokenKind: "circle" | "qm"
+  tokenLabel: string
+  grantMicros: number
+  grantIntervalMs: number
 }
 
 export type TrayRow = {
@@ -52,6 +56,7 @@ export type OpenBet = { roundId: number; side: Side; stakeMicros: number }
 export type You = {
   address: string
   balanceMicros: number
+  grantAt: number | null
   openBets: OpenBet[]
 }
 

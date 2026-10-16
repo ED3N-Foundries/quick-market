@@ -12,6 +12,12 @@ import {
   formatPrice,
   formatPriceDelta,
   formatSigned,
+  formatGrantDollars,
+  grantButtonLabel,
+  grantNextLabel,
+  grantSentence,
+  grantStatusLabel,
+  grantTiming,
   isTestnetChain,
   microsToInput,
   moneyShare,
@@ -140,6 +146,8 @@ export function App() {
   const downQuote = focus ? quoteDollar("down", focus.poolUpMicros, focus.poolDownMicros, market.config.feeBps) : "—"
   const ticketWin = held ? payoutMicros(held.stakeMicros, held.side, focus?.poolUpMicros ?? 0, focus?.poolDownMicros ?? 0, market.config.feeBps) : 0
   const fundMicros = parseAmountMicros(fundAmount)
+  const testnet = market.config.tokenKind === "qm" || isTestnetChain(market.config.chainId)
+  const grantWait = grantTiming(you?.grantAt ?? null, now, market.config.grantIntervalMs)
   const wrongChain = session.address !== null && session.chainId !== market.config.chainId
   const needsSignIn = session.address !== null && !wrongChain && Boolean(session.signError && !session.token)
   const walletTone = wrongChain || needsSignIn || session.signing ? "warn" : "ok"
@@ -254,7 +262,7 @@ export function App() {
         />
         <div className="stake">
           <div className="balance-label">
-            <span>{market.config.moneyLabel}</span>
+            <TokenBadge kind={testnet ? "qm" : "circle"} />
             {session.address ? (
               <span className="who" ref={walletMenuRef}>
                 <button
@@ -277,8 +285,8 @@ export function App() {
                 <button
                   type="button"
                   className="fund-plus"
-                  aria-label={`Deposit ${market.config.moneyLabel}`}
-                  title={`Deposit ${market.config.moneyLabel}`}
+                  aria-label={testnet ? "Grant QM USDC" : "Deposit USDC"}
+                  title={testnet ? "Grant" : "Deposit"}
                   onClick={() => {
                     setWalletMenuOpen(false)
                     setFundError(null)
@@ -295,6 +303,7 @@ export function App() {
                       {session.address}
                     </p>
                     <div className="wallet-menu-net">
+                      <TokenBadge kind={testnet ? "qm" : "circle"} />
                       <span className="net-badge" data-testnet={isTestnetChain(market.config.chainId) ? "1" : "0"}>
                         {session.signing ? "Signing…" : chainMenuLabel(market.config.chainId, market.config.chainName)}
                       </span>
@@ -349,8 +358,8 @@ export function App() {
             )}
           </div>
           <BalanceFigure micros={you?.balanceMicros ?? null} />
-          {isTestnetChain(market.config.chainId) && (
-            <p className="note money-note">This balance is quick-market USDC, not Circle USDC.</p>
+          {testnet && market.config.grantIntervalMs > 0 && (
+            <p className="grant-status">{grantStatusLabel(grantWait, market.config.grantMicros)}</p>
           )}
           {held && (
             <div className="ticket">
@@ -391,16 +400,39 @@ export function App() {
           onBet={() => market.place("down", stake)}
         />
       </section>
-      {fundOpen && (
+      {fundOpen && testnet && (
+        <GrantOverlay
+          chainId={market.config.chainId}
+          chainName={market.config.chainName}
+          grantMicros={market.config.grantMicros}
+          grantIntervalMs={market.config.grantIntervalMs}
+          grantAt={you?.grantAt ?? null}
+          now={now}
+          granting={funding}
+          error={fundError}
+          onClose={() => setFundOpen(false)}
+          onGrant={() => {
+            setFunding(true)
+            setFundError(null)
+            void market.claimGrant().then((result) => {
+              setFunding(false)
+              if (!result.ok) {
+                setFundError(result.message)
+                return
+              }
+              if (result.granted) setFundOpen(false)
+            })
+          }}
+        />
+      )}
+      {fundOpen && !testnet && (
         <FundOverlay
           address={session.address}
           label={session.label}
           treasury={market.config.treasury}
           chainId={market.config.chainId}
           chainName={market.config.chainName}
-          moneyLabel={market.config.moneyLabel}
           amount={fundAmount}
-          funding={funding}
           disabled={!session.token || funding}
           customDisabled={!session.token || funding || fundMicros === null}
           error={fundError}
@@ -443,7 +475,7 @@ export function App() {
                 setFunding(false)
                 setFundPhase("idle")
                 setFundError(
-                  `Transfer sent. The ${market.config.moneyLabel} is in the treasury and will be credited when the server is back.`,
+                  `Transfer sent. The ${market.config.tokenLabel} is in the treasury and will be credited when the server is back.`,
                 )
               }
             })
@@ -452,12 +484,12 @@ export function App() {
       )}
       {withdrawOpen && (
         <WithdrawOverlay
+          testnet={testnet}
           address={session.address}
           label={session.label}
           balanceMicros={you?.balanceMicros ?? 0}
           chainId={market.config.chainId}
           chainName={market.config.chainName}
-          moneyLabel={market.config.moneyLabel}
           amount={withdrawAmount}
           pending={withdrawing}
           error={withdrawError}
@@ -801,6 +833,51 @@ function PriceReadout({
   )
 }
 
+function TokenBadge({ kind }: { kind: "circle" | "qm" }) {
+  const title =
+    kind === "circle"
+      ? "Circle USDC on Base"
+      : "Quick Market USDC on Base Sepolia. Play money, not Circle USDC."
+  return (
+    <span className="token-badge" data-kind={kind} title={title}>
+      {kind === "circle" ? <CircleMark /> : <QmMark />}
+      <span>{kind === "circle" ? "USDC" : "QM USDC"}</span>
+    </span>
+  )
+}
+
+function CircleMark() {
+  return (
+    <svg className="token-mark" viewBox="0 0 16 16" aria-hidden="true">
+      <circle cx="8" cy="8" r="8" fill="#2775CA" />
+      <path
+        fill="#fff"
+        d="M8.55 3.15v.85c.92.15 1.58.68 1.58 1.55 0 .95-.72 1.42-1.82 1.68l-.18.04v2.05c.4-.08.82-.28 1.1-.58l.58.62c-.44.48-1.1.78-1.76.9v.86H7.15v-.64c-1.08-.18-1.82-.8-1.82-1.72 0-1 .78-1.48 1.82-1.7V5.05c-.36.1-.7.28-.9.55l-.56-.6c.4-.44 1.02-.72 1.46-.86V3.15h1.4zm-.2 2.2v1.55c.48-.12.76-.35.76-.72 0-.34-.24-.6-.76-.83zm-.82 3.75c0 .38.26.64.82.76v-1.55c-.52.12-.82.36-.82.79z"
+      />
+    </svg>
+  )
+}
+
+function QmMark() {
+  return (
+    <svg className="token-mark" viewBox="0 0 16 16" aria-hidden="true">
+      <circle cx="8" cy="8" r="8" fill="var(--warn)" />
+      <text
+        x="8"
+        y="8.55"
+        textAnchor="middle"
+        dominantBaseline="middle"
+        fill="#1a1404"
+        fontSize="6.2"
+        fontWeight="800"
+        fontFamily="ui-sans-serif, system-ui, sans-serif"
+      >
+        QM
+      </text>
+    </svg>
+  )
+}
+
 function AddressWithHover({ address, label }: { address: string; label?: string | null }) {
   return (
     <span className="addr-hover" title={address}>
@@ -822,9 +899,7 @@ function FundOverlay({
   treasury,
   chainId,
   chainName,
-  moneyLabel,
   amount,
-  funding,
   disabled,
   customDisabled,
   error,
@@ -839,9 +914,7 @@ function FundOverlay({
   treasury: string
   chainId: number
   chainName: string
-  moneyLabel: string
   amount: string
-  funding: boolean
   disabled: boolean
   customDisabled: boolean
   error: string | null
@@ -860,11 +933,12 @@ function FundOverlay({
   }, [onClose])
   return (
     <div className="fund-back" onClick={onClose}>
-      <div className="fund-overlay" role="dialog" aria-modal="true" aria-label={`Deposit ${moneyLabel}`} onClick={(event) => event.stopPropagation()}>
+      <div className="fund-overlay" role="dialog" aria-modal="true" aria-label="Deposit USDC" onClick={(event) => event.stopPropagation()}>
         <header className="overlay-head">
           <div>
-            <h2>Deposit {moneyLabel}</h2>
-            <span className="net-badge" data-testnet={isTestnetChain(chainId) ? "1" : "0"}>
+            <h2>Deposit</h2>
+            <TokenBadge kind="circle" />
+            <span className="net-badge" data-testnet="0">
               {chainBadgeText(chainId, chainName)}
             </span>
           </div>
@@ -873,10 +947,6 @@ function FundOverlay({
           </button>
         </header>
         <dl className="overlay-meta">
-          <div>
-            <dt>Asset</dt>
-            <dd>{moneyLabel}</dd>
-          </div>
           <div>
             <dt>Network</dt>
             <dd>{chainNetworkLabel(chainId, chainName)}</dd>
@@ -913,11 +983,6 @@ function FundOverlay({
             {phase === "phantom" ? "Confirm in Phantom…" : phase === "confirming" || phase === "pending" ? "Waiting for 3 confirmations…" : "Deposit"}
           </button>
         </div>
-        {isTestnetChain(chainId) && (
-          <p className="note">
-            This transfer is {moneyLabel}, not Circle USDC. Phantom warns on localhost and Base Sepolia.
-          </p>
-        )}
         {phase === "phantom" && <p className="note pending-note">Confirm in Phantom…</p>}
         {phase === "confirming" && <p className="note pending-note">Waiting for 3 confirmations…</p>}
         {phase === "pending" && (
@@ -931,13 +996,79 @@ function FundOverlay({
   )
 }
 
+function GrantOverlay({
+  chainId,
+  chainName,
+  grantMicros,
+  grantIntervalMs,
+  grantAt,
+  now,
+  granting,
+  error,
+  onClose,
+  onGrant,
+}: {
+  chainId: number
+  chainName: string
+  grantMicros: number
+  grantIntervalMs: number
+  grantAt: number | null
+  now: number
+  granting: boolean
+  error: string | null
+  onClose: () => void
+  onGrant: () => void
+}) {
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose()
+    }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [onClose])
+  const timing = grantTiming(grantAt, now, grantIntervalMs)
+  return (
+    <div className="fund-back" onClick={onClose}>
+      <div className="fund-overlay" role="dialog" aria-modal="true" aria-label="Grant QM USDC" onClick={(event) => event.stopPropagation()}>
+        <header className="overlay-head">
+          <div>
+            <h2>Grant</h2>
+            <TokenBadge kind="qm" />
+            <span className="net-badge" data-testnet="1">
+              {chainBadgeText(chainId, chainName)}
+            </span>
+          </div>
+          <button type="button" className="overlay-close" aria-label="Close" onClick={onClose}>
+            ×
+          </button>
+        </header>
+        <p className="note grant-copy">{grantSentence(grantMicros, grantIntervalMs)}</p>
+        <dl className="overlay-meta">
+          <div>
+            <dt>Amount</dt>
+            <dd>{formatGrantDollars(grantMicros)}</dd>
+          </div>
+          <div>
+            <dt>Next</dt>
+            <dd>{grantNextLabel(timing)}</dd>
+          </div>
+        </dl>
+        <button type="button" className="primary grant-submit" onClick={onGrant} disabled={granting || !timing.due}>
+          {granting ? "Granting…" : grantButtonLabel(timing, grantMicros)}
+        </button>
+        {error && <p className="note bad">{error}</p>}
+      </div>
+    </div>
+  )
+}
+
 function WithdrawOverlay({
+  testnet,
   address,
   label,
   balanceMicros,
   chainId,
   chainName,
-  moneyLabel,
   amount,
   pending,
   error,
@@ -946,12 +1077,12 @@ function WithdrawOverlay({
   onClose,
   onSubmit,
 }: {
+  testnet: boolean
   address: string | null
   label: string | null
   balanceMicros: number
   chainId: number
   chainName: string
-  moneyLabel: string
   amount: string
   pending: boolean
   error: string | null
@@ -971,12 +1102,13 @@ function WithdrawOverlay({
   const submitDisabled = pending || parsed === null || parsed > balanceMicros
   return (
     <div className="fund-back" onClick={onClose}>
-      <div className="fund-overlay" role="dialog" aria-modal="true" aria-label={`Withdraw ${moneyLabel}`} onClick={(event) => event.stopPropagation()}>
+      <div className="fund-overlay" role="dialog" aria-modal="true" aria-label={testnet ? "Withdraw QM USDC" : "Withdraw USDC"} onClick={(event) => event.stopPropagation()}>
         <header className="overlay-head">
           <div>
-            <h2>Withdraw {moneyLabel}</h2>
-            <span className="net-badge" data-testnet={isTestnetChain(chainId) ? "1" : "0"}>
-              {moneyLabel} · {isTestnetChain(chainId) ? "Base Sepolia Testnet" : chainName}
+            <h2>Withdraw</h2>
+            <TokenBadge kind={testnet ? "qm" : "circle"} />
+            <span className="net-badge" data-testnet={testnet ? "1" : "0"}>
+              {chainBadgeText(chainId, chainName)}
             </span>
           </div>
           <button type="button" className="overlay-close" aria-label="Close" onClick={onClose}>
@@ -1011,6 +1143,7 @@ function WithdrawOverlay({
             {pending ? "Withdrawing…" : "Withdraw"}
           </button>
         </div>
+        {testnet && <p className="note">Pays QM USDC to your wallet on Base Sepolia.</p>}
         {error && <p className="note bad">{error}</p>}
       </div>
     </div>

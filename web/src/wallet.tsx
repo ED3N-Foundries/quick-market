@@ -15,7 +15,7 @@ import {
   WagmiProvider,
 } from "wagmi"
 import { base, baseSepolia } from "wagmi/chains"
-import { chainFromEnv, moneyLabel, type ChainConfig } from "../../shared/chain"
+import { chainFromEnv, tokenLabel, type ChainConfig } from "../../shared/chain"
 import { loginMessage } from "../../shared/login"
 import { usdcAbi } from "../../shared/usdc"
 import {
@@ -262,7 +262,7 @@ function Bridge({ children }: { children: ReactNode }) {
   })
 
   const chainName = read.chain?.name ?? "Base Sepolia"
-  const asset = read.chain ? moneyLabel(read.chain) : "USDC"
+  const asset = read.chain ? tokenLabel(read.chain) : "USDC"
   const signedIn = matchingSession(readStored(expected), address ?? null, expected)
   const activeToken = signedIn && signedIn.token === token ? token : null
 

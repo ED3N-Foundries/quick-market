@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react"
-import { chainFromEnv, moneyLabel, type ChainConfig } from "../../shared/chain"
+import { chainFromEnv, moneyLabel, tokenKind, tokenLabel, type ChainConfig } from "../../shared/chain"
 import type { TapeChart, TapePoint } from "./chart"
 import type { Board, Config, SettledMessage, Side, You } from "./types"
 
@@ -25,6 +25,10 @@ const defaultConfig: Config = {
   usdc: pageChain.usdc,
   treasury: "",
   moneyLabel: moneyLabel(pageChain),
+  tokenKind: tokenKind(pageChain),
+  tokenLabel: tokenLabel(pageChain),
+  grantMicros: 0,
+  grantIntervalMs: 0,
 }
 
 function headers(token: string | null, json = false): HeadersInit {
@@ -263,6 +267,26 @@ export function useMarket(token: string | null) {
     [],
   )
 
+  const claimGrant = useCallback(async (): Promise<{ ok: true; granted: boolean } | { ok: false; message: string }> => {
+    if (!tokenRef.current) return { ok: false, message: "Sign in to receive a grant." }
+    try {
+      const response = await fetch("/api/grant", {
+        method: "POST",
+        headers: headers(tokenRef.current),
+      })
+      const body = (await response.json().catch(() => null)) as { error?: string; granted?: boolean; you?: You } | null
+      if (body?.you) setYou(body.you)
+      if (response.status === 401) {
+        setUnauthorized(true)
+        return { ok: false, message: "Sign in to receive a grant." }
+      }
+      if (!response.ok) return { ok: false, message: body?.error ?? "The grant did not land. Try again." }
+      return { ok: true, granted: Boolean(body?.granted) }
+    } catch {
+      return { ok: false, message: "Can't reach the market server" }
+    }
+  }, [])
+
   const withdrawWallet = useCallback(async (amount: string): Promise<string | null> => {
     if (!tokenRef.current) return "Connect a wallet first"
     try {
@@ -306,6 +330,7 @@ export function useMarket(token: string | null) {
     offsetRef,
     priceRef,
     place,
+    claimGrant,
     withdrawWallet,
     reload,
     waitForBalance,

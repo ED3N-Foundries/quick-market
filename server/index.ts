@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs"
 import { join, normalize, sep } from "node:path"
-import { chainFromEnv, moneyLabel, requireSepoliaToken } from "../shared/chain"
+import { chainFromEnv, moneyLabel, requireSepoliaToken, tokenKind, tokenLabel } from "../shared/chain"
 import { feeBps, marketMs, MIN_STAKE_MICROS, priceSource, viewMs, windowMs, type PriceSource } from "./config"
 import { mintToTreasury, requestWithdraw, startCustody, treasuryAddress } from "./custody"
 import { getDb } from "./db"
@@ -89,6 +89,7 @@ async function readJson(req: Request) {
 }
 
 function publicConfig() {
+  const grant = chain.key === "base-sepolia" ? grantSettings() : { amount: 0, intervalMs: 0 }
   return {
     windowSeconds: windowMs() / 1000,
     marketSeconds: marketMs() / 1000,
@@ -101,6 +102,10 @@ function publicConfig() {
     usdc: chain.usdc,
     treasury,
     moneyLabel: moneyLabel(chain),
+    tokenKind: tokenKind(chain),
+    tokenLabel: tokenLabel(chain),
+    grantMicros: grant.amount,
+    grantIntervalMs: grant.intervalMs,
   }
 }
 
@@ -161,6 +166,28 @@ async function handle(req: Request): Promise<Response> {
   if (req.method === "DELETE" && url.pathname === "/api/session") {
     endSession(req)
     return json({ ok: true })
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/grant") {
+    if (chain.key !== "base-sepolia") return json({ error: "Grants are only on testnet." }, 400)
+    const session = readSession(req)
+    if (!session.address) return json({ error: "Sign in to receive a grant." }, 401)
+    const now = Date.now()
+    const settings = grantSettings()
+    try {
+      const granted = await applyGrant({
+        address: session.address,
+        now,
+        chainKey: chain.key,
+        amount: settings.amount,
+        intervalMs: settings.intervalMs,
+        mint: mintToTreasury,
+      })
+      return json({ granted, you: youFor(session.address) })
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : error)
+      return json({ error: "The grant did not land. Try again.", you: youFor(session.address) }, 502)
+    }
   }
 
   if (req.method === "POST" && url.pathname === "/api/withdraw") {

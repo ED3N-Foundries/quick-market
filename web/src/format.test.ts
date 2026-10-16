@@ -6,9 +6,15 @@ import {
   extractAccountLabel,
   formatDollarMove,
   formatGainLoss,
+  formatGrantWait,
   formatMoney,
   formatPrice,
   formatPriceDelta,
+  grantButtonLabel,
+  grantNextLabel,
+  grantSentence,
+  grantStatusLabel,
+  grantTiming,
   isTestnetChain,
   parseAmountMicros,
   payoutMicros,
@@ -138,4 +144,30 @@ test("chain and testnet label helpers distinguish Base Sepolia testnet from Base
   expect(chainBadgeText(8453, "Base")).toBe("Base Mainnet")
   expect(chainNetworkLabel(84532, "Base Sepolia")).toBe("Base Sepolia (Testnet)")
   expect(chainNetworkLabel(8453, "Base")).toBe("Base Mainnet")
+})
+
+test("grant timing and labels describe an hourly claim", () => {
+  const hour = 3_600_000
+  const amount = 100_000_000
+  expect(grantTiming(null, 5_000, hour)).toEqual({ due: true, waitMs: 0 })
+  expect(grantTiming(0, hour - 1, hour)).toEqual({ due: false, waitMs: 1 })
+  expect(grantTiming(0, hour, hour)).toEqual({ due: true, waitMs: 0 })
+  expect(grantTiming(0, 0, 0)).toEqual({ due: false, waitMs: 0 })
+  expect(formatGrantWait(23 * 60_000)).toBe("23m")
+  expect(formatGrantWait(42_000)).toBe("42s")
+  expect(formatGrantWait(3_600_000 + 5 * 60_000)).toBe("1h 5m")
+  const ready = grantTiming(null, 0, hour)
+  expect(grantButtonLabel(ready, amount)).toBe("Grant $100")
+  expect(grantStatusLabel(ready, amount)).toBe("Grant ready · $100")
+  expect(grantNextLabel(ready)).toBe("Ready")
+  const waiting = grantTiming(0, 0, hour)
+  expect(grantButtonLabel(waiting, amount)).toBe("Next grant in 1h")
+  expect(grantStatusLabel(waiting, amount)).toBe("Next grant in 1h")
+  expect(grantNextLabel(waiting)).toBe("1h")
+  const soon = grantTiming(0, hour - 23 * 60_000, hour)
+  expect(grantButtonLabel(soon, amount)).toBe("Next grant in 23m")
+  expect(grantStatusLabel(soon, amount)).toBe("Next grant in 23m")
+  expect(grantSentence(amount, hour)).toBe(
+    "Quick Market adds $100 QM USDC to this balance once an hour. The wallet is not charged, and Phantom is not involved.",
+  )
 })

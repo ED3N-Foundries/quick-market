@@ -52,6 +52,7 @@ export type OpenBet = {
 export type You = {
   address: string
   balanceMicros: number
+  grantAt: number | null
   openBets: OpenBet[]
 }
 
@@ -304,11 +305,11 @@ function openBetsFor(address: string): OpenBet[] {
 }
 
 export function youFor(address: string): You | null {
-  const row = getDb().query("SELECT balance_micros FROM users WHERE address = ?").get(address) as
-    | { balance_micros: number }
+  const row = getDb().query("SELECT balance_micros, grant_at FROM users WHERE address = ?").get(address) as
+    | { balance_micros: number; grant_at: number | null }
     | null
   if (!row) return null
-  return { address, balanceMicros: row.balance_micros, openBets: openBetsFor(address) }
+  return { address, balanceMicros: row.balance_micros, grantAt: row.grant_at, openBets: openBetsFor(address) }
 }
 
 export function ensureUser(address: string): You {
