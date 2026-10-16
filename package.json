@@ -10,6 +10,7 @@
     "test": "bun test",
     "build": "vite build",
     "agent": "bun run agent/index.ts",
+    "agents": "bun run agent/dashboard.ts",
     "treasury": "bun run scripts/treasury.ts"
   },
   "dependencies": {

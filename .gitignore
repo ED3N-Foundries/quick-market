@@ -8,3 +8,7 @@ data/*.sqlite-shm
 .env.*
 !.env.example
 agent/keys.json
+agent/status.json
+agent/control.json
+agent/flow.json
+agent/*.tmp
