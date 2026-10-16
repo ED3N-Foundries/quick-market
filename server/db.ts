@@ -7,7 +7,8 @@ CREATE TABLE IF NOT EXISTS users (
   address TEXT PRIMARY KEY,
   balance_micros INTEGER NOT NULL,
   created_at INTEGER NOT NULL,
-  is_bot INTEGER NOT NULL DEFAULT 0
+  is_bot INTEGER NOT NULL DEFAULT 0,
+  grant_at INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS rounds (
@@ -92,6 +93,9 @@ function openDatabase(path: string): Database {
   const columns = db.query("PRAGMA table_info(users)").all() as { name: string }[]
   if (!columns.some((column) => column.name === "is_bot")) {
     db.exec("ALTER TABLE users ADD COLUMN is_bot INTEGER NOT NULL DEFAULT 0")
+  }
+  if (!columns.some((column) => column.name === "grant_at")) {
+    db.exec("ALTER TABLE users ADD COLUMN grant_at INTEGER")
   }
   migrateCustody(db)
   return db

@@ -24,7 +24,7 @@ export async function openSession(input: {
 
   let chainId: number
   try {
-    chainId = chainFromEnv(process.env.CHAIN).id
+    chainId = chainFromEnv(process.env.CHAIN, process.env.USDC_ADDRESS).id
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : "Chain is invalid" }
   }

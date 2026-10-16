@@ -12,6 +12,7 @@ export type DepositCheck = {
   usdcBalance: bigint | null
   ethBalance: bigint | null
   gasWei: bigint | null
+  moneyLabel?: string
 }
 
 export function matchingSession(
@@ -31,7 +32,9 @@ export function depositRefusal(check: DepositCheck): string | null {
   if (!check.signedIn || !check.sameAccount) return "Sign in with this wallet before depositing."
   if (!check.sameChain) return "This page and the server are on different chains."
   if (check.usdcBalance === null || check.ethBalance === null) return "Wallet is not ready"
-  if (check.usdcBalance < BigInt(check.micros)) return `This wallet does not have enough USDC on ${check.chainName}.`
+  if (check.usdcBalance < BigInt(check.micros)) {
+    return `This wallet does not have enough ${check.moneyLabel ?? "USDC"} on ${check.chainName}.`
+  }
   if (check.ethBalance === 0n || (check.gasWei !== null && check.ethBalance < check.gasWei)) {
     return `This wallet needs ${check.chainName} ETH for gas.`
   }
@@ -57,7 +60,7 @@ export function isUnrecognizedChain(error: unknown): boolean {
   return false
 }
 
-export function walletFaultMessage(error: unknown, chainName: string): string {
+export function walletFaultMessage(error: unknown, chainName: string, moneyLabel = "USDC"): string {
   const code = errorCode(error)
   const message = error instanceof Error ? error.message : typeof error === "string" ? error : ""
   const lower = message.toLowerCase()
@@ -66,7 +69,7 @@ export function walletFaultMessage(error: unknown, chainName: string): string {
     return `This wallet needs ${chainName} ETH for gas.`
   }
   if (lower.includes("exceeds balance") || (lower.includes("insufficient") && lower.includes("usdc"))) {
-    return `This wallet does not have enough USDC on ${chainName}.`
+    return `This wallet does not have enough ${moneyLabel} on ${chainName}.`
   }
   const brief = message.split("\n")[0]?.trim() ?? ""
   if (!brief || brief.length > 160) return "Deposit failed"

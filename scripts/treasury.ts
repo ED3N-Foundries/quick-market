@@ -867,7 +867,7 @@ async function main() {
 
   let configured: ChainConfig
   try {
-    configured = chainFromEnv(process.env.CHAIN)
+    configured = chainFromEnv(process.env.CHAIN, process.env.USDC_ADDRESS)
   } catch (error) {
     console.error(error instanceof Error ? error.message : "Unknown CHAIN")
     process.exit(1)

@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react"
-import { chainFromEnv, type ChainConfig } from "../../shared/chain"
+import { chainFromEnv, moneyLabel, type ChainConfig } from "../../shared/chain"
 import type { TapeChart, TapePoint } from "./chart"
 import type { Board, Config, SettledMessage, Side, You } from "./types"
 
 function configuredChain(): ChainConfig {
   try {
-    return chainFromEnv(import.meta.env.CHAIN)
+    return chainFromEnv(import.meta.env.CHAIN, import.meta.env.USDC_ADDRESS)
   } catch {
     return chainFromEnv(undefined)
   }
@@ -24,6 +24,7 @@ const defaultConfig: Config = {
   chainName: pageChain.name,
   usdc: pageChain.usdc,
   treasury: "",
+  moneyLabel: moneyLabel(pageChain),
 }
 
 function headers(token: string | null, json = false): HeadersInit {

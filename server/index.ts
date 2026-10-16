@@ -1,9 +1,10 @@
 import { existsSync } from "node:fs"
 import { join, normalize, sep } from "node:path"
-import { chainFromEnv } from "../shared/chain"
+import { chainFromEnv, moneyLabel, requireSepoliaToken } from "../shared/chain"
 import { feeBps, marketMs, MIN_STAKE_MICROS, priceSource, viewMs, windowMs, type PriceSource } from "./config"
-import { requestWithdraw, startCustody, treasuryAddress } from "./custody"
+import { mintToTreasury, requestWithdraw, startCustody, treasuryAddress } from "./custody"
 import { getDb } from "./db"
+import { applyGrant, grantSettings } from "./grant"
 import { hub } from "./hub"
 import { parseMicros } from "./money"
 import { startOracle } from "./oracle"
@@ -12,7 +13,9 @@ import { endSession, openSession, readSession } from "./session"
 
 let chain: ReturnType<typeof chainFromEnv>
 try {
-  chain = chainFromEnv(process.env.CHAIN)
+  chain = chainFromEnv(process.env.CHAIN, process.env.USDC_ADDRESS)
+  requireSepoliaToken(chain)
+  grantSettings()
 } catch (error) {
   console.error(error instanceof Error ? error.message : error)
   process.exit(1)
@@ -97,6 +100,24 @@ function publicConfig() {
     chainName: chain.name,
     usdc: chain.usdc,
     treasury,
+    moneyLabel: moneyLabel(chain),
+  }
+}
+
+async function grantSignedIn(address: string | null, now: number) {
+  if (!address) return
+  const settings = grantSettings()
+  try {
+    await applyGrant({
+      address,
+      now,
+      chainKey: chain.key,
+      amount: settings.amount,
+      intervalMs: settings.intervalMs,
+      mint: mintToTreasury,
+    })
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : error)
   }
 }
 
@@ -109,6 +130,7 @@ async function handle(req: Request): Promise<Response> {
     const now = Date.now()
     const session = readSession(req, now)
     if (session.rejected) return json({ error: "Sign in again" }, 401)
+    await grantSignedIn(session.address, now)
     return json({
       serverNow: now,
       feed: feedStatus(now),
@@ -131,7 +153,9 @@ async function handle(req: Request): Promise<Response> {
       botSecret: body?.botSecret,
     })
     if (!result.ok) return json({ error: result.error }, 400)
-    return json({ token: result.token, you: result.you })
+    const now = Date.now()
+    await grantSignedIn(result.you.address, now)
+    return json({ token: result.token, you: youFor(result.you.address) })
   }
 
   if (req.method === "DELETE" && url.pathname === "/api/session") {

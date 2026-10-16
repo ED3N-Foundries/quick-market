@@ -17,6 +17,20 @@ test("a deposit credits the sender once", () => {
   expect(youFor(from)?.balanceMicros).toBe(5_000_000)
 })
 
+test("a mint to the treasury is not a deposit", () => {
+  expect(
+    applyDeposit({
+      treasury,
+      txHash: "0xmint",
+      logIndex: 2,
+      from: `0x${"00".repeat(20)}`,
+      to: treasury,
+      amountMicros: 5_000_000,
+    }),
+  ).toBe(false)
+  expect(youFor(`0x${"00".repeat(20)}`)).toBeNull()
+})
+
 test("a transfer to any other address is ignored", () => {
   expect(applyDeposit({ treasury, txHash: "0xdef", logIndex: 1, from, to: `0x${"33".repeat(20)}`, amountMicros: 5_000_000 })).toBe(false)
   expect(youFor(from)).toBeNull()
@@ -64,6 +78,25 @@ test("pollDeposits credits a transfer that landed ahead of the cursor", async ()
   expect(youFor(from)?.balanceMicros).toBe(20_000_000)
   const saved = db.query("SELECT value FROM meta WHERE key = 'deposit_block'").get() as { value: string } | null
   expect(saved?.value).toBe("107")
+})
+
+test("pollDeposits reads only the configured token", async () => {
+  const usdc = `0x${"66".repeat(20)}`
+  getDb().query("INSERT INTO meta (key, value) VALUES ('deposit_block', '1')").run()
+  let seen = ""
+  await pollDeposits(
+    {
+      getBlockNumber: async () => 5n,
+      getLogs: (async (params: { address: string }) => {
+        seen = params.address
+        return []
+      }) as never,
+    },
+    { usdc: usdc as `0x${string}` },
+    treasury as `0x${string}`,
+  )
+  expect(seen.toLowerCase()).toBe(usdc)
+  expect(seen.toLowerCase()).not.toBe("0x036cbd53842c5426634e7929541ec2318f3dcf7e")
 })
 
 test("pollDeposits chunks eth_getLogs into ranges of at most 200 blocks", async () => {

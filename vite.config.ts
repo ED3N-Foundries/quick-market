@@ -3,7 +3,7 @@ import react from "@vitejs/plugin-react"
 
 export default defineConfig({
   root: "web",
-  envPrefix: ["VITE_", "CHAIN"],
+  envPrefix: ["VITE_", "CHAIN", "USDC_ADDRESS"],
   plugins: [react()],
   server: {
     port: 5173,

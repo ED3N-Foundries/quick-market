@@ -15,7 +15,7 @@ import {
   WagmiProvider,
 } from "wagmi"
 import { base, baseSepolia } from "wagmi/chains"
-import { chainFromEnv, type ChainConfig } from "../../shared/chain"
+import { chainFromEnv, moneyLabel, type ChainConfig } from "../../shared/chain"
 import { loginMessage } from "../../shared/login"
 import { usdcAbi } from "../../shared/usdc"
 import {
@@ -69,7 +69,7 @@ const SessionContext = createContext<WalletSession>(missing)
 
 function readChain(): { chain: ChainConfig | null; error: string | null } {
   try {
-    return { chain: chainFromEnv(import.meta.env.CHAIN), error: null }
+    return { chain: chainFromEnv(import.meta.env.CHAIN, import.meta.env.USDC_ADDRESS), error: null }
   } catch (error) {
     return { chain: null, error: error instanceof Error ? error.message : "Chain is invalid" }
   }
@@ -262,6 +262,7 @@ function Bridge({ children }: { children: ReactNode }) {
   })
 
   const chainName = read.chain?.name ?? "Base Sepolia"
+  const asset = read.chain ? moneyLabel(read.chain) : "USDC"
   const signedIn = matchingSession(readStored(expected), address ?? null, expected)
   const activeToken = signedIn && signedIn.token === token ? token : null
 
@@ -351,9 +352,10 @@ function Bridge({ children }: { children: ReactNode }) {
             usdcBalance,
             ethBalance,
             gasWei: null,
+            moneyLabel: asset,
           })
           if (blocked) return { ok: false, message: blocked }
-          if (isCallRevert(error)) return { ok: false, message: walletFaultMessage(error, chainName) }
+          if (isCallRevert(error)) return { ok: false, message: walletFaultMessage(error, chainName, asset) }
         }
         const blocked = depositRefusal({
           micros,
@@ -365,6 +367,7 @@ function Bridge({ children }: { children: ReactNode }) {
           usdcBalance,
           ethBalance,
           gasWei,
+          moneyLabel: asset,
         })
         if (blocked) return { ok: false, message: blocked }
         let hash: `0x${string}` | null = null
@@ -381,10 +384,10 @@ function Bridge({ children }: { children: ReactNode }) {
           return { ok: true, hash, pending: false }
         } catch (error) {
           if (hash) return { ok: true, hash, pending: true }
-          return { ok: false, message: walletFaultMessage(error, chainName) }
+          return { ok: false, message: walletFaultMessage(error, chainName, asset) }
         }
       } catch (error) {
-        return { ok: false, message: walletFaultMessage(error, chainName) }
+        return { ok: false, message: walletFaultMessage(error, chainName, asset) }
       }
     },
   }

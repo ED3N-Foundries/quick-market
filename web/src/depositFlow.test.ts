@@ -33,6 +33,9 @@ test("depositRefusal blocks a short wallet before Phantom opens", () => {
   expect(depositRefusal({ ...ready, serverReachable: false })).toBe("Market server is not running.")
   expect(depositRefusal({ ...ready, sameAccount: false })).toBe("Sign in with this wallet before depositing.")
   expect(depositRefusal({ ...ready, usdcBalance: 1n })).toBe("This wallet does not have enough USDC on Base Sepolia.")
+  expect(depositRefusal({ ...ready, usdcBalance: 1n, moneyLabel: "quick-market USDC" })).toBe(
+    "This wallet does not have enough quick-market USDC on Base Sepolia.",
+  )
   expect(depositRefusal({ ...ready, ethBalance: 0n })).toBe("This wallet needs Base Sepolia ETH for gas.")
   expect(depositRefusal({ ...ready, ethBalance: 1n, gasWei: 50n })).toBe("This wallet needs Base Sepolia ETH for gas.")
 })

@@ -12,6 +12,7 @@ export type Config = {
   chainName: string
   usdc: string
   treasury: string
+  moneyLabel: string
 }
 
 export type TrayRow = {

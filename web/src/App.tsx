@@ -254,7 +254,7 @@ export function App() {
         />
         <div className="stake">
           <div className="balance-label">
-            <span>Spendable</span>
+            <span>{market.config.moneyLabel}</span>
             {session.address ? (
               <span className="who" ref={walletMenuRef}>
                 <button
@@ -277,8 +277,8 @@ export function App() {
                 <button
                   type="button"
                   className="fund-plus"
-                  aria-label="Deposit"
-                  title="Deposit USDC"
+                  aria-label={`Deposit ${market.config.moneyLabel}`}
+                  title={`Deposit ${market.config.moneyLabel}`}
                   onClick={() => {
                     setWalletMenuOpen(false)
                     setFundError(null)
@@ -349,6 +349,9 @@ export function App() {
             )}
           </div>
           <BalanceFigure micros={you?.balanceMicros ?? null} />
+          {isTestnetChain(market.config.chainId) && (
+            <p className="note money-note">This balance is quick-market USDC, not Circle USDC.</p>
+          )}
           {held && (
             <div className="ticket">
               <p className={held.side}>{held.side === "up" ? "▲ Up" : "▼ Down"}</p>
@@ -395,6 +398,7 @@ export function App() {
           treasury={market.config.treasury}
           chainId={market.config.chainId}
           chainName={market.config.chainName}
+          moneyLabel={market.config.moneyLabel}
           amount={fundAmount}
           funding={funding}
           disabled={!session.token || funding}
@@ -438,7 +442,9 @@ export function App() {
               } catch {
                 setFunding(false)
                 setFundPhase("idle")
-                setFundError("Transfer sent. The USDC is in the treasury and will be credited when the server is back.")
+                setFundError(
+                  `Transfer sent. The ${market.config.moneyLabel} is in the treasury and will be credited when the server is back.`,
+                )
               }
             })
           }}
@@ -451,6 +457,7 @@ export function App() {
           balanceMicros={you?.balanceMicros ?? 0}
           chainId={market.config.chainId}
           chainName={market.config.chainName}
+          moneyLabel={market.config.moneyLabel}
           amount={withdrawAmount}
           pending={withdrawing}
           error={withdrawError}
@@ -815,6 +822,7 @@ function FundOverlay({
   treasury,
   chainId,
   chainName,
+  moneyLabel,
   amount,
   funding,
   disabled,
@@ -831,6 +839,7 @@ function FundOverlay({
   treasury: string
   chainId: number
   chainName: string
+  moneyLabel: string
   amount: string
   funding: boolean
   disabled: boolean
@@ -851,10 +860,10 @@ function FundOverlay({
   }, [onClose])
   return (
     <div className="fund-back" onClick={onClose}>
-      <div className="fund-overlay" role="dialog" aria-modal="true" aria-label="Deposit USD" onClick={(event) => event.stopPropagation()}>
+      <div className="fund-overlay" role="dialog" aria-modal="true" aria-label={`Deposit ${moneyLabel}`} onClick={(event) => event.stopPropagation()}>
         <header className="overlay-head">
           <div>
-            <h2>Deposit USD</h2>
+            <h2>Deposit {moneyLabel}</h2>
             <span className="net-badge" data-testnet={isTestnetChain(chainId) ? "1" : "0"}>
               {chainBadgeText(chainId, chainName)}
             </span>
@@ -865,8 +874,8 @@ function FundOverlay({
         </header>
         <dl className="overlay-meta">
           <div>
-            <dt>Import</dt>
-            <dd>USDC (USD on Base)</dd>
+            <dt>Asset</dt>
+            <dd>{moneyLabel}</dd>
           </div>
           <div>
             <dt>Network</dt>
@@ -895,7 +904,7 @@ function FundOverlay({
           <input
             aria-label="Fund amount"
             inputMode="decimal"
-            placeholder="Custom USD amount"
+            placeholder="Custom amount"
             value={amount}
             onChange={(event) => onAmount(event.target.value)}
             disabled={disabled}
@@ -906,7 +915,7 @@ function FundOverlay({
         </div>
         {isTestnetChain(chainId) && (
           <p className="note">
-            Phantom warns on localhost and Base Sepolia. The transaction is a USDC transfer to the treasury address shown above.
+            This transfer is {moneyLabel}, not Circle USDC. Phantom warns on localhost and Base Sepolia.
           </p>
         )}
         {phase === "phantom" && <p className="note pending-note">Confirm in Phantom…</p>}
@@ -928,6 +937,7 @@ function WithdrawOverlay({
   balanceMicros,
   chainId,
   chainName,
+  moneyLabel,
   amount,
   pending,
   error,
@@ -941,6 +951,7 @@ function WithdrawOverlay({
   balanceMicros: number
   chainId: number
   chainName: string
+  moneyLabel: string
   amount: string
   pending: boolean
   error: string | null
@@ -960,12 +971,12 @@ function WithdrawOverlay({
   const submitDisabled = pending || parsed === null || parsed > balanceMicros
   return (
     <div className="fund-back" onClick={onClose}>
-      <div className="fund-overlay" role="dialog" aria-modal="true" aria-label="Withdraw USD" onClick={(event) => event.stopPropagation()}>
+      <div className="fund-overlay" role="dialog" aria-modal="true" aria-label={`Withdraw ${moneyLabel}`} onClick={(event) => event.stopPropagation()}>
         <header className="overlay-head">
           <div>
-            <h2>Withdraw USD</h2>
+            <h2>Withdraw {moneyLabel}</h2>
             <span className="net-badge" data-testnet={isTestnetChain(chainId) ? "1" : "0"}>
-              USDC · {isTestnetChain(chainId) ? "Base Sepolia Testnet" : chainName}
+              {moneyLabel} · {isTestnetChain(chainId) ? "Base Sepolia Testnet" : chainName}
             </span>
           </div>
           <button type="button" className="overlay-close" aria-label="Close" onClick={onClose}>

@@ -12,13 +12,14 @@ import {
 import { privateKeyToAccount, type PrivateKeyAccount } from "viem/accounts"
 import { base, baseSepolia } from "viem/chains"
 import { chainFromEnv, type ChainConfig } from "../shared/chain"
-import { usdcAbi } from "../shared/usdc"
+import { mintAbi, usdcAbi } from "../shared/usdc"
 import { getDb } from "./db"
 import { normalizeAddress } from "./money"
 import { credit, withdraw, youFor, type You } from "./rounds"
 
 const CONFIRMATIONS = 3n
 const LOG_RANGE = 199n
+const ZERO = "0x0000000000000000000000000000000000000000"
 const transferEvent = parseAbiItem("event Transfer(address indexed from, address indexed to, uint256 value)")
 
 type WithdrawRow = {
@@ -69,7 +70,7 @@ export function treasuryFaultMessage(error: unknown, chainName: string): string 
 }
 
 async function signedTransfer(to: Address, amount: bigint): Promise<Hex> {
-  const config = chainFromEnv(process.env.CHAIN)
+  const config = chainFromEnv(process.env.CHAIN, process.env.USDC_ADDRESS)
   const account = treasuryAccount()
   const transport = http(process.env.RPC_URL || config.rpc)
   const data = encodeFunctionData({ abi: usdcAbi, functionName: "transfer", args: [to, amount] })
@@ -94,8 +95,22 @@ async function signedTransfer(to: Address, amount: bigint): Promise<Hex> {
   return account.signTransaction(prepared as Parameters<PrivateKeyAccount["signTransaction"]>[0])
 }
 
+export async function mintToTreasury(amountMicros: number): Promise<void> {
+  if (!Number.isSafeInteger(amountMicros) || amountMicros <= 0) throw new Error("Amount is invalid")
+  const { chain, account, publicClient, walletClient } = clients()
+  const hash = await walletClient.writeContract({
+    address: chain.usdc,
+    abi: mintAbi,
+    functionName: "mint",
+    args: [account.address, BigInt(amountMicros)],
+    gas: 200_000n,
+  })
+  const receipt = await publicClient.waitForTransactionReceipt({ hash })
+  if (receipt.status !== "success") throw new Error(`Mint failed ${hash}`)
+}
+
 function clients() {
-  const chain = chainFromEnv(process.env.CHAIN)
+  const chain = chainFromEnv(process.env.CHAIN, process.env.USDC_ADDRESS)
   const account = treasuryAccount()
   const transport = http(process.env.RPC_URL || chain.rpc)
   const chainDef = chain.id === base.id ? base : baseSepolia
@@ -122,7 +137,7 @@ export function applyDeposit(input: {
   const treasury = normalizeAddress(input.treasury)
   const from = normalizeAddress(input.from)
   const to = normalizeAddress(input.to)
-  if (!treasury || !from || !to || to !== treasury) return false
+  if (!treasury || !from || !to || to !== treasury || from === ZERO) return false
   if (!Number.isSafeInteger(input.amountMicros) || input.amountMicros <= 0) return false
   const now = input.now ?? Date.now()
   const txHash = input.txHash.toLowerCase()
@@ -166,7 +181,7 @@ async function requestWithdrawLocked(
     hash = keccak256(raw)
   } catch (error) {
     if (!(error instanceof TreasuryShort)) console.error(error)
-    return { ok: false, error: treasuryFaultMessage(error, chainFromEnv(process.env.CHAIN).name) }
+    return { ok: false, error: treasuryFaultMessage(error, chainFromEnv(process.env.CHAIN, process.env.USDC_ADDRESS).name) }
   }
 
   const id = crypto.randomUUID()

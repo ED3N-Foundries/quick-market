@@ -3,7 +3,7 @@ import { join } from "node:path"
 import { createPublicClient, createWalletClient, http, type Address } from "viem"
 import { generatePrivateKey, privateKeyToAccount, type PrivateKeyAccount } from "viem/accounts"
 import { base, baseSepolia } from "viem/chains"
-import { chainFromEnv, type ChainConfig } from "../shared/chain"
+import { chainFromEnv, requireSepoliaToken, type ChainConfig } from "../shared/chain"
 import { loginMessage } from "../shared/login"
 import { usdcAbi } from "../shared/usdc"
 import {
@@ -151,7 +151,14 @@ function failureKind(message: string): "chain" | "signin" | "sweep" | "other" {
 }
 
 async function main() {
-  const chain = chainFromEnv(process.env.CHAIN)
+  const chain = chainFromEnv(process.env.CHAIN, process.env.USDC_ADDRESS)
+  try {
+    requireSepoliaToken(chain)
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : error)
+    process.exit(1)
+  }
+  const askFaucet = chain.key !== "base-sepolia" && chain.faucet
   if (!chain.faucet && process.env.AGENT_MAINNET !== "1") {
     console.error("CHAIN=base spends real USDC. Set AGENT_MAINNET=1 to run agents on mainnet.")
     process.exit(1)
@@ -271,7 +278,7 @@ async function main() {
     try {
       eth = await publicClient.getBalance({ address: account.address })
       chainUsdc = await readUsdc(account.address)
-      let need = needsFaucet(chain.faucet, eth, chainUsdc)
+      let need = needsFaucet(askFaucet, eth, chainUsdc)
       current = seedChain(current, account.address, microsOf(chainUsdc))
       const waited = Date.now() - (faucetAt.get(account.address) ?? 0)
       const short = need.eth || need.usdc
@@ -307,7 +314,7 @@ async function main() {
         }
       }
 
-      need = needsFaucet(chain.faucet, eth, chainUsdc)
+      need = needsFaucet(askFaucet, eth, chainUsdc)
       if (!need.eth && !need.usdc) next = { ...next, faucetRequestedAt: null }
 
       const token = await session(account)
@@ -320,7 +327,7 @@ async function main() {
       const joinId = state.board.join?.id
       roundId = joinId ?? null
       observedRound = true
-      if (!paused && chainUsdc >= ONE_USDC) {
+      if (!paused && chain.key !== "base-sepolia" && chainUsdc >= ONE_USDC) {
         const amount = chainUsdc
         const hash = await sweep(account, state.config.treasury, amount)
         current = applyFlow(current, [{ key: `sweep:${hash}`, direction: "out", micros: microsOf(amount) }])
@@ -422,7 +429,7 @@ async function main() {
 
   function view(index: number, account: PrivateKeyAccount, flow: WalletFlow, paused: boolean, now: number): StatusRow {
     const memory = memories.get(account.address) ?? freshMemory()
-    const need = needsFaucet(chain.faucet, memory.eth, memory.chainUsdc)
+    const need = needsFaucet(askFaucet, memory.eth, memory.chainUsdc)
     return statusRow({
       index,
       address: account.address,
