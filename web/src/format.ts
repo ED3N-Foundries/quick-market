@@ -188,7 +188,7 @@ export function isTestnetChain(chainId: number): boolean {
 
 export type GrantTiming = { due: boolean; waitMs: number }
 
-/** Whether the hourly testnet grant can be claimed, and how long remains when it cannot. */
+/** Whether the testnet grant can be claimed, and how long remains when it cannot. */
 export function grantTiming(grantAt: number | null, now: number, intervalMs: number): GrantTiming {
   if (!Number.isSafeInteger(intervalMs) || intervalMs <= 0) return { due: false, waitMs: 0 }
   if (grantAt === null || !Number.isSafeInteger(grantAt)) return { due: true, waitMs: 0 }

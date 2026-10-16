@@ -4,7 +4,7 @@ import { normalizeAddress } from "./money"
 import { ensureUser } from "./rounds"
 
 export const DEFAULT_GRANT_MICROS = 100_000_000
-export const DEFAULT_GRANT_INTERVAL_MS = 60 * 60 * 1000
+export const DEFAULT_GRANT_INTERVAL_MS = 2 * 60 * 1000
 
 const tails = new Map<string, Promise<unknown>>()
 

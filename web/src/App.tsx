@@ -294,7 +294,7 @@ export function App() {
                   }}
                   disabled={!session.token || funding}
                 >
-                  +
+                  {"+"}
                 </button>
                 {walletMenuOpen && (
                   <div className="wallet-menu" role="menu">

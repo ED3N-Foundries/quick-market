@@ -170,4 +170,7 @@ test("grant timing and labels describe an hourly claim", () => {
   expect(grantSentence(amount, hour)).toBe(
     "Quick Market adds $100 QM USDC to this balance once an hour. The wallet is not charged, and Phantom is not involved.",
   )
+  expect(grantSentence(amount, 2 * 60_000)).toBe(
+    "Quick Market adds $100 QM USDC to this balance once every 2 minutes. The wallet is not charged, and Phantom is not involved.",
+  )
 })

@@ -276,16 +276,21 @@ body {
   letter-spacing: 0;
   text-transform: none;
 }
-.fund-plus {
+.app button.fund-plus {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
   width: 26px;
   height: 26px;
   padding: 0;
   border-radius: 999px;
   color: var(--text);
+  font-size: 16px;
+  font-weight: 400;
   line-height: 1;
-  font-size: 15px;
-  display: inline-grid;
-  place-items: center;
+  letter-spacing: 0;
+  text-transform: none;
 }
 .addr-hover {
   position: relative;
