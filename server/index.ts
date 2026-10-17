@@ -10,7 +10,8 @@ import { getDb } from "./db"
 import { applyGrant, grantSettings } from "./grant"
 import { hub } from "./hub"
 import { parseMicros } from "./money"
-import { startOracle } from "./oracle"
+import { feedsNow } from "./feeds"
+import { oracleView, startOracle } from "./oracle"
 import { adoptFeed, advance, board, failFeed, feedStatus, handoffNow, listRounds, noteAlive, notePrint, placeBet, roundDetail, tapePoints, tickerNow, youFor } from "./rounds"
 import { agentAuthorized, endSession, openSession, readSession } from "./session"
 
@@ -157,6 +158,18 @@ async function handle(req: Request): Promise<Response> {
   const url = new URL(req.url)
 
   if (req.method === "GET" && url.pathname === "/api/health") return json({ ok: true, source: priceSource() })
+
+  if (req.method === "GET" && url.pathname === "/api/feeds") {
+    const now = Date.now()
+    return json(
+      feedsNow(oracleView(), {
+        configured: priceSource(),
+        live: feedStatus(now),
+        handoff: handoffNow(),
+        now,
+      }),
+    )
+  }
 
   if (req.method === "GET" && url.pathname === "/api/state") {
     const now = Date.now()

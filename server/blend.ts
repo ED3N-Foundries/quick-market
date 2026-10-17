@@ -35,6 +35,16 @@ export function withinDollars(left: string, right: string, dollars: number): boo
   return compareAbs(left, right, String(dollars)) <= 0
 }
 
+/** Absolute gap between two decimal prices. Trailing zeros are trimmed. */
+export function dollarGap(left: string, right: string): string | null {
+  const gap = absDiff(left, right)
+  if (!gap) return null
+  const text = formatScaled(gap.n, gap.scale)
+  if (!text.includes(".")) return text
+  const trimmed = text.replace(/0+$/, "").replace(/\.$/, "")
+  return trimmed.length === 0 ? "0" : trimmed
+}
+
 /** True when the absolute gap is at least `threshold`. */
 export function movedAtLeast(left: string, right: string, threshold: string): boolean {
   return compareAbs(left, right, threshold) >= 0

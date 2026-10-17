@@ -1,0 +1,76 @@
+import { expect, test } from "bun:test"
+import { handleKey, holdLine, parseFeedFrame, renderFeeds, sourceLine, venueLine } from "./dashboard"
+import { feedsNow } from "./feeds"
+
+const now = 10_000
+
+function frame() {
+  return feedsNow(
+    {
+      active: "binance",
+      anchor: "67420.12",
+      venues: [
+        { venue: "binance", price: "67420.12", at: 9_920, feed: "binance vision book", up: true },
+        { venue: "bybit", price: "67419.80", at: 9_600, feed: "bybit book", up: true },
+        { venue: "okx", price: "67421.10", at: 5_000, feed: "okx bbo", up: true },
+        { venue: "coinbase", price: null, at: 0, feed: null, up: true },
+        { venue: "kraken", price: null, at: 0, feed: null, up: false },
+        { venue: "bitstamp", price: "67500.00", at: 9_800, feed: "bitstamp book", up: true },
+      ],
+    },
+    { configured: "binance", live: "live", handoff: null, now },
+  )
+}
+
+test("the page names the live source, a ready backup, and a far backup", () => {
+  const page = renderFeeds(frame(), { selected: 1, help: false, quiet: false }, now, "http://127.0.0.1:3001/api/feeds")
+  expect(page).toContain("Binance BTCUSDT   live   67420.12   80ms")
+  expect(page).toContain("configured binance   handoff none")
+  expect(page).toContain("bybit     ready")
+  expect(page).toContain("0.32")
+  expect(page).toContain("bitstamp  far")
+  expect(page).toContain("79.88")
+  expect(page).toContain("fresh and within $25")
+  expect(sourceLine(frame(), now)).toContain("80ms")
+})
+
+test("a handoff names the drop and when bets resume", () => {
+  const body = frame()
+  body.handoff = { from: "binance", to: "bybit", resumeAt: now + 4_200 }
+  expect(holdLine(body, now)).toBe("configured binance   handoff binance → bybit   bets resume in 4.2s")
+  body.handoff = { from: "binance", to: null, resumeAt: null }
+  expect(holdLine(body, now)).toBe("configured binance   handoff binance dropped, waiting")
+})
+
+test("a missing API prints the waiting page", () => {
+  const page = renderFeeds(null, { selected: 0, help: false, quiet: true }, now, "http://127.0.0.1:3001/api/feeds")
+  expect(page).toContain("Waiting for the API on 127.0.0.1:3001.")
+  expect(page).toContain("api quiet")
+  expect(page).toContain("The API keeps going")
+})
+
+test("a narrow row drops the gap and the feed name", () => {
+  const bitstamp = frame().venues[5]!
+  expect(venueLine(bitstamp, false, true, now)).toContain("bitstamp book")
+  expect(venueLine(bitstamp, false, true, now)).toContain("79.88")
+  const narrow = venueLine(bitstamp, false, false, now)
+  expect(narrow).not.toContain("bitstamp book")
+  expect(narrow).not.toContain("79.88")
+  expect(narrow).toContain("far")
+})
+
+test("j and k move the selection and q quits", () => {
+  const start = { selected: 0, help: false }
+  expect(handleKey(start, "j", 6).state.selected).toBe(1)
+  expect(handleKey(start, "k", 6).state.selected).toBe(0)
+  expect(handleKey({ selected: 5, help: false }, "j", 6).state.selected).toBe(5)
+  expect(handleKey(start, "?", 6).state.help).toBe(true)
+  expect(handleKey(start, "q", 6).quit).toBe(true)
+})
+
+test("parseFeedFrame accepts the server payload and rejects a partial one", () => {
+  const body = frame()
+  expect(parseFeedFrame(JSON.parse(JSON.stringify(body)))).toEqual(body)
+  expect(parseFeedFrame({ ok: true })).toBeNull()
+  expect(parseFeedFrame({ ...body, venues: body.venues.slice(0, 2) })).toBeNull()
+})

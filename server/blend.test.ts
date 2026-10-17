@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { averagePrice, microPrice, movedAtLeast, withinDollars } from "./blend"
+import { averagePrice, dollarGap, microPrice, movedAtLeast, withinDollars } from "./blend"
 
 test("averagePrice halves two decimal strings without binary rounding", () => {
   expect(averagePrice("67234.10", "67234.10")).toBe("67234.10")
@@ -25,6 +25,13 @@ test("microPrice weights the touch and rounds to 4 decimal places", () => {
   expect(microPrice("100.00", "102.00")).toBe("101.00")
   expect(microPrice("100", "102", "0", "1")).toBe("101")
   expect(microPrice("nope", "102", "1", "1")).toBeNull()
+})
+
+test("dollarGap is the absolute decimal distance", () => {
+  expect(dollarGap("67420.12", "67419.80")).toBe("0.32")
+  expect(dollarGap("100", "125")).toBe("25")
+  expect(dollarGap("100.00", "100.000")).toBe("0")
+  expect(dollarGap("nope", "1")).toBeNull()
 })
 
 test("withinDollars keeps a $25 gap and drops a wider one", () => {

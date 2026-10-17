@@ -18,6 +18,23 @@ export type Quote = { price: string; kind: "book" | "trade" }
 
 export type Standby = { venue: PriceSource; price: string | null; at: number }
 
+export type OracleView = {
+  active: PriceSource | null
+  anchor: string | null
+  venues: { venue: PriceSource; price: string | null; at: number; feed: string | null; up: boolean }[]
+}
+
+let epoch = 0
+let latest: OracleView = {
+  active: null,
+  anchor: null,
+  venues: VENUE_ORDER.map((venue) => ({ venue, price: null, at: 0, feed: null, up: false })),
+}
+
+export function oracleView(): OracleView {
+  return latest
+}
+
 export function silenceBreak(lastAt: number | null, now: number): boolean {
   if (lastAt == null) return false
   return now - lastAt >= BREAK_MS
@@ -185,6 +202,7 @@ export type OracleHandlers = {
 type Leg = { price: string | null; at: number; bookAt: number }
 
 export function startOracle(handlers: OracleHandlers): () => void {
+  const mine = ++epoch
   let stopped = false
   let active: PriceSource | null = priceSource()
   let waiting = false
@@ -197,7 +215,26 @@ export function startOracle(handlers: OracleHandlers): () => void {
   let pendingTimer: ReturnType<typeof setTimeout> | null = null
   let breakTimer: ReturnType<typeof setTimeout> | null = null
   const legs = Object.fromEntries(VENUE_ORDER.map((venue) => [venue, { price: null, at: 0, bookAt: 0 }])) as Record<PriceSource, Leg>
+  const sockets = Object.fromEntries(VENUE_ORDER.map((venue) => [venue, { feed: null as string | null, up: false }])) as Record<
+    PriceSource,
+    { feed: string | null; up: boolean }
+  >
   const seen = new Set<string>()
+
+  const publish = () => {
+    if (mine !== epoch) return
+    latest = {
+      active,
+      anchor,
+      venues: VENUE_ORDER.map((venue) => ({
+        venue,
+        price: legs[venue].price,
+        at: legs[venue].at,
+        feed: sockets[venue].feed,
+        up: sockets[venue].up,
+      })),
+    }
+  }
 
   const clearPending = () => {
     if (pendingTimer) clearTimeout(pendingTimer)
@@ -224,6 +261,7 @@ export function startOracle(handlers: OracleHandlers): () => void {
     lastEmitAt = Date.now()
     anchor = print.price
     handlers.onPrint(print)
+    publish()
   }
 
   const consider = (print: Print) => {
@@ -258,6 +296,7 @@ export function startOracle(handlers: OracleHandlers): () => void {
     console.log(`price feed: ${to}`)
     handlers.onAdopt({ to, at: now })
     armBreak(now)
+    publish()
   }
 
   const fireBreak = () => {
@@ -276,6 +315,7 @@ export function startOracle(handlers: OracleHandlers): () => void {
     console.log(`price feed: ${from} dropped, ${to ?? "waiting"}`)
     handlers.onBreak({ from, to, at: now })
     if (to) armBreak(now)
+    publish()
   }
 
   const note = (venue: PriceSource, quote: Quote) => {
@@ -291,35 +331,51 @@ export function startOracle(handlers: OracleHandlers): () => void {
     }
     if (venue !== active) {
       if (waiting) tryAdopt(now)
+      publish()
       return
     }
     armBreak(now)
     handlers.onAlive(now)
-    const publish = quote.kind === "book" || now - leg.bookAt > BREAK_MS
-    if (!publish || !leg.price) return
-    consider({ price: leg.price, exchangeTs: now, receivedAt: now, source: venue })
+    const publishPrint = quote.kind === "book" || now - leg.bookAt > BREAK_MS
+    if (publishPrint && leg.price) consider({ price: leg.price, exchangeTs: now, receivedAt: now, source: venue })
+    publish()
   }
 
   const stops = VENUE_ORDER.map((venue) =>
-    startWalker(FEEDS[venue], (feed, quote) => {
-      if (!seen.has(feed.name)) {
-        seen.add(feed.name)
-        console.log(`price feed: ${feed.name}`)
-      }
-      note(venue, quote)
-    }),
+    startWalker(
+      FEEDS[venue],
+      (feed, quote) => {
+        if (!seen.has(feed.name)) {
+          seen.add(feed.name)
+          console.log(`price feed: ${feed.name}`)
+        }
+        note(venue, quote)
+      },
+      (status) => {
+        sockets[venue] = status
+        publish()
+      },
+    ),
   )
+
+  publish()
 
   return () => {
     stopped = true
     active = null
+    // A late socket from this oracle must not overwrite the view a restart just published.
+    if (epoch === mine) epoch += 1
     if (breakTimer) clearTimeout(breakTimer)
     if (pendingTimer) clearTimeout(pendingTimer)
     for (const stop of stops) stop()
   }
 }
 
-function startWalker(feeds: Feed[], onQuote: (feed: Feed, quote: Quote) => void): () => void {
+function startWalker(
+  feeds: Feed[],
+  onQuote: (feed: Feed, quote: Quote) => void,
+  onStatus: (status: { feed: string | null; up: boolean }) => void,
+): () => void {
   let stopped = false
   let index = 0
   let retries = 0
@@ -356,6 +412,7 @@ function startWalker(feeds: Feed[], onQuote: (feed: Feed, quote: Quote) => void)
       clearBeat()
       socket?.close()
       socket = null
+      onStatus({ feed: null, up: false })
       const step = nextFeedStep({ printed, retries, index })
       const moved = step.index !== index
       index = step.index
@@ -384,6 +441,7 @@ function startWalker(feeds: Feed[], onQuote: (feed: Feed, quote: Quote) => void)
       onOpen: (next) => {
         if (gen !== generation) return
         send = next
+        onStatus({ feed: feed.name, up: true })
         feed.subscribe?.(send)
         if (feed.beat && feed.heartbeatMs) beat = setInterval(() => feed.beat?.(send), feed.heartbeatMs)
         arm(2_000)
@@ -415,6 +473,7 @@ function startWalker(feeds: Feed[], onQuote: (feed: Feed, quote: Quote) => void)
     clearTimer()
     clearBeat()
     socket?.close()
+    onStatus({ feed: null, up: false })
   }
 }
 
