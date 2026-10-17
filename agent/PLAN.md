@@ -221,7 +221,7 @@ If a window cannot be posted before it closes, skip it. Late bets are not retrie
 
 ### 6. See it and steer it
 
-`bun run agents` stays a Bun ANSI dashboard. It does not open `data/quick-market.sqlite`.
+`bun run agents` is one OpenTUI screen. It does not open `data/quick-market.sqlite`.
 
 The runner writes:
 
@@ -230,13 +230,11 @@ The runner writes:
 
 The dashboard reads those. It does not parse a 6,000-row `status.json`.
 
-Views, switched with number keys:
+One screen, sized to the terminal:
 
-1. Crowd. Manila time, schedule phase, preference window, online versus spring target, arrivals and departures this minute, an ASCII trace of the last few hours.
-2. Book. This window's up and down notional, bot share versus humans, skip rate, stake p50 and p90.
-3. Money. Seed, floor mints, burns, net bleed, histogram of balances ($3–10, $10–50, $50–200, $200–1000, outside).
-4. Roster. One page of about 24 rows. Filters: stuck, richest, just woke, just slept. `j` / `k` move.
-5. One wallet. Mind, tempo, visit time left, bankroll, last decisions, and why it skipped (`waiting`, `refractory`, `flat`, `no edge`).
+- Crowd. Manila time, schedule phase, preference window, online versus spring target, arrivals and departures this minute, and an ASCII trace when the terminal is tall enough.
+- Book and money. Up and down notional, bot share, skip rate, stake p50 and p90, seed, floor mints, burns, net bleed, and the balance histogram. Side by side when the terminal is wide. The histogram drops out when it is short.
+- Roster. The rows that fit. Filters: all, stuck, richest. `j` / `k` move. The selected row shows mind, tempo, visit time left, bankroll, last bet, and why it skipped (`waiting`, `refractory`, `flat`, `no edge`).
 
 Controls, written to `agent/control.json`:
 

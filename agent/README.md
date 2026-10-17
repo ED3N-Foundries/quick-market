@@ -12,13 +12,14 @@ Edit `agent/config.ts`. That file is the schedule, the minds, the stake shape, a
 
 `bun run agents` is the dashboard. It reads `agent/swarm.json` and `agent/swarm.sqlite`. It does not open `data/quick-market.sqlite`. Closing it leaves the runner up. A non-interactive run prints one page from `agent/status.json` and `agent/flow.json`.
 
+The interactive screen is one OpenTUI view. Crowd, book, and money stay on screen. The roster fills the rows that are left and follows the terminal size. On a wide terminal the book and money sit on one line and the roster shows mind, last bet, and W/L. On a short terminal the sparkline and the balance histogram drop out. `?` shows the keys.
+
 Keys:
 
-- `1` crowd, `2` book, `3` money, `4` roster, `5` one wallet (`Tab` cycles views)
-- `j` / `k` move selection, `h` / `l` page, `Enter` inspect wallet, `Esc` / `Backspace` back to roster
+- `j` / `k` or the arrow keys move the selection. The mouse wheel scrolls it
 - `c` follow the clock, `o` hold off-peak, `e` hold peak
 - `[` / `]` step the pin by one, `-` / `=` step it by ten
 - `b` pause or resume swarm betting, `p` pause or resume the selected wallet, `P` clear wallet pauses
-- `m` bleed on or off, `f` cycle the roster filter
+- `m` bleed on or off, `f` cycle all, stuck, and richest
 - `r` start or stop the background runner
 - `q` closes the dashboard
