@@ -1,9 +1,11 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { dirname } from "node:path"
 import { privateKeyToAccount } from "viem/accounts"
-import { chainFromEnv, requireSepoliaToken } from "../shared/chain"
+import { requireSepoliaToken } from "../shared/chain"
 import { botEnrollMessage } from "../shared/login"
+import { loadMarket, marketPreferences } from "../shared/market"
 import { feeBps, windowMs } from "../server/config"
+import { configuredChain, loadEnv } from "../server/env"
 import { bankAction, seedMicros } from "./bank"
 import { checkConfig, swarmConfig, type TapeStats } from "./config"
 import { decideWindow, freshGate, noteResult, tapeActivity, type GateState, type PrintPoint, type Side } from "./decide"
@@ -76,10 +78,18 @@ type Pending = {
   sent: number
 }
 
-const root = (process.env.API_URL ?? "http://127.0.0.1:3001").replace(/\/api\/session\/?$/, "").replace(/\/$/, "")
+function apiRoot(): string {
+  return loadEnv().apiUrl.replace(/\/api\/session\/?$/, "").replace(/\/$/, "")
+}
 
 async function main() {
-  if ((process.env.CHAIN ?? "").trim() === "base") {
+  try {
+    loadMarket()
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : error)
+    process.exit(1)
+  }
+  if (marketPreferences.chain === "base") {
     console.error("The swarm refuses CHAIN=base. Real USDC is out of this mode.")
     process.exit(1)
   }
@@ -88,11 +98,11 @@ async function main() {
     console.error(problem)
     process.exit(1)
   }
-  if (!process.env.AGENT_SECRET) {
+  if (!loadEnv().agentSecret) {
     console.error("AGENT_SECRET is required")
     process.exit(1)
   }
-  const chain = chainFromEnv(process.env.CHAIN, process.env.USDC_ADDRESS)
+  const chain = configuredChain()
   requireSepoliaToken(chain)
 
   const db = openSwarm(SWARM_DB_PATH)
@@ -433,11 +443,8 @@ async function main() {
 
 function steering(): { pin: number | null; hold: "off-peak" | "peak" | null; control: ReturnType<typeof parseControl> } {
   const control = parseControl(readJson(CONTROL_PATH))
-  const env = process.env.SWARM_PIN?.trim()
-  if (env) {
-    const pin = Number(env)
-    if (Number.isFinite(pin)) return { pin: Math.max(1, Math.round(pin)), hold: null, control }
-  }
+  const pin = loadEnv().swarmPin
+  if (pin !== null) return { pin: Math.max(1, Math.round(pin)), hold: null, control }
   if (control.mode === "pin") return { pin: control.pin ?? 1, hold: null, control }
   if (control.mode === "off-peak") return { pin: null, hold: "off-peak", control }
   if (control.mode === "peak") return { pin: null, hold: "peak", control }
@@ -733,11 +740,11 @@ async function fetchBook(since: number): Promise<Book | null> {
 
 async function api(path: string, init?: RequestInit): Promise<{ ok: boolean; body: unknown }> {
   try {
-    const response = await fetch(`${root}${path}`, {
+    const response = await fetch(`${apiRoot()}${path}`, {
       ...init,
       headers: {
         "content-type": "application/json",
-        "x-agent-secret": process.env.AGENT_SECRET ?? "",
+        "x-agent-secret": loadEnv().agentSecret,
         ...(init?.headers ?? {}),
       },
     })

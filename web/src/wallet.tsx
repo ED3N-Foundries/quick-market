@@ -16,6 +16,7 @@ import {
 } from "wagmi"
 import { base, baseSepolia } from "wagmi/chains"
 import { chainFromEnv, tokenLabel, type ChainConfig } from "../../shared/chain"
+import { marketPreferences } from "../../shared/market"
 import { loginMessage } from "../../shared/login"
 import { usdcAbi } from "../../shared/usdc"
 import {
@@ -69,7 +70,7 @@ const SessionContext = createContext<WalletSession>(missing)
 
 function readChain(): { chain: ChainConfig | null; error: string | null } {
   try {
-    return { chain: chainFromEnv(import.meta.env.CHAIN, import.meta.env.USDC_ADDRESS), error: null }
+    return { chain: chainFromEnv(marketPreferences.chain, import.meta.env.USDC_ADDRESS), error: null }
   } catch (error) {
     return { chain: null, error: error instanceof Error ? error.message : "Chain is invalid" }
   }

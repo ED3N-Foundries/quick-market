@@ -11,9 +11,10 @@ import {
 } from "viem"
 import { privateKeyToAccount, type PrivateKeyAccount } from "viem/accounts"
 import { base, baseSepolia } from "viem/chains"
-import { chainFromEnv, type ChainConfig } from "../shared/chain"
+import type { ChainConfig } from "../shared/chain"
 import { mintAbi, usdcAbi } from "../shared/usdc"
 import { getDb } from "./db"
+import { configuredChain, loadEnv } from "./env"
 import { normalizeAddress } from "./money"
 import { credit, withdraw, youFor, type You } from "./rounds"
 
@@ -44,11 +45,9 @@ function enqueue<T>(job: () => Promise<T>): Promise<T> {
 }
 
 export function treasuryAccount(): PrivateKeyAccount {
-  const raw = process.env.TREASURY_PRIVATE_KEY?.trim() ?? ""
+  const raw = loadEnv().treasuryPrivateKey
   if (!raw) throw new Error("TREASURY_PRIVATE_KEY is required")
-  const hex = raw.startsWith("0x") ? raw : `0x${raw}`
-  if (!/^0x[0-9a-fA-F]{64}$/.test(hex)) throw new Error("TREASURY_PRIVATE_KEY must be a 32-byte hex string")
-  return privateKeyToAccount(hex as Hex)
+  return privateKeyToAccount(raw as Hex)
 }
 
 export function treasuryAddress(): Address {
@@ -71,9 +70,9 @@ export function treasuryFaultMessage(error: unknown, chainName: string): string 
 }
 
 async function signedTransfer(to: Address, amount: bigint): Promise<Hex> {
-  const config = chainFromEnv(process.env.CHAIN, process.env.USDC_ADDRESS)
+  const config = configuredChain()
   const account = treasuryAccount()
-  const transport = http(process.env.RPC_URL || config.rpc)
+  const transport = http(loadEnv().rpcUrl || config.rpc)
   const data = encodeFunctionData({ abi: usdcAbi, functionName: "transfer", args: [to, amount] })
   const chain = config.id === base.id ? base : baseSepolia
   const publicClient = createPublicClient({ chain, transport })
@@ -138,9 +137,9 @@ export async function mintToTreasury(amountMicros: number): Promise<void> {
 }
 
 function clients() {
-  const chain = chainFromEnv(process.env.CHAIN, process.env.USDC_ADDRESS)
+  const chain = configuredChain()
   const account = treasuryAccount()
-  const transport = http(process.env.RPC_URL || chain.rpc)
+  const transport = http(loadEnv().rpcUrl || chain.rpc)
   const chainDef = chain.id === base.id ? base : baseSepolia
   return {
     chain,
@@ -209,7 +208,7 @@ async function requestWithdrawLocked(
     hash = keccak256(raw)
   } catch (error) {
     if (!(error instanceof TreasuryShort)) console.error(error)
-    return { ok: false, error: treasuryFaultMessage(error, chainFromEnv(process.env.CHAIN, process.env.USDC_ADDRESS).name) }
+    return { ok: false, error: treasuryFaultMessage(error, configuredChain().name) }
   }
 
   const id = crypto.randomUUID()
@@ -369,7 +368,7 @@ export async function submitBurn(id: string): Promise<{ ok: true; txHash: string
     } catch (error) {
       if (!(error instanceof TreasuryShort)) console.error(error)
       refundBurn(id)
-      return { ok: false, error: treasuryFaultMessage(error, chainFromEnv(process.env.CHAIN, process.env.USDC_ADDRESS).name) }
+      return { ok: false, error: treasuryFaultMessage(error, configuredChain().name) }
     }
   }
   return finishBurn(id)

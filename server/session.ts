@@ -1,7 +1,7 @@
 import { timingSafeEqual } from "node:crypto"
 import { recoverMessageAddress, type Hex } from "viem"
-import { chainFromEnv } from "../shared/chain"
 import { LOGIN_SKEW_MS, SESSION_MS, loginMessage } from "../shared/login"
+import { configuredChain, loadEnv } from "./env"
 import { getDb } from "./db"
 import { normalizeAddress } from "./money"
 import { ensureUser, youFor, type You } from "./rounds"
@@ -24,7 +24,7 @@ export async function openSession(input: {
 
   let chainId: number
   try {
-    chainId = chainFromEnv(process.env.CHAIN, process.env.USDC_ADDRESS).id
+    chainId = configuredChain().id
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : "Chain is invalid" }
   }
@@ -90,7 +90,7 @@ export function agentAuthorized(header: string | null): boolean {
 }
 
 function botSecretOk(given: unknown): boolean {
-  const expected = process.env.AGENT_SECRET ?? ""
+  const expected = loadEnv().agentSecret
   if (!expected || typeof given !== "string" || given.length !== expected.length) return false
   return timingSafeEqual(Buffer.from(given), Buffer.from(expected))
 }

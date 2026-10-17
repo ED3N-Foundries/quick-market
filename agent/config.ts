@@ -1,3 +1,6 @@
+import * as z from "zod"
+import type { Assert, Equal } from "../shared/exact"
+
 export const USDC = 1_000_000
 
 export type Range = readonly [number, number]
@@ -137,7 +140,149 @@ export type SwarmConfig = {
   runner: RunnerConfig
 }
 
-export const swarmConfig: SwarmConfig = {
+const range = z.tuple([z.number(), z.number()]).readonly()
+
+const clockSchema = z.strictObject({
+  timeZoneOffsetHours: z.number(),
+  windowWidth: z.number(),
+  floor: z.number(),
+  ceiling: z.number(),
+  smoothTime: z.number(),
+  perSecond: z.number(),
+  offPeak: z.strictObject({ fromHour: z.number(), toHour: z.number(), box: range }),
+  rise: z.strictObject({
+    fromHour: z.number(),
+    toHour: z.number(),
+    fromCenter: z.number(),
+    toCenter: z.number(),
+  }),
+  peak: z.strictObject({ fromHour: z.number(), toHour: z.number(), box: range }),
+  decline: z.strictObject({ fromHour: z.number(), toHour: z.number(), toCenter: z.number() }),
+  noise: z.strictObject({
+    slow: z.number(),
+    fast: z.number(),
+    interest: z.number(),
+    slowHours: z.number(),
+    fastHours: z.number(),
+    octaves: z.number(),
+    lacunarity: z.number(),
+    gain: z.number(),
+  }),
+})
+
+const presenceSchema = z.strictObject({
+  chronotypeHours: z.number(),
+  hysteresis: z.number(),
+  visitMinMs: z.number(),
+  visitMaxMs: z.number(),
+  gapMinMs: z.number(),
+  gapMaxMs: z.number(),
+  offHoursStretch: z.number(),
+  tapeStretch: z.number(),
+  tapeShrink: z.number(),
+  jitterMs: z.number(),
+  moodMs: z.number(),
+  almostMs: z.number(),
+  backfillMs: z.number(),
+  offHoursFloor: z.number(),
+  herdWindowMs: z.number(),
+  herdDecayMs: z.number(),
+  herdCap: z.number(),
+  herdSimilarityHours: z.number(),
+  earlyVisitMs: z.number(),
+})
+
+const bankSchema = z.strictObject({
+  floorMicros: z.number(),
+  capMicros: z.number(),
+  seedMinMicros: z.number(),
+  seedMaxMicros: z.number(),
+  refillMinMicros: z.number(),
+  refillMaxMicros: z.number(),
+  burnMinMicros: z.number(),
+  burnMaxMicros: z.number(),
+})
+
+const personaSchema = z.strictObject({
+  shares: z.strictObject({
+    tape: z.number(),
+    fade: z.number(),
+    price: z.number(),
+    restless: z.number(),
+  }),
+  secondRate: z.number(),
+  secondWeight: z.number(),
+  lookbackMinMs: z.number(),
+  lookbackMaxMs: z.number(),
+  slowLookbackMs: z.number(),
+  edgeMin: z.number(),
+  edgeMax: z.number(),
+  restlessEdge: z.number(),
+  kellyMin: z.number(),
+  kellyMax: z.number(),
+  shareMin: z.number(),
+  shareMax: z.number(),
+  restlessShare: z.number(),
+  noiseMin: z.number(),
+  noiseMax: z.number(),
+  restlessNoise: z.number(),
+  tempoMin: z.number(),
+  tempoMax: z.number(),
+  restlessTempoMin: z.number(),
+  restlessTempoMax: z.number(),
+  burstMin: z.number(),
+  burstMax: z.number(),
+  burstFire: z.number(),
+  hotScale: z.number(),
+  flatScale: z.number(),
+  scaleMin: z.number(),
+  scaleMax: z.number(),
+  movingBand: z.number(),
+  flatBand: z.number(),
+  herdBand: z.number(),
+  herdWeight: z.number(),
+  memory: z.number(),
+  memoryStep: z.number(),
+  looseRate: z.number(),
+  gateFire: z.number(),
+})
+
+const stakeSchema = z.strictObject({
+  smallMin: z.number(),
+  smallMax: z.number(),
+  midMax: z.number(),
+  smallMass: z.number(),
+  midMass: z.number(),
+  offsetMinCents: z.number(),
+  offsetMaxCents: z.number(),
+  restlessMax: z.number(),
+})
+
+const runnerSchema = z.strictObject({
+  enrollWidth: z.number(),
+  betChunk: z.number(),
+  orderCap: z.number(),
+  auditSlice: z.number(),
+  auditEveryMs: z.number(),
+  bankEveryMs: z.number(),
+  snapshotEveryMs: z.number(),
+  tapeTailMs: z.number(),
+  presenceTickMs: z.number(),
+  keyCap: z.number(),
+})
+
+const swarmSchema = z.strictObject({
+  clock: clockSchema,
+  presence: presenceSchema,
+  bank: bankSchema,
+  persona: personaSchema,
+  stake: stakeSchema,
+  runner: runnerSchema,
+})
+
+type _swarm = Assert<Equal<z.infer<typeof swarmSchema>, SwarmConfig>>
+
+const swarmInput: SwarmConfig = {
   clock: {
     timeZoneOffsetHours: 8,
     windowWidth: 300,
@@ -252,6 +397,8 @@ export const swarmConfig: SwarmConfig = {
     keyCap: 6_000,
   },
 }
+
+export const swarmConfig: SwarmConfig = swarmSchema.parse(swarmInput)
 
 function rangeOk(range: Range, label: string): string | null {
   if (!(range[0] < range[1])) return `${label} has its low end second`

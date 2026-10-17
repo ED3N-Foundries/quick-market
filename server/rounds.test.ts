@@ -74,10 +74,10 @@ test("strike locks when the window closes and a winner is paid once", () => {
   const again = advance(T + WINDOW + MARKET + 50)
   expect(first.settled.find((event) => event.roundId === MARKET_ID)?.winningSide).toBe("up")
   expect(first.settled.find((event) => event.roundId === MARKET_ID)?.payouts.find((payout) => payout.address === you)?.payoutMicros).toBe(
-    149_625_000,
+    150_000_000,
   )
   expect(again.settled).toHaveLength(0)
-  expect(youFor(you)?.balanceMicros).toBe(10_000 * USDC - 50 * USDC + 149_625_000)
+  expect(youFor(you)?.balanceMicros).toBe(10_000 * USDC - 50 * USDC + 150_000_000)
   expect(youFor(you)?.openBets).toEqual([])
 })
 

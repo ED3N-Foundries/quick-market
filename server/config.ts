@@ -1,38 +1,30 @@
-export const MIN_STAKE_MICROS = 1_000_000
-export const LIVE_MS = 5_000
-export const TAPE_MS = 15 * 60 * 1000
+import { marketPreferences, type PriceSource } from "../shared/market"
 
-export type PriceSource = "binance" | "coinbase" | "average"
+export type { PriceSource }
+
+export const MIN_STAKE_MICROS = marketPreferences.minStakeMicros
+export const LIVE_MS = marketPreferences.liveMs
+export const TAPE_MS = marketPreferences.tapeMs
 
 export function priceSource(): PriceSource {
-  if (process.env.PRICE_SOURCE === "coinbase") return "coinbase"
-  if (process.env.PRICE_SOURCE === "average") return "average"
-  return "binance"
+  return marketPreferences.priceSource
 }
 
 export function windowMs(): number {
-  const seconds = Number(process.env.WINDOW_SECONDS ?? 5)
-  if (!Number.isInteger(seconds) || seconds < 1 || seconds > 120) return 5_000
-  return seconds * 1000
+  return marketPreferences.windowSeconds * 1000
 }
 
 export function marketMs(): number {
-  const seconds = Number(process.env.MARKET_SECONDS ?? 5)
-  if (!Number.isInteger(seconds) || seconds < 1 || seconds > 120) return 5_000
-  return seconds * 1000
+  return marketPreferences.marketSeconds * 1000
 }
 
 /** Width of the scrolling chart while a bet is riding. */
 export function viewMs(): number {
-  const seconds = Number(process.env.VIEW_SECONDS ?? 5)
-  if (!Number.isInteger(seconds) || seconds < 1 || seconds > 120) return 5_000
-  return seconds * 1000
+  return marketPreferences.viewSeconds * 1000
 }
 
 export function feeBps(): number {
-  const n = Number(process.env.FEE_BPS ?? 0)
-  if (!Number.isInteger(n) || n < 0 || n > 10_000) return 0
-  return n
+  return marketPreferences.feeBps
 }
 
 export function marketBounds(id: number): { betsOpen: number; strikeAt: number; settlesAt: number } {

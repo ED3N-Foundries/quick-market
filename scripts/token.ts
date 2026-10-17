@@ -2,15 +2,23 @@ import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { createPublicClient, createWalletClient, http, type Abi, type Address, type Hex } from "viem"
 import { baseSepolia } from "viem/chains"
-import { getDb } from "../server/db"
-import { cutoverAmount } from "../server/grant"
+import { loadMarket, marketPreferences } from "../shared/market"
 import { mintToTreasury, treasuryAccount } from "../server/custody"
+import { getDb } from "../server/db"
+import { loadEnv } from "../server/env"
+import { cutoverAmount } from "../server/grant"
 
 const ENV_PATH = join(process.cwd(), ".env")
 const EXAMPLE_PATH = join(process.cwd(), ".env.example")
 
 async function main() {
-  if (process.env.CHAIN === "base") {
+  try {
+    loadMarket()
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : error)
+    process.exit(1)
+  }
+  if (marketPreferences.chain === "base") {
     console.error("CHAIN=base uses Circle USDC. Refusing to deploy quick-market USDC.")
     process.exit(1)
   }
@@ -23,10 +31,11 @@ async function main() {
     process.exit(1)
   }
 
-  const transport = http(process.env.RPC_URL || "https://sepolia.base.org")
+  const env = loadEnv()
+  const transport = http(env.rpcUrl || "https://sepolia.base.org")
   const publicClient = createPublicClient({ chain: baseSepolia, transport })
   const walletClient = createWalletClient({ account, chain: baseSepolia, transport })
-  const existing = process.env.USDC_ADDRESS?.trim() ?? ""
+  const existing = env.usdcAddress
   let token: Address
   if (existing) {
     if (!/^0x[0-9a-fA-F]{40}$/.test(existing)) throw new Error("USDC_ADDRESS must be a 20-byte hex address")

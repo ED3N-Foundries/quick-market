@@ -1,23 +1,6 @@
-export type Side = "up" | "down"
-export type PriceSource = "binance" | "coinbase" | "average"
+export type { PriceSource, PublicConfig as Config } from "../../shared/market"
 
-export type Config = {
-  windowSeconds: number
-  marketSeconds: number
-  viewSeconds: number
-  feeBps: number
-  minStakeMicros: number
-  source: PriceSource
-  chainId: number
-  chainName: string
-  usdc: string
-  treasury: string
-  moneyLabel: string
-  tokenKind: "circle" | "qm"
-  tokenLabel: string
-  grantMicros: number
-  grantIntervalMs: number
-}
+export type Side = "up" | "down"
 
 export type TrayRow = {
   address: string

@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import { chainFromEnv, moneyLabel, tokenKind, tokenLabel, type ChainConfig } from "../../shared/chain"
+import { marketPreferences } from "../../shared/market"
 import type { TapeChart, TapePoint } from "./chart"
 import type { Board, Config, SettledMessage, Side, You } from "./types"
 
 function configuredChain(): ChainConfig {
   try {
-    return chainFromEnv(import.meta.env.CHAIN, import.meta.env.USDC_ADDRESS)
+    return chainFromEnv(marketPreferences.chain, import.meta.env.USDC_ADDRESS)
   } catch {
     return chainFromEnv(undefined)
   }

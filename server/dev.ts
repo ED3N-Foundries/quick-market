@@ -1,10 +1,14 @@
-export {}
+import { loadMarket } from "../shared/market"
+import { loadEnv } from "./env"
+
+loadMarket()
+const runtime = loadEnv()
 
 const server = Bun.spawn(["bun", "--hot", "server/index.ts"], {
   stdout: "inherit",
   stderr: "inherit",
   stdin: "inherit",
-  env: { ...process.env, PORT: process.env.PORT ?? "3001" },
+  env: { ...process.env, PORT: String(runtime.port) },
 })
 
 const web = Bun.spawn(["bunx", "vite", "--host", "127.0.0.1"], {

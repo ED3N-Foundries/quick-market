@@ -1,15 +1,12 @@
 import { recoverMessageAddress, type Hex } from "viem"
-import { chainFromEnv } from "../shared/chain"
+import { swarmConfig } from "../agent/config"
 import { botEnrollMessage, LOGIN_SKEW_MS } from "../shared/login"
 import { requestBurn } from "./custody"
 import { getDb } from "./db"
+import { configuredChain } from "./env"
 import { normalizeAddress } from "./money"
 import { credit, openBook, placeBets, settledSince, tapeTail, youFor, type BetOrder } from "./rounds"
 
-const SEED_MIN = 8_000_000
-const SEED_MAX = 250_000_000
-const REFILL_CAP = 24_000_000
-const FLOOR = 3_000_000
 const SIGNATURE = /^0x[0-9a-fA-F]+$/
 
 export async function enrollBot(input: {
@@ -22,7 +19,8 @@ export async function enrollBot(input: {
 }): Promise<{ ok: true; balanceMicros: number; seeded: boolean } | { ok: false; error: string }> {
   const address = normalizeAddress(input.address)
   if (!address) return { ok: false, error: "Address is invalid" }
-  if (!Number.isSafeInteger(input.seedMicros) || input.seedMicros < SEED_MIN || input.seedMicros > SEED_MAX) {
+  const bank = swarmConfig.bank
+  if (!Number.isSafeInteger(input.seedMicros) || input.seedMicros < bank.seedMinMicros || input.seedMicros > bank.seedMaxMicros) {
     return { ok: false, error: "Seed is outside the band" }
   }
   if (!Number.isInteger(input.issued) || Math.abs(input.now - input.issued) > LOGIN_SKEW_MS) {
@@ -32,7 +30,7 @@ export async function enrollBot(input: {
 
   let chainId: number
   try {
-    chainId = chainFromEnv(process.env.CHAIN, process.env.USDC_ADDRESS).id
+    chainId = configuredChain().id
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : "Chain is invalid" }
   }
@@ -75,12 +73,13 @@ export async function resurrectBot(input: {
 }): Promise<{ ok: true; balanceMicros: number } | { ok: false; error: string }> {
   const address = normalizeAddress(input.address)
   if (!address) return { ok: false, error: "Address is invalid" }
-  if (!Number.isSafeInteger(input.amountMicros) || input.amountMicros <= 0 || input.amountMicros > REFILL_CAP) {
+  const bank = swarmConfig.bank
+  if (!Number.isSafeInteger(input.amountMicros) || input.amountMicros <= 0 || input.amountMicros > bank.refillMaxMicros) {
     return { ok: false, error: "Amount is outside the refill" }
   }
   const row = userRow(address)
   if (!row || row.is_bot !== 1) return { ok: false, error: "Not a bot" }
-  if (row.balance_micros >= FLOOR) return { ok: false, error: "Balance is inside the band" }
+  if (row.balance_micros >= bank.floorMicros) return { ok: false, error: "Balance is inside the band" }
   await input.mint(input.amountMicros)
   const added = credit(address, input.amountMicros)
   if (!added.ok) return added

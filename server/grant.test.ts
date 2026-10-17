@@ -1,5 +1,6 @@
 import { beforeEach, expect, test } from "bun:test"
 import { getDb, useDatabase } from "./db"
+import { loadMarket } from "../shared/market"
 import { applyGrant, cutoverAmount, grantDue, grantSettings } from "./grant"
 import { youFor } from "./rounds"
 
@@ -81,10 +82,10 @@ test("grant timing and cutover are pure", () => {
   expect(grantDue(null, 5_000, hour)).toBe(true)
   expect(grantDue(0, hour - 1, hour)).toBe(false)
   expect(grantDue(0, hour, hour)).toBe(true)
-  expect(grantSettings({})).toEqual({ amount: 100_000_000, intervalMs: 2 * 60 * 1000 })
+  expect(grantSettings()).toEqual({ amount: 100_000_000, intervalMs: 2 * 60 * 1000 })
   expect(cutoverAmount(null, 40)).toBe(40)
   expect(cutoverAmount(null, 0)).toBe(0)
   expect(cutoverAmount("40", 40)).toBeNull()
   expect(() => cutoverAmount(null, -1)).toThrow("Balance sum")
-  expect(() => grantSettings({ GRANT_MICROS: "nope" })).toThrow("GRANT_MICROS")
+  expect(() => loadMarket({ GRANT_MICROS: "nope" })).toThrow("GRANT_MICROS")
 })

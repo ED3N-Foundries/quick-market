@@ -5,7 +5,9 @@ import { createPublicClient, http, parseAbiItem, type Address } from "viem"
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts"
 import { base, baseSepolia } from "viem/chains"
 import { CHAINS, chainFromEnv, type ChainConfig, type ChainKey } from "../shared/chain"
+import { loadMarket, marketPreferences } from "../shared/market"
 import { usdcAbi } from "../shared/usdc"
+import { loadEnv } from "../server/env"
 
 const ENV_PATH = join(process.cwd(), ".env")
 const EXAMPLE_PATH = join(process.cwd(), ".env.example")
@@ -484,7 +486,7 @@ export function movementsFromUsdcLogs(chainName: string, treasury: string, logs:
 }
 
 function ledgerFile(): string {
-  return process.env.DB_PATH ?? join(process.cwd(), "data", "quick-market.sqlite")
+  return loadEnv().dbPath
 }
 
 function one(db: Database, sql: string): number {
@@ -851,6 +853,12 @@ async function loadHistory(config: ChainConfig, treasury: Address): Promise<{ mo
 }
 
 async function main() {
+  try {
+    loadMarket()
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : error)
+    process.exit(1)
+  }
   const source = loadSource()
   const decision = planTreasury(source, process.env.TREASURY_PRIVATE_KEY, generatePrivateKey())
   if (decision.action === "invalid") {
@@ -866,8 +874,11 @@ async function main() {
   }
 
   let configured: ChainConfig
+  let rpc = ""
   try {
-    configured = chainFromEnv(process.env.CHAIN, process.env.USDC_ADDRESS)
+    const env = loadEnv()
+    rpc = env.rpcUrl
+    configured = chainFromEnv(marketPreferences.chain, env.usdcAddress)
   } catch (error) {
     console.error(error instanceof Error ? error.message : "Unknown CHAIN")
     process.exit(1)
@@ -877,14 +888,14 @@ async function main() {
   const chains = chainsFor(configured)
   const ledger = readLedger(ledgerFile())
   const [funds, histories] = await Promise.all([
-    Promise.all(chains.map((chain) => loadChain(chain, address, rpcFor(chain, configured.key, process.env.RPC_URL), chain.key === configured.key))),
+    Promise.all(chains.map((chain) => loadChain(chain, address, rpcFor(chain, configured.key, rpc), chain.key === configured.key))),
     Promise.all(chains.map((chain) => loadHistory(chain, address))),
   ])
   console.log(
     renderTreasury({
       address,
       configured,
-      rpc: rpcFor(configured, configured.key, process.env.RPC_URL),
+      rpc: rpcFor(configured, configured.key, rpc),
       chains: funds,
       ledger,
       movements: histories.flatMap((history) => history.movements),

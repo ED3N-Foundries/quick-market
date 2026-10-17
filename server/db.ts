@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite"
 import { mkdirSync } from "node:fs"
 import { dirname } from "node:path"
+import { loadEnv } from "./env"
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS users (
@@ -125,7 +126,7 @@ export function migrateCustody(db: Database) {
 
 export function getDb(): Database {
   if (!database) {
-    const path = process.env.DB_PATH ?? `${process.cwd()}/data/quick-market.sqlite`
+    const path = loadEnv().dbPath
     database = openDatabase(path)
   }
   return database

@@ -1,7 +1,9 @@
 import { existsSync } from "node:fs"
 import { join, normalize, sep } from "node:path"
-import { chainFromEnv, moneyLabel, requireSepoliaToken, tokenKind, tokenLabel } from "../shared/chain"
+import { moneyLabel, requireSepoliaToken, tokenKind, tokenLabel } from "../shared/chain"
+import { loadMarket, type PublicConfig } from "../shared/market"
 import { feeBps, marketMs, MIN_STAKE_MICROS, priceSource, viewMs, windowMs, type PriceSource } from "./config"
+import { configuredChain, loadEnv } from "./env"
 import { handleAgents } from "./agents"
 import { mintToTreasury, requestWithdraw, startCustody, treasuryAddress } from "./custody"
 import { getDb } from "./db"
@@ -12,9 +14,10 @@ import { startOracle } from "./oracle"
 import { advance, board, feedStatus, listRounds, notePrint, placeBet, roundDetail, tapePoints, youFor, type Side } from "./rounds"
 import { agentAuthorized, endSession, openSession, readSession } from "./session"
 
-let chain: ReturnType<typeof chainFromEnv>
+let chain: ReturnType<typeof configuredChain>
 try {
-  chain = chainFromEnv(process.env.CHAIN, process.env.USDC_ADDRESS)
+  loadMarket()
+  chain = configuredChain()
   requireSepoliaToken(chain)
   grantSettings()
 } catch (error) {
@@ -30,9 +33,9 @@ try {
   process.exit(1)
 }
 
-const port = Number(process.env.PORT ?? 3001)
+const port = loadEnv().port
 const distDir = join(import.meta.dir, "..", "dist")
-const serveUi = process.env.NODE_ENV === "production"
+const serveUi = loadEnv().nodeEnv === "production"
 
 getDb()
 startCustody()
@@ -89,7 +92,7 @@ async function readJson(req: Request) {
   }
 }
 
-function publicConfig() {
+function publicConfig(): PublicConfig {
   const grant = chain.key === "base-sepolia" ? grantSettings() : { amount: 0, intervalMs: 0 }
   return {
     windowSeconds: windowMs() / 1000,

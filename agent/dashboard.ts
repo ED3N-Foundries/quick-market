@@ -1,6 +1,8 @@
 import { existsSync } from "node:fs"
 import { join } from "node:path"
 import { Database } from "bun:sqlite"
+import { marketPreferences } from "../shared/market"
+import { loadEnv } from "../server/env"
 import { CONTROL_PATH, STATUS_PATH, SWARM_DB_PATH, SWARM_PATH, readJson, writeJsonAtomic } from "./store"
 import { roster, rosterCount, type RosterFilter, type WalletRow } from "./swarmdb"
 import {
@@ -321,7 +323,7 @@ function controlFromSnapshot(snapshot: SwarmSnapshot): ControlFile {
 }
 
 function startRunnerBackground() {
-  if ((process.env.CHAIN ?? "").trim() === "base" || !process.env.AGENT_SECRET) return
+  if (marketPreferences.chain === "base" || !loadEnv().agentSecret) return
   try {
     const child = Bun.spawn(["bun", "run", join(import.meta.dir, "index.ts")], {
       stdout: "ignore",

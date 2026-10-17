@@ -1,25 +1,13 @@
 import type { ChainKey } from "../shared/chain"
+import { marketPreferences } from "../shared/market"
 import { getDb } from "./db"
 import { normalizeAddress } from "./money"
 import { ensureUser } from "./rounds"
 
-export const DEFAULT_GRANT_MICROS = 100_000_000
-export const DEFAULT_GRANT_INTERVAL_MS = 2 * 60 * 1000
-
 const tails = new Map<string, Promise<unknown>>()
 
-export function grantSettings(
-  env: { GRANT_MICROS?: string; GRANT_INTERVAL_MS?: string } = {
-    GRANT_MICROS: process.env.GRANT_MICROS,
-    GRANT_INTERVAL_MS: process.env.GRANT_INTERVAL_MS,
-  },
-): {
-  amount: number
-  intervalMs: number
-} {
-  const amount = positiveInt(env.GRANT_MICROS, DEFAULT_GRANT_MICROS, "GRANT_MICROS")
-  const intervalMs = positiveInt(env.GRANT_INTERVAL_MS, DEFAULT_GRANT_INTERVAL_MS, "GRANT_INTERVAL_MS")
-  return { amount, intervalMs }
+export function grantSettings(): { amount: number; intervalMs: number } {
+  return { amount: marketPreferences.grantMicros, intervalMs: marketPreferences.grantIntervalMs }
 }
 
 export function grantDue(grantAt: number | null, now: number, intervalMs: number): boolean {
@@ -85,9 +73,3 @@ function due(address: string, now: number, intervalMs: number): boolean {
   return grantDue(row?.grant_at ?? null, now, intervalMs)
 }
 
-function positiveInt(value: string | undefined, fallback: number, name: string): number {
-  if (value === undefined || value.trim() === "") return fallback
-  const parsed = Number(value)
-  if (!Number.isSafeInteger(parsed) || parsed <= 0) throw new Error(`${name} must be a positive integer`)
-  return parsed
-}

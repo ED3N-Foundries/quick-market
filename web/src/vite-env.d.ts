@@ -2,6 +2,7 @@
 
 interface ImportMetaEnv {
   readonly CHAIN?: string
+  readonly USDC_ADDRESS?: string
 }
 
 interface ImportMeta {
