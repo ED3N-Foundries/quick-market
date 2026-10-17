@@ -26,7 +26,7 @@ test("hardcoded preferences replace a valid env declaration", () => {
 test("a blank preference is ignored and an invalid one throws", () => {
   expect(loadMarket({ WINDOW_SECONDS: "  ", FEE_BPS: "" }).windowSeconds).toBe(5)
   expect(() => loadMarket({ FEE_BPS: "nope" })).toThrow("FEE_BPS")
-  expect(() => loadMarket({ PRICE_SOURCE: "kraken" })).toThrow("PRICE_SOURCE")
+  expect(() => loadMarket({ PRICE_SOURCE: "gemini" })).toThrow("PRICE_SOURCE")
 })
 
 test("window length stays on the schema after a later env write", () => {

@@ -3,7 +3,8 @@ import { LATE_BET_CODE, LATE_BET_ERROR } from "../shared/bet"
 import { windowAccepts } from "./config"
 import { getDb, useDatabase } from "./db"
 import { parseMicros } from "./money"
-import { advance, board, credit, ensureUser, feedStatus, notePrint, placeBet, placeBets, resetRuntime, roundDetail, withdraw, youFor, type Print, type Side } from "./rounds"
+import { handoffBanner } from "../shared/source"
+import { adoptFeed, advance, board, credit, ensureUser, failFeed, feedStatus, handoffNow, noteAlive, notePrint, placeBet, placeBets, resetRuntime, resumeAtFor, roundDetail, tapePoints, tickerNow, withdraw, youFor, type Print, type Side } from "./rounds"
 
 const USDC = 1_000_000
 const T = 10_000_000_000_000
@@ -293,6 +294,117 @@ test("round detail includes the tape and the price held into the open", () => {
   expect(tape.map((point) => point.price)).toContain("100.25")
   expect(tape.map((point) => point.price)).toContain("100.75")
   expect(tape.every((point) => point.t <= T + WINDOW + MARKET)).toBe(true)
+})
+
+test("a feed break voids a struck market, refunds the stake, and holds the next window", () => {
+  const you = address(21)
+  const who = address(22)
+  grant(you)
+  grant(who, 10 * USDC)
+  getDb().query("UPDATE users SET is_bot = 1 WHERE address = ?").run(who)
+  notePrint(print("100.00", T - 20))
+  advance(T + 10)
+  expect(bet({ address: you, side: "up", stakeMicros: 50 * USDC, now: T + 100 }).ok).toBe(true)
+  notePrint(print("100.00", T + WINDOW - 20))
+  advance(T + WINDOW + 5)
+  expect(board(T + WINDOW + 5).live?.strike).toBe("100.00")
+  notePrint(print("110.00", T + WINDOW + 1_000))
+
+  const at = T + WINDOW + 2_000
+  const settled = failFeed("binance", "bybit", at)
+  const event = settled.find((row) => row.roundId === MARKET_ID)
+  expect(event?.resolution).toBe("void")
+  expect(event?.feeMicros).toBe(0)
+  expect(event?.settle).toBeNull()
+  expect(event?.payouts.find((payout) => payout.address === you)?.payoutMicros).toBe(50 * USDC)
+  expect(youFor(you)?.balanceMicros).toBe(10_000 * USDC)
+  expect(youFor(you)?.openBets).toEqual([])
+  const row = getDb().query("SELECT status, fee_micros, resolution, settle, strike FROM rounds WHERE id = ?").get(MARKET_ID) as {
+    status: string
+    fee_micros: number
+    resolution: string
+    settle: string | null
+    strike: string
+  }
+  expect(row).toEqual({ status: "void", fee_micros: 0, resolution: "void", settle: null, strike: "100.00" })
+  expect(getDb().query("SELECT COUNT(*) AS n FROM rounds WHERE status = 'open'").get() as { n: number }).toEqual({ n: 0 })
+
+  expect(tickerNow()).toEqual({ venue: "bybit", label: "Bybit BTCUSDT" })
+  expect(handoffNow()).toEqual({ from: "binance", to: "bybit", resumeAt: resumeAtFor(at) })
+  expect(board(at).join).toBeNull()
+  expect(board(at).live).toBeNull()
+  expect(board(at).windowEndsAt).toBe(resumeAtFor(at))
+
+  const held = bet({ address: you, side: "down", stakeMicros: USDC, now: at + 100 })
+  expect(held.ok).toBe(false)
+  if (!held.ok) expect(held.error).toBe(handoffBanner("binance", "bybit"))
+  const bots = placeBets({
+    now: at + 100,
+    roundId: Math.floor((at + 100) / WINDOW),
+    orders: [{ address: who, side: "up", stakeMicros: USDC }],
+  })
+  expect(bots.ok).toBe(false)
+  if (!bots.ok) expect(bots.error).toBe(handoffBanner("binance", "bybit"))
+  expect(youFor(who)?.balanceMicros).toBe(10 * USDC)
+
+  const resume = resumeAtFor(at)
+  expect(advance(resume - 1).settled).toHaveLength(0)
+  expect(board(resume - 1).join).toBeNull()
+  expect(handoffNow()?.to).toBe("bybit")
+  notePrint(print("110.00", resume - 50))
+  advance(resume)
+  expect(handoffNow()).toBeNull()
+  expect(board(resume).join?.id).toBe(resume / WINDOW)
+  expect(bet({ address: you, side: "up", stakeMicros: USDC, now: resume + 10 }).ok).toBe(true)
+})
+
+test("a repeated break does not extend the hold, and a later venue does", () => {
+  notePrint(print("100", T - 20))
+  advance(T + 10)
+  failFeed("binance", "bybit", T + 100)
+  const first = resumeAtFor(T + 100)
+  expect(first).toBe(T + 10_000)
+  failFeed("binance", "bybit", T + 4_000)
+  expect(handoffNow()?.resumeAt).toBe(first)
+  failFeed("bybit", "okx", T + 6_000)
+  expect(handoffNow()).toEqual({ from: "bybit", to: "okx", resumeAt: resumeAtFor(T + 6_000) })
+  expect(tickerNow().label).toBe("OKX BTC-USDT")
+})
+
+test("betting stays closed until a standby is adopted", () => {
+  const you = address(23)
+  grant(you)
+  notePrint(print("100", T - 20))
+  advance(T + 10)
+  expect(bet({ address: you, side: "up", stakeMicros: USDC, now: T + 100 }).ok).toBe(true)
+  const settled = failFeed("binance", null, T + 200)
+  expect(settled[0]?.resolution).toBe("void")
+  expect(tickerNow().venue).toBe("binance")
+  expect(handoffNow()).toEqual({ from: "binance", to: null, resumeAt: null })
+  expect(board(T + 300).join).toBeNull()
+  expect(board(T + 300).windowEndsAt).toBeGreaterThan(0)
+  const waiting = bet({ address: you, side: "up", stakeMicros: USDC, now: T + 300 })
+  expect(waiting.ok).toBe(false)
+  if (!waiting.ok) expect(waiting.error).toBe(handoffBanner("binance", null))
+
+  adoptFeed("okx", T + 400)
+  expect(tickerNow()).toEqual({ venue: "okx", label: "OKX BTC-USDT" })
+  const resume = resumeAtFor(T + 400)
+  expect(handoffNow()).toEqual({ from: "binance", to: "okx", resumeAt: resume })
+  adoptFeed("kraken", T + 3_000)
+  expect(handoffNow()?.to).toBe("okx")
+  expect(handoffNow()?.resumeAt).toBe(resume)
+  expect(board(resume - 1).join).toBeNull()
+  advance(resume)
+  expect(board(resume).join?.id).toBe(resume / WINDOW)
+})
+
+test("a quiet book still counts as a live feed", () => {
+  notePrint(print("100", T - 6_000))
+  expect(feedStatus(T)).toBe("stale")
+  noteAlive(T)
+  expect(feedStatus(T)).toBe("live")
+  expect(tapePoints()).toEqual([{ t: T - 6_000, price: "100" }])
 })
 
 test("insufficient balance does not open a bet", () => {

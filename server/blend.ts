@@ -1,10 +1,6 @@
-import { LIVE_MS, type PriceSource } from "./config"
-
 const PRICE = /^\d+(\.\d+)?$/
 
-export type Leg = { price: string; receivedAt: number }
-
-export type Quote = { price: string; source: PriceSource }
+type Dec = { n: bigint; scale: number }
 
 /** Equal-weight mean of two decimal price strings. An odd sum keeps one extra digit. */
 export function averagePrice(left: string, right: string): string | null {
@@ -18,80 +14,110 @@ export function averagePrice(left: string, right: string): string | null {
 }
 
 /**
- * Last trade from each venue. Emits only when both arrived within maxAge and
- * differ by at most 1% of their midpoint. A missing or stale leg emits nothing.
+ * Size-weighted touch price, rounded half-up to 4 decimal places.
+ * A missing or zero size falls back to the plain mid.
  */
-export function blendLegs(
-  binance: Leg | null,
-  coinbase: Leg | null,
-  now: number,
-  maxAge = LIVE_MS,
-): string | null {
-  if (!binance || !coinbase) return null
-  if (now - binance.receivedAt > maxAge || now - coinbase.receivedAt > maxAge) return null
-  const scaled = scalePair(binance.price, coinbase.price)
-  if (!scaled) return null
-  const sum = scaled.left + scaled.right
-  if (sum === 0n) return null
-  const diff = scaled.left > scaled.right ? scaled.left - scaled.right : scaled.right - scaled.left
-  // |a-b| / midpoint <= 1%. Midpoint is sum/2, so |a-b| * 200 <= sum.
-  if (diff * 200n > sum) return null
-  return averagePrice(binance.price, coinbase.price)
+export function microPrice(bid: string, ask: string, bidQty?: string | null, askQty?: string | null): string | null {
+  const mid = averagePrice(bid, ask)
+  const left = bidQty ? parseDec(bidQty) : null
+  const right = askQty ? parseDec(askQty) : null
+  if (!left || !right || left.n === 0n || right.n === 0n) return mid
+  const b = parseDec(bid)
+  const a = parseDec(ask)
+  if (!b || !a) return null
+  const num = addDec(mulDec(b, right), mulDec(a, left))
+  const den = addDec(left, right)
+  return divRound(num, den, 4)
 }
 
-/**
- * Average when both legs are fresh and within 1%. A missing or stale leg
- * falls back to the one that is still live. Nothing, when neither is.
- */
-export function quoteFromLegs(
-  binance: Leg | null,
-  coinbase: Leg | null,
-  now: number,
-  maxAge = LIVE_MS,
-): Quote | null {
-  const left = fresh(binance, now, maxAge)
-  const right = fresh(coinbase, now, maxAge)
-  if (left && right) {
-    const price = blendLegs(left, right, now, maxAge)
-    if (!price) return null
-    return { price, source: "average" }
-  }
-  if (left) return { price: left.price, source: "binance" }
-  if (right) return { price: right.price, source: "coinbase" }
-  return null
+/** True when the absolute gap is at most `dollars`. */
+export function withinDollars(left: string, right: string, dollars: number): boolean {
+  return compareAbs(left, right, String(dollars)) <= 0
 }
 
-function fresh(leg: Leg | null, now: number, maxAge: number): Leg | null {
-  if (!leg) return null
-  if (now - leg.receivedAt > maxAge) return null
-  return leg
+/** True when the absolute gap is at least `threshold`. */
+export function movedAtLeast(left: string, right: string, threshold: string): boolean {
+  return compareAbs(left, right, threshold) >= 0
+}
+
+function compareAbs(left: string, right: string, threshold: string): number {
+  const gap = absDiff(left, right)
+  const limit = parseDec(threshold)
+  if (!gap || !limit) return 1
+  const scale = Math.max(gap.scale, limit.scale)
+  const a = scaleTo(gap.n, gap.scale, scale)
+  const b = scaleTo(limit.n, limit.scale, scale)
+  if (a < b) return -1
+  if (a > b) return 1
+  return 0
+}
+
+function absDiff(left: string, right: string): Dec | null {
+  const a = parseDec(left)
+  const b = parseDec(right)
+  if (!a || !b) return null
+  const scale = Math.max(a.scale, b.scale)
+  const x = scaleTo(a.n, a.scale, scale)
+  const y = scaleTo(b.n, b.scale, scale)
+  return { n: x > y ? x - y : y - x, scale }
+}
+
+function parseDec(value: string): Dec | null {
+  if (!PRICE.test(value)) return null
+  const [whole, frac = ""] = value.split(".")
+  const digits = `${whole}${frac}`.replace(/^0+(?=\d)/, "")
+  return { n: BigInt(digits), scale: frac.length }
+}
+
+function scaleTo(n: bigint, from: number, to: number): bigint {
+  if (to <= from) return n / 10n ** BigInt(from - to)
+  return n * 10n ** BigInt(to - from)
+}
+
+function mulDec(left: Dec, right: Dec): Dec {
+  return { n: left.n * right.n, scale: left.scale + right.scale }
+}
+
+function addDec(left: Dec, right: Dec): Dec {
+  const scale = Math.max(left.scale, right.scale)
+  return { n: scaleTo(left.n, left.scale, scale) + scaleTo(right.n, right.scale, scale), scale }
+}
+
+function divRound(num: Dec, den: Dec, places: number): string | null {
+  if (den.n === 0n) return null
+  const extra = places + 1
+  const numerator = num.n * 10n ** BigInt(den.scale + extra)
+  const denominator = den.n * 10n ** BigInt(num.scale)
+  const raw = numerator / denominator
+  const rounded = (raw + 5n) / 10n
+  return formatScaled(rounded, places)
 }
 
 function scalePair(left: string, right: string): { left: bigint; right: bigint; scale: number } | null {
-  const a = decimalParts(left)
-  const b = decimalParts(right)
+  const a = parts(left)
+  const b = parts(right)
   if (!a || !b) return null
   const scale = Math.max(a.frac.length, b.frac.length)
   return {
-    left: digitsToBigInt(a.whole + a.frac.padEnd(scale, "0")),
-    right: digitsToBigInt(b.whole + b.frac.padEnd(scale, "0")),
+    left: digits(a.whole + a.frac.padEnd(scale, "0")),
+    right: digits(b.whole + b.frac.padEnd(scale, "0")),
     scale,
   }
 }
 
-function decimalParts(value: string): { whole: string; frac: string } | null {
+function parts(value: string): { whole: string; frac: string } | null {
   if (!PRICE.test(value)) return null
   const [whole, frac = ""] = value.split(".")
   return { whole, frac }
 }
 
-function digitsToBigInt(digits: string): bigint {
-  return BigInt(digits.replace(/^0+(?=\d)/, ""))
+function digits(value: string): bigint {
+  return BigInt(value.replace(/^0+(?=\d)/, ""))
 }
 
 function formatScaled(value: bigint, scale: number): string {
-  const digits = value.toString().padStart(scale + 1, "0")
-  if (scale === 0) return digits
-  const cut = digits.length - scale
-  return `${digits.slice(0, cut)}.${digits.slice(cut)}`
+  const text = value.toString().padStart(scale + 1, "0")
+  if (scale === 0) return text
+  const cut = text.length - scale
+  return `${text.slice(0, cut)}.${text.slice(cut)}`
 }

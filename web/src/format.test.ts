@@ -43,12 +43,16 @@ test("formatGainLoss shows the lost stake or the stake plus winnings", () => {
 
 test("source labels follow the configured feed", () => {
   expect(sourceLabel("binance")).toBe("Binance BTCUSDT")
+  expect(sourceLabel("bybit")).toBe("Bybit BTCUSDT")
+  expect(sourceLabel("okx")).toBe("OKX BTC-USDT")
   expect(sourceLabel("coinbase")).toBe("Coinbase BTC-USD")
-  expect(sourceLabel("average")).toBe("the average of Binance BTCUSDT and Coinbase BTC-USD")
+  expect(sourceLabel("kraken")).toBe("Kraken BTC/USD")
+  expect(sourceLabel("bitstamp")).toBe("Bitstamp BTC/USD")
   expect(sourceLabel("other")).toBe("an unknown feed")
   expect(quotePair("binance")).toBe("BTC-USDT")
   expect(quotePair("coinbase")).toBe("BTC-USD")
-  expect(quotePair("average")).toBe("BTC")
+  expect(quotePair("kraken")).toBe("BTC/USD")
+  expect(quotePair("other")).toBe("BTC")
 })
 
 test("formatPrice keeps the feed decimals", () => {

@@ -486,6 +486,20 @@ body {
   color: var(--warn);
   font-size: 12px;
 }
+.handoff-banner {
+  position: absolute;
+  z-index: 3;
+  top: 12px;
+  left: 12px;
+  right: 12px;
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(9, 10, 12, 0.92);
+  border: 1px solid var(--warn);
+  color: var(--text);
+  font-size: 13px;
+}
 
 .trade {
   display: grid;

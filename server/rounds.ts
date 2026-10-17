@@ -1,5 +1,6 @@
 import { LATE_BET_CODE, LATE_BET_ERROR } from "../shared/bet"
-import { clockAt, feeBps, LIVE_MS, marketBounds, MIN_STAKE_MICROS, TAPE_MS, windowAccepts, type PriceSource } from "./config"
+import { handoffBanner, tickerFor, type Handoff, type Ticker } from "../shared/source"
+import { clockAt, feeBps, LIVE_MS, marketBounds, MIN_STAKE_MICROS, priceSource, TAPE_MS, windowAccepts, windowMs, type PriceSource } from "./config"
 import { getDb } from "./db"
 import { normalizeAddress } from "./money"
 import { settleRound, type Resolution, type Side } from "./settle"
@@ -119,12 +120,54 @@ const prints: Print[] = []
 let lastReceivedAt = 0
 let secondBucket: { sec: number; price: string; source: string; exchangeTs: number } | null = null
 let cachedKey = ""
+let handoff: Handoff | null = null
+let ticker: Ticker = tickerFor(priceSource())
 
 export function resetRuntime() {
   prints.length = 0
   lastReceivedAt = 0
   secondBucket = null
   cachedKey = ""
+  handoff = null
+  ticker = tickerFor(priceSource())
+}
+
+export function noteAlive(at: number) {
+  lastReceivedAt = at
+}
+
+export function tickerNow(): Ticker {
+  return ticker
+}
+
+export function handoffNow(): Handoff | null {
+  return handoff
+}
+
+/** The first window boundary at least one betting window after `now`. */
+export function resumeAtFor(now: number): number {
+  const span = windowMs()
+  return Math.ceil((now + span) / span) * span
+}
+
+function feedHeld(now: number): boolean {
+  if (!handoff) return false
+  if (handoff.resumeAt == null) return true
+  return now < handoff.resumeAt
+}
+
+export function failFeed(from: PriceSource, to: PriceSource | null, now: number): SettledEvent[] {
+  const settled = voidOpenRounds()
+  if (handoff && handoff.from === from && handoff.to === to) return settled
+  handoff = { from, to, resumeAt: to ? resumeAtFor(now) : null }
+  if (to) ticker = tickerFor(to)
+  return settled
+}
+
+export function adoptFeed(to: PriceSource, now: number) {
+  if (!handoff || handoff.to) return
+  handoff = { from: handoff.from, to, resumeAt: resumeAtFor(now) }
+  ticker = tickerFor(to)
 }
 
 export function notePrint(print: Print) {
@@ -321,6 +364,17 @@ function cardFor(id: number): PoolCard | null {
 
 export function board(now = Date.now()): Board {
   const clock = clockAt(now)
+  if (feedHeld(now)) {
+    return {
+      blockStart: clock.blockStart,
+      blockEnd: clock.blockEnd,
+      windowEndsAt: handoff?.resumeAt ?? clock.windowEndsAt,
+      phase: "bets",
+      join: null,
+      live: null,
+      bands: [],
+    }
+  }
   if (clock.joinId >= 0) ensureRound(clock.joinId)
   if (clock.liveId >= 0) ensureRound(clock.liveId)
   const rows = getDb()
@@ -417,6 +471,7 @@ export function placeBet(input: {
         throw new BetError("Minimum stake is 1 USDC")
       }
 
+      if (handoff && feedHeld(input.now)) throw new BetError(handoffBanner(handoff.from, handoff.to))
       const id = namedRound(input.roundId, input.now)
       ensureRound(id)
       const round = getRound(id)
@@ -485,11 +540,16 @@ function loadBets(roundId: number): BetRow[] {
     .all(roundId) as BetRow[]
 }
 
-function closeRound(round: RoundRow): SettledEvent {
+function voidOpenRounds(): SettledEvent[] {
+  const open = getDb().query("SELECT * FROM rounds WHERE status = 'open' ORDER BY id ASC").all() as RoundRow[]
+  return open.map((round) => closeRound(round, true))
+}
+
+function closeRound(round: RoundRow, forceVoid = false): SettledEvent {
   const life = round.ends_at - round.starts_at
   let strike = round.strike
   if (!strike) strike = priceAt(round.starts_at, life)?.price ?? null
-  const settlePrint = priceAt(round.ends_at, life)
+  const settlePrint = forceVoid ? null : priceAt(round.ends_at, life)
   const bets = loadBets(round.id)
   const outcome = settleRound({
     bets: bets.map((bet) => ({
@@ -501,7 +561,7 @@ function closeRound(round: RoundRow): SettledEvent {
     strike,
     settle: settlePrint?.price ?? null,
     feeBps: feeBps(),
-    stale: !strike || !settlePrint,
+    stale: forceVoid || !strike || !settlePrint,
   })
 
   const tx = getDb().transaction(() => {
@@ -567,6 +627,15 @@ export function advance(now: number): { settled: SettledEvent[]; broadcastRound:
   const clock = clockAt(now)
   const settled: SettledEvent[] = []
   let broadcastRound = false
+
+  if (handoff?.resumeAt != null && now >= handoff.resumeAt) {
+    handoff = null
+    broadcastRound = true
+  }
+  if (feedHeld(now)) {
+    const voided = voidOpenRounds()
+    return { settled: voided, broadcastRound: broadcastRound || voided.length > 0 }
+  }
 
   const due = getDb()
     .query("SELECT * FROM rounds WHERE status = 'open' AND ends_at <= ? ORDER BY id ASC")
@@ -704,6 +773,7 @@ export function placeBets(input: {
   roundId: number
   now: number
 }): { ok: true; results: BetRowResult[]; accepted: number } | { ok: false; error: string; code?: typeof LATE_BET_CODE } {
+  if (handoff && feedHeld(input.now)) return { ok: false, error: handoffBanner(handoff.from, handoff.to) }
   if (input.orders.length > 200) return { ok: false, error: "Chunk is too large" }
   if (input.orders.length === 0) return { ok: true, results: [], accepted: 0 }
   let id: number
@@ -822,6 +892,15 @@ export function openBook(now: number): {
   poolDownMicros: number
   feed: "live" | "stale"
 } {
+  if (feedHeld(now)) {
+    return {
+      joinId: -1,
+      windowEndsAt: handoff?.resumeAt ?? now,
+      poolUpMicros: 0,
+      poolDownMicros: 0,
+      feed: feedStatus(now),
+    }
+  }
   const clock = clockAt(now)
   let poolUpMicros = 0
   let poolDownMicros = 0

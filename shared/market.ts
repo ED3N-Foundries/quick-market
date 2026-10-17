@@ -2,7 +2,9 @@ import * as z from "zod"
 import type { ChainKey, TokenKind } from "./chain"
 import type { Assert, Equal } from "./exact"
 
-export type PriceSource = "binance" | "coinbase" | "average"
+export const priceSources = ["binance", "bybit", "okx", "coinbase", "kraken", "bitstamp"] as const
+
+export type PriceSource = (typeof priceSources)[number]
 
 /** Product knobs. The hardcoded object wins over the same names in `.env`. */
 export type MarketPreferences = {
@@ -47,7 +49,7 @@ export const marketSchema = z.strictObject({
   marketSeconds: seconds,
   viewSeconds: seconds,
   feeBps: z.int().min(0).max(10_000),
-  priceSource: z.enum(["binance", "coinbase", "average"]),
+  priceSource: z.enum(priceSources),
   minStakeMicros: positive,
   liveMs: positive,
   tapeMs: positive,
@@ -63,7 +65,7 @@ const hardcoded: MarketPreferences = {
   marketSeconds: 5,
   viewSeconds: 5,
   feeBps: 0,
-  priceSource: "average",
+  priceSource: "binance",
   minStakeMicros: 1_000_000,
   liveMs: 5_000,
   tapeMs: 15 * 60 * 1000,
@@ -99,7 +101,7 @@ const preferenceEnv = z.object({
   MARKET_SECONDS: optionalSeconds,
   VIEW_SECONDS: optionalSeconds,
   FEE_BPS: z.preprocess(unset, z.coerce.number().int().min(0).max(10_000).optional()),
-  PRICE_SOURCE: z.preprocess(unset, z.enum(["binance", "coinbase", "average"]).optional()),
+  PRICE_SOURCE: z.preprocess(unset, z.enum(priceSources).optional()),
   GRANT_MICROS: optionalPositive,
   GRANT_INTERVAL_MS: optionalPositive,
 })

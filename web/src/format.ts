@@ -27,11 +27,7 @@ export function parseAmountMicros(input: string): number | null {
   return micros
 }
 
-export function quotePair(source: string): string {
-  if (source === "coinbase") return "BTC-USD"
-  if (source === "binance") return "BTC-USDT"
-  return "BTC"
-}
+export { handoffBanner, quotePair, sourceLabel, sourceName } from "../../shared/source"
 
 export function microsToInput(micros: number): string {
   const whole = Math.floor(Math.max(0, micros) / 1_000_000)
@@ -270,13 +266,6 @@ export function formatClock(ms: number): string {
     minute: "2-digit",
     second: "2-digit",
   })
-}
-
-export function sourceLabel(source: string): string {
-  if (source === "coinbase") return "Coinbase BTC-USD"
-  if (source === "binance") return "Binance BTCUSDT"
-  if (source === "average") return "the average of Binance BTCUSDT and Coinbase BTC-USD"
-  return "an unknown feed"
 }
 
 export function takeMicros(stake: number, side: "up" | "down", up: number, down: number, feeBps: number): number {

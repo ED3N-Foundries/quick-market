@@ -11,7 +11,7 @@ import { applyGrant, grantSettings } from "./grant"
 import { hub } from "./hub"
 import { parseMicros } from "./money"
 import { startOracle } from "./oracle"
-import { advance, board, feedStatus, listRounds, notePrint, placeBet, roundDetail, tapePoints, youFor } from "./rounds"
+import { adoptFeed, advance, board, failFeed, feedStatus, handoffNow, listRounds, noteAlive, notePrint, placeBet, roundDetail, tapePoints, tickerNow, youFor } from "./rounds"
 import { agentAuthorized, endSession, openSession, readSession } from "./session"
 
 let chain: ReturnType<typeof configuredChain>
@@ -48,15 +48,38 @@ const runtime = globalThis as unknown as {
   quickMarketStopOracle?: () => void
 }
 runtime.quickMarketStopOracle?.()
-runtime.quickMarketStopOracle = startOracle((print) => {
-  notePrint(print)
-  pending = { price: print.price, exchangeTs: print.exchangeTs, source: print.source }
+runtime.quickMarketStopOracle = startOracle({
+  onPrint(print) {
+    notePrint(print)
+    pending = { price: print.price, exchangeTs: print.exchangeTs, source: print.source }
+  },
+  onAlive(at) {
+    noteAlive(at)
+  },
+  onBreak(event) {
+    const settled = failFeed(event.from, event.to, event.at)
+    for (const item of settled) hub.broadcast({ type: "settled", serverNow: event.at, ...item })
+    publishRound(event.at)
+  },
+  onAdopt(event) {
+    adoptFeed(event.to, event.at)
+    publishRound(event.at)
+  },
 })
 
 function publishRound(now = Date.now()) {
   const feed = feedStatus(now)
   lastFeed = feed
-  hub.broadcast({ type: "round", serverNow: now, feed, source: priceSource(), board: board(now) })
+  const ticker = tickerNow()
+  hub.broadcast({
+    type: "round",
+    serverNow: now,
+    feed,
+    source: ticker.venue,
+    ticker,
+    handoff: handoffNow(),
+    board: board(now),
+  })
 }
 
 if (runtime.quickMarketTimer) clearInterval(runtime.quickMarketTimer)
@@ -144,6 +167,8 @@ async function handle(req: Request): Promise<Response> {
       serverNow: now,
       feed: feedStatus(now),
       config: publicConfig(),
+      ticker: tickerNow(),
+      handoff: handoffNow(),
       board: board(now),
       you: session.address ? youFor(session.address) : null,
       tape: tapePoints(),
@@ -281,7 +306,17 @@ Bun.serve({
     open(ws) {
       hub.add(ws)
       const now = Date.now()
-      ws.send(JSON.stringify({ type: "round", serverNow: now, feed: feedStatus(now), source: priceSource(), board: board(now) }))
+      ws.send(
+        JSON.stringify({
+          type: "round",
+          serverNow: now,
+          feed: feedStatus(now),
+          source: tickerNow().venue,
+          ticker: tickerNow(),
+          handoff: handoffNow(),
+          board: board(now),
+        }),
+      )
     },
     message() {},
     close(ws) {

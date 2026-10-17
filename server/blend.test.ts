@@ -1,9 +1,5 @@
 import { expect, test } from "bun:test"
-import { averagePrice, blendLegs, quoteFromLegs, type Leg } from "./blend"
-
-function leg(price: string, receivedAt: number): Leg {
-  return { price, receivedAt }
-}
+import { averagePrice, microPrice, movedAtLeast, withinDollars } from "./blend"
 
 test("averagePrice halves two decimal strings without binary rounding", () => {
   expect(averagePrice("67234.10", "67234.10")).toBe("67234.10")
@@ -23,39 +19,18 @@ test("averagePrice rejects a price that is not a decimal", () => {
   expect(averagePrice("0", "0")).toBeNull()
 })
 
-test("blendLegs waits for both venues", () => {
-  const now = 10_000
-  expect(blendLegs(leg("100", now), null, now)).toBeNull()
-  expect(blendLegs(null, leg("100", now), now)).toBeNull()
-  expect(blendLegs(leg("100.1", now), leg("100.2", now), now)).toBe("100.15")
+test("microPrice weights the touch and rounds to 4 decimal places", () => {
+  expect(microPrice("100", "102", "1", "1")).toBe("101.0000")
+  expect(microPrice("100", "102", "3", "1")).toBe("101.5000")
+  expect(microPrice("100.00", "102.00")).toBe("101.00")
+  expect(microPrice("100", "102", "0", "1")).toBe("101")
+  expect(microPrice("nope", "102", "1", "1")).toBeNull()
 })
 
-test("blendLegs drops a leg older than the live window and keeps one at the edge", () => {
-  const now = 10_000
-  expect(blendLegs(leg("100", now - 5_000), leg("100", now), now)).toBe("100")
-  expect(blendLegs(leg("100", now - 5_001), leg("100", now), now)).toBeNull()
-  expect(blendLegs(leg("100", now), leg("100", now - 5_001), now)).toBeNull()
-})
-
-test("blendLegs drops a pair more than 1% apart and keeps a pair at 1%", () => {
-  const now = 10_000
-  expect(blendLegs(leg("19900", now), leg("20100", now), now)).toBe("20000")
-  expect(blendLegs(leg("19900", now), leg("20101", now), now)).toBeNull()
-  expect(blendLegs(leg("100", now), leg("200", now), now)).toBeNull()
-})
-
-test("quoteFromLegs uses the live venue when the other is missing or stale", () => {
-  const now = 10_000
-  expect(quoteFromLegs(leg("100.5", now), null, now)).toEqual({ price: "100.5", source: "binance" })
-  expect(quoteFromLegs(null, leg("100.25", now), now)).toEqual({ price: "100.25", source: "coinbase" })
-  expect(quoteFromLegs(leg("100", now - 5_001), leg("101", now), now)).toEqual({ price: "101", source: "coinbase" })
-  expect(quoteFromLegs(leg("100", now), leg("101", now - 5_001), now)).toEqual({ price: "100", source: "binance" })
-  expect(quoteFromLegs(null, null, now)).toBeNull()
-  expect(quoteFromLegs(leg("100", now - 5_001), leg("101", now - 5_001), now)).toBeNull()
-})
-
-test("quoteFromLegs averages two fresh legs and drops a pair more than 1% apart", () => {
-  const now = 10_000
-  expect(quoteFromLegs(leg("100.1", now), leg("100.2", now), now)).toEqual({ price: "100.15", source: "average" })
-  expect(quoteFromLegs(leg("100", now), leg("200", now), now)).toBeNull()
+test("withinDollars keeps a $25 gap and drops a wider one", () => {
+  expect(withinDollars("81648.96", "81623.96", 25)).toBe(true)
+  expect(withinDollars("81648.96", "81623.95", 25)).toBe(false)
+  expect(withinDollars("81648.96", "81532.80", 25)).toBe(false)
+  expect(movedAtLeast("100", "100.009", "0.01")).toBe(false)
+  expect(movedAtLeast("100", "100.01", "0.01")).toBe(true)
 })

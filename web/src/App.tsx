@@ -14,6 +14,7 @@ import {
   formatPriceDelta,
   formatSigned,
   formatGrantDollars,
+  handoffBanner,
   grantButtonLabel,
   grantNextLabel,
   grantSentence,
@@ -149,7 +150,8 @@ export function App() {
   }, [board, market.offsetRef])
   const heldSpan = board ? heldMarket(board, openBets, now) : null
   const focus = focusPool(board, openBets, now)
-  const canBet = !!you && !heldSpan && !!board && joinIsLive(board, now) && market.feed === "live" && !market.pending
+  const canBet =
+    !!you && !heldSpan && !!board && joinIsLive(board, now) && market.feed === "live" && !market.pending && !market.handoff
   const total = (focus?.poolUpMicros ?? 0) + (focus?.poolDownMicros ?? 0)
   const held = openBets.find((bet) => bet.roundId === focus?.id) ?? null
   const upQuote = focus ? quoteDollar("up", focus.poolUpMicros, focus.poolDownMicros, market.config.feeBps) : "—"
@@ -212,10 +214,12 @@ export function App() {
           <span className="pair">BTC</span>
         </div>
         <div className="clock-cluster" data-move={heldSpan?.strike ? "1" : "0"}>
-          <PriceReadout priceRef={market.priceRef} strike={heldSpan?.strike ?? null} source={market.config.source} />
+          <PriceReadout priceRef={market.priceRef} strike={heldSpan?.strike ?? null} source={market.ticker.venue} />
           <div className="clock-block">
-            <span className="clock-label">{heldSpan ? "Settles" : "Bets"}</span>
-            {board ? (
+            <span className="clock-label">{market.handoff ? "Opens" : heldSpan ? "Settles" : "Bets"}</span>
+            {market.handoff?.resumeAt ? (
+              <Countdown endsAt={market.handoff.resumeAt} offsetRef={market.offsetRef} />
+            ) : board && !market.handoff ? (
               <Countdown endsAt={heldSpan ? heldSpan.settlesAt : board.windowEndsAt} offsetRef={market.offsetRef} />
             ) : (
               <span className="clock-line">
@@ -244,7 +248,8 @@ export function App() {
             offsetRef={market.offsetRef}
           />
         )}
-        {market.feed === "stale" && <p className="feed-flag">Price delayed</p>}
+        {market.handoff && <p className="handoff-banner">{handoffBanner(market.handoff.from, market.handoff.to)}</p>}
+        {market.feed === "stale" && !market.handoff && <p className="feed-flag">Price delayed</p>}
         {!following && (
           <button
             type="button"
@@ -561,8 +566,9 @@ export function App() {
           </p>
           <p>Up finishes above the open. Down finishes below. Push is a tie, and stakes return.</p>
           <p>If a market never gets a price, it is void and stakes return.</p>
+          <p>If the price feed drops during a market, that market is void and stakes return. The next feed is shown before betting starts.</p>
           <p>
-            {(market.config.feeBps / 100).toFixed(2)}% fee on a paid pool. Price from {sourceLabel(market.config.source)}.
+            {(market.config.feeBps / 100).toFixed(2)}% fee on a paid pool. Price from {market.ticker.label || sourceLabel(market.ticker.venue)}.
           </p>
         </div>
       </footer>

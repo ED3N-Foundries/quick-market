@@ -3,6 +3,8 @@ import { LATE_BET_CODE } from "../../shared/bet"
 import { chainFromEnv, moneyLabel, tokenKind, tokenLabel, type ChainConfig } from "../../shared/chain"
 import { marketPreferences } from "../../shared/market"
 import type { TapeChart, TapePoint } from "./chart"
+import type { Handoff, Ticker } from "../../shared/source"
+import { tickerFor } from "../../shared/source"
 import type { Board, Config, SettledMessage, Side, You } from "./types"
 
 function configuredChain(): ChainConfig {
@@ -45,6 +47,8 @@ export function useMarket(token: string | null) {
   const [you, setYou] = useState<You | null>(null)
   const [config, setConfig] = useState<Config>(defaultConfig)
   const [feed, setFeed] = useState<"live" | "stale">("stale")
+  const [ticker, setTicker] = useState<Ticker>(tickerFor("binance"))
+  const [handoff, setHandoff] = useState<Handoff | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [pending, setPending] = useState(false)
   const [historyVersion, setHistoryVersion] = useState(0)
@@ -105,6 +109,8 @@ export function useMarket(token: string | null) {
     setBoard(body.board)
     setConfig(body.config)
     setFeed(body.feed)
+    if (body.ticker) setTicker(body.ticker)
+    setHandoff(body.handoff ?? null)
     offsetRef.current = body.serverNow - Date.now()
     setYou(body.you ?? null)
     return body.you ?? null
@@ -148,6 +154,8 @@ export function useMarket(token: string | null) {
         setBoard(body.board)
         setConfig(body.config)
         setFeed(body.feed)
+        if (body.ticker) setTicker(body.ticker)
+        setHandoff(body.handoff ?? null)
         offsetRef.current = body.serverNow - Date.now()
         setYou(body.you ?? null)
         if (!seededRef.current) {
@@ -179,7 +187,7 @@ export function useMarket(token: string | null) {
       socket.onmessage = (event) => {
         const message = JSON.parse(String(event.data)) as
           | { type: "tick"; price: string; exchangeTs: number; serverNow: number; feed: "live" | "stale" }
-          | { type: "round"; serverNow: number; feed: "live" | "stale"; board: Board }
+          | { type: "round"; serverNow: number; feed: "live" | "stale"; board: Board; ticker?: Ticker; handoff?: Handoff | null }
           | SettledMessage
         if ("serverNow" in message) offsetRef.current = message.serverNow - Date.now()
         if (message.type === "tick") {
@@ -188,6 +196,8 @@ export function useMarket(token: string | null) {
         } else if (message.type === "round") {
           setFeed(message.feed)
           setBoard(message.board)
+          if (message.ticker) setTicker(message.ticker)
+          setHandoff(message.handoff ?? null)
         } else if (message.type === "settled") {
           const address = youRef.current?.address ?? null
           const mine = address ? message.payouts.find((payout) => payout.address === address) : null
@@ -333,6 +343,8 @@ export function useMarket(token: string | null) {
     you,
     config,
     feed,
+    ticker,
+    handoff,
     error,
     setError,
     pending,
