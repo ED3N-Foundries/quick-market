@@ -18,8 +18,10 @@ import {
   loadWalletMap,
   metaGet,
   metaSet,
+  minStakeRoundAfter,
   noteWindow,
   openSwarm,
+  pruneUnenrolled,
   saveStakes,
   saveWallets,
   stakesFor,
@@ -94,24 +96,38 @@ async function main() {
   requireSepoliaToken(chain)
 
   const db = openSwarm(SWARM_DB_PATH)
+  pruneUnenrolled(db)
   let keys = growKeys(loadKeyFile(), 0, swarmConfig.runner.keyCap)
   saveKeyFile(keys)
   const wallets = new Map<string, LiveWallet>()
   const stored = loadWalletMap(db)
   keys.forEach((key, index) => remember(wallets, key, stored.get(key.address.toLowerCase()) ?? null, index))
+  const existingBalances = await fetchBalances([...wallets.keys()])
+  for (const row of existingBalances) {
+    const wallet = wallets.get(row.address)
+    if (!wallet) continue
+    wallet.enrolled = true
+    wallet.bankroll = row.balanceMicros
+    wallet.dirty = true
+  }
   const initialSteer = steering()
+  const storedSpring = metaGet(db, "spring") !== null ? Number(metaGet(db, "spring")) : null
+  const defaultSpring =
+    initialSteer.pin ??
+    stepDirector(createDirector(swarmConfig.clock.floor), {
+      now: Date.now(),
+      dtSec: 0,
+      tape: { absReturn: 1, volatility: 1 },
+      config: swarmConfig.clock,
+      pin: initialSteer.pin,
+      hold: initialSteer.hold,
+    }).target
   const initialSpring =
-    metaGet(db, "spring") !== null
-      ? Number(metaGet(db, "spring"))
-      : (initialSteer.pin ??
-        stepDirector(createDirector(swarmConfig.clock.floor), {
-          now: Date.now(),
-          dtSec: 0,
-          tape: { absReturn: 1, volatility: 1 },
-          config: swarmConfig.clock,
-          pin: initialSteer.pin,
-          hold: initialSteer.hold,
-        }).target)
+    storedSpring !== null && Number.isFinite(storedSpring)
+      ? initialSteer.pin === null
+        ? Math.max(storedSpring, swarmConfig.clock.floor)
+        : storedSpring
+      : defaultSpring
   const director = createDirector(initialSpring)
   director.velocity = Number(metaGet(db, "velocity") ?? "0")
   let lastAt = Date.now() - 1_000
@@ -119,10 +135,16 @@ async function main() {
   let book: Book | null = null
   let bookAt: number | null = null
   let cursor = Number(metaGet(db, "settle_cursor") ?? "0")
+  const earliestStakeRound = minStakeRoundAfter(db, 0)
+  if (earliestStakeRound !== null && cursor < earliestStakeRound - 1) {
+    cursor = earliestStakeRound - 1
+  }
   let pending: Pending | null = null
   let auditAt = 0
   let auditCursor = 0
   let bankAt = 0
+  let enrolling = false
+  let banking = false
   let minute = Math.floor(Date.now() / 60_000)
   let arrivedMinute = 0
   let leftMinute = 0
@@ -141,10 +163,10 @@ async function main() {
   let lastView: DirectorView | null = null
   let stopping = false
 
-  const flush = () => {
-    const dirty = [...wallets.values()].filter((wallet) => wallet.dirty).map((wallet) => toRow(wallet))
+  const flush = (running = !stopping) => {
+    const dirty = [...wallets.values()].filter((wallet) => wallet.dirty && wallet.enrolled).map((wallet) => toRow(wallet))
     saveWallets(db, dirty)
-    for (const wallet of wallets.values()) wallet.dirty = false
+    for (const wallet of wallets.values()) if (wallet.enrolled) wallet.dirty = false
     metaSet(db, "spring", String(director.value))
     metaSet(db, "velocity", String(director.velocity))
     metaSet(db, "settle_cursor", String(cursor))
@@ -162,6 +184,7 @@ async function main() {
       leftMinute,
       trace,
       windowStats,
+      running,
     })
     writeJsonAtomic(SWARM_PATH, snapshot)
     writeJsonAtomic(STATUS_PATH, snapshot)
@@ -171,7 +194,7 @@ async function main() {
   const stop = () => {
     if (stopping) return
     stopping = true
-    flush()
+    flush(false)
     process.exit(0)
   }
   process.on("SIGINT", stop)
@@ -218,24 +241,30 @@ async function main() {
         if (!wallets.has(key.address.toLowerCase())) remember(wallets, key, null, index)
       })
       const hour = manilaHour(now, swarmConfig.clock.timeZoneOffsetHours)
-      const clocks = [...wallets.values()].sort((left, right) => left.index - right.index).map((wallet) => wallet.clock)
-      const seated = new Set([...wallets.values()].filter((wallet) => wallet.online).map((wallet) => wallet.address))
+      const enrolledWallets = [...wallets.values()].filter((wallet) => wallet.enrolled).sort((left, right) => left.index - right.index)
+      const clocks = enrolledWallets.map((wallet) => wallet.clock)
+      const seated = new Set(enrolledWallets.filter((wallet) => wallet.online).map((wallet) => wallet.address))
       const bend = presenceBend(points, now)
+      const presentTarget = Math.min(view.online, enrolledWallets.length)
+      const presentWindow: readonly [number, number] = [
+        Math.min(view.window[0], presentTarget),
+        Math.min(view.window[1], Math.max(presentTarget, enrolledWallets.length)),
+      ]
       const step = stepPresence({
         clocks,
         seated,
         now,
         dtSec: dt,
         hour,
-        target: view.online,
-        window: view.window,
+        target: presentTarget,
+        window: presentWindow,
         tape: bend,
         recentArrivals: recent,
         config: swarmConfig.presence,
         perSecond: swarmConfig.clock.perSecond,
       })
       const byAddress = new Map(step.clocks.map((clock) => [clock.address, clock]))
-      for (const wallet of wallets.values()) {
+      for (const wallet of enrolledWallets) {
         const clock = byAddress.get(wallet.address)
         if (!clock) continue
         if (clock.cursor !== wallet.clock.cursor || clock.visitEnd !== wallet.clock.visitEnd || clock.gapEnd !== wallet.clock.gapEnd) {
@@ -246,7 +275,7 @@ async function main() {
       const joinId = Math.floor(now / windowMs())
       for (const address of step.arrived) {
         const wallet = wallets.get(address)
-        if (!wallet || wallet.online) continue
+        if (!wallet || wallet.online || !wallet.enrolled) continue
         wallet.online = true
         wallet.wokeAt = now
         if (wallet.gate.readyWindow < joinId) {
@@ -272,20 +301,31 @@ async function main() {
       while (recent.length > 0 && now - recent[0]!.at > swarmConfig.presence.herdWindowMs) recent.shift()
 
       flush()
-      await enrollDue(wallets, chain.id, now, flow, (message) => {
-        lastError = message
-      })
+      if (!enrolling && enrolledWallets.length < Math.min(swarmConfig.runner.keyCap, Math.ceil(view.online))) {
+        enrolling = true
+        void enrollDue(wallets, chain.id, now, Math.ceil(view.online), flow, (message) => {
+          lastError = message
+        }).finally(() => {
+          enrolling = false
+        })
+      }
 
       if (lastJoin !== joinId) {
-        const next = await fetchBook(cursor)
+        let next = await fetchBook(cursor)
         if (next) {
           book = next
           bookAt = Date.now()
           lastJoin = joinId
           lastError = null
-          await applySettled(db, wallets, book, () => cursor, (value) => {
-            cursor = value
-          })
+          while (next) {
+            const before = cursor
+            await applySettled(db, wallets, next, () => cursor, (value) => {
+              cursor = value
+            })
+            if (next.settled.length < 200 || cursor <= before) break
+            next = await fetchBook(cursor)
+            if (next) book = next
+          }
         } else lastError = "Book did not load"
       }
 
@@ -372,11 +412,14 @@ async function main() {
         })
         auditAt = now
       }
-      if (steered.control.bleed && now - bankAt >= swarmConfig.runner.bankEveryMs) {
-        await bankPass(wallets, flow, (message) => {
-          lastError = message
-        })
+      if (!banking && steered.control.bleed && now - bankAt >= swarmConfig.runner.bankEveryMs) {
+        banking = true
         bankAt = now
+        void bankPass(wallets, flow, (message) => {
+          lastError = message
+        }).finally(() => {
+          banking = false
+        })
       }
     } catch (error) {
       lastError = error instanceof Error ? error.message : "Swarm tick failed"
@@ -415,7 +458,7 @@ function remember(wallets: Map<string, LiveWallet>, key: StoredKey, row: WalletR
     address,
     privateKey: key.privateKey,
     clock,
-    online: row?.online === 1,
+    online: row?.online === 1 && row?.enrolled === 1,
     enrolled: row?.enrolled === 1,
     bankroll: row?.bankroll ?? 0,
     handled: row?.handled === 1,
@@ -429,7 +472,7 @@ function remember(wallets: Map<string, LiveWallet>, key: StoredKey, row: WalletR
     wokeAt: row?.wokeAt ?? null,
     sleptAt: row?.sleptAt ?? null,
     nextEnroll: 0,
-    dirty: row === null,
+    dirty: false,
   })
 }
 
@@ -484,8 +527,21 @@ function toRow(wallet: LiveWallet): WalletRow {
   }
 }
 
-async function enrollDue(wallets: Map<string, LiveWallet>, chainId: number, now: number, flow: FlowFile, fail: (message: string) => void) {
-  const due = [...wallets.values()].filter((wallet) => wallet.online && !wallet.enrolled && wallet.nextEnroll <= now)
+async function enrollDue(
+  wallets: Map<string, LiveWallet>,
+  chainId: number,
+  now: number,
+  wantedOnline: number,
+  flow: FlowFile,
+  fail: (message: string) => void,
+) {
+  const enrolledCount = walletsEnrolled(wallets)
+  const needed = Math.max(0, Math.min(swarmConfig.runner.keyCap, wantedOnline) - enrolledCount)
+  if (needed === 0) return
+  const due = [...wallets.values()]
+    .filter((wallet) => !wallet.enrolled && wallet.nextEnroll <= now)
+    .sort((left, right) => left.index - right.index)
+    .slice(0, Math.min(needed, swarmConfig.runner.enrollWidth))
   await pool(due, swarmConfig.runner.enrollWidth, async (wallet) => {
     const seed = seedMicros(wallet.index, swarmConfig.bank)
     const issued = Date.now()
@@ -736,6 +792,7 @@ function buildSnapshot(input: {
   leftMinute: number
   trace: number[]
   windowStats: { roundId: number | null; bets: number; skips: number; up: number; down: number; stakes: number[] }
+  running: boolean
 }): SwarmSnapshot {
   const steered = steering()
   const view = input.view
@@ -747,7 +804,10 @@ function buildSnapshot(input: {
     phase: view?.phase ?? "clock",
     hour: view?.hour ?? 0,
     window: view ? [view.window[0], view.window[1]] : [0, 0],
-    online: walletsOnline(input.wallets),
+    online: input.running ? walletsOnline(input.wallets) : 0,
+    enrolled: walletsEnrolled(input.wallets),
+    pid: input.running ? process.pid : null,
+    running: input.running,
     spring: input.director.value,
     target: view?.target ?? input.director.value,
     arrivedMinute: input.arrivedMinute,
@@ -776,7 +836,13 @@ function buildSnapshot(input: {
 
 function walletsOnline(wallets: Map<string, LiveWallet>): number {
   let count = 0
-  for (const wallet of wallets.values()) if (wallet.online) count += 1
+  for (const wallet of wallets.values()) if (wallet.online && wallet.enrolled) count += 1
+  return count
+}
+
+function walletsEnrolled(wallets: Map<string, LiveWallet>): number {
+  let count = 0
+  for (const wallet of wallets.values()) if (wallet.enrolled) count += 1
   return count
 }
 

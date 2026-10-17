@@ -96,18 +96,45 @@ async function signedTransfer(to: Address, amount: bigint): Promise<Hex> {
   return account.signTransaction(prepared as Parameters<PrivateKeyAccount["signTransaction"]>[0])
 }
 
+let pendingMintMicros = 0
+let pendingMintWaiters: { resolve: () => void; reject: (error: unknown) => void }[] = []
+let mintScheduled = false
+
 export async function mintToTreasury(amountMicros: number): Promise<void> {
   if (!Number.isSafeInteger(amountMicros) || amountMicros <= 0) throw new Error("Amount is invalid")
-  const { chain, account, publicClient, walletClient } = clients()
-  const hash = await walletClient.writeContract({
-    address: chain.usdc,
-    abi: mintAbi,
-    functionName: "mint",
-    args: [account.address, BigInt(amountMicros)],
-    gas: 200_000n,
+  return new Promise<void>((resolve, reject) => {
+    pendingMintMicros += amountMicros
+    pendingMintWaiters.push({ resolve, reject })
+    if (mintScheduled) return
+    mintScheduled = true
+    queueMicrotask(() => {
+      mintScheduled = false
+      const total = pendingMintMicros
+      const waiters = pendingMintWaiters
+      pendingMintMicros = 0
+      pendingMintWaiters = []
+      if (total <= 0 || waiters.length === 0) return
+      enqueue(async () => {
+        const { chain, account, publicClient, walletClient } = clients()
+        const hash = await walletClient.writeContract({
+          address: chain.usdc,
+          abi: mintAbi,
+          functionName: "mint",
+          args: [account.address, BigInt(total)],
+          gas: 200_000n,
+        })
+        const receipt = await publicClient.waitForTransactionReceipt({ hash })
+        if (receipt.status !== "success") throw new Error(`Mint failed ${hash}`)
+      }).then(
+        () => {
+          for (const waiter of waiters) waiter.resolve()
+        },
+        (error) => {
+          for (const waiter of waiters) waiter.reject(error)
+        },
+      )
+    })
   })
-  const receipt = await publicClient.waitForTransactionReceipt({ hash })
-  if (receipt.status !== "success") throw new Error(`Mint failed ${hash}`)
 }
 
 function clients() {

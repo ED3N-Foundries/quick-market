@@ -189,24 +189,33 @@ export function stakesFor(db: Database, roundId: number): { address: string; sid
   )
 }
 
+export function minStakeRoundAfter(db: Database, sinceId: number): number | null {
+  const row = db.query("SELECT MIN(round_id) AS min_id FROM stakes WHERE round_id > ?").get(sinceId) as { min_id: number | null } | null
+  return row?.min_id ?? null
+}
+
+export function pruneUnenrolled(db: Database): void {
+  db.query("DELETE FROM wallets WHERE enrolled = 0").run()
+}
+
 export function roster(db: Database, filter: RosterFilter, offset: number, limit: number): WalletRow[] {
   const sql = {
-    richest: "SELECT * FROM wallets ORDER BY bankroll DESC LIMIT ? OFFSET ?",
-    woke: "SELECT * FROM wallets WHERE online = 1 ORDER BY woke_at DESC LIMIT ? OFFSET ?",
-    slept: "SELECT * FROM wallets WHERE online = 0 ORDER BY slept_at DESC LIMIT ? OFFSET ?",
-    stuck: "SELECT * FROM wallets WHERE online = 1 AND last_skip IN ('refractory', 'flat') ORDER BY idx ASC LIMIT ? OFFSET ?",
-    all: "SELECT * FROM wallets ORDER BY online DESC, idx ASC LIMIT ? OFFSET ?",
+    richest: "SELECT * FROM wallets WHERE enrolled = 1 ORDER BY bankroll DESC, idx ASC LIMIT ? OFFSET ?",
+    woke: "SELECT * FROM wallets WHERE enrolled = 1 AND online = 1 ORDER BY woke_at DESC, idx ASC LIMIT ? OFFSET ?",
+    slept: "SELECT * FROM wallets WHERE enrolled = 1 AND online = 0 ORDER BY slept_at DESC, idx ASC LIMIT ? OFFSET ?",
+    stuck: "SELECT * FROM wallets WHERE enrolled = 1 AND online = 1 AND last_skip IN ('refractory', 'flat') ORDER BY idx ASC LIMIT ? OFFSET ?",
+    all: "SELECT * FROM wallets WHERE enrolled = 1 ORDER BY online DESC, idx ASC LIMIT ? OFFSET ?",
   }[filter]
   return (db.query(sql).all(limit, offset) as Record<string, unknown>[]).map(mapRow)
 }
 
 export function rosterCount(db: Database, filter: RosterFilter): number {
   const where = {
-    richest: "",
-    woke: "WHERE online = 1",
-    slept: "WHERE online = 0",
-    stuck: "WHERE online = 1 AND last_skip IN ('refractory', 'flat')",
-    all: "",
+    richest: "WHERE enrolled = 1",
+    woke: "WHERE enrolled = 1 AND online = 1",
+    slept: "WHERE enrolled = 1 AND online = 0",
+    stuck: "WHERE enrolled = 1 AND online = 1 AND last_skip IN ('refractory', 'flat')",
+    all: "WHERE enrolled = 1",
   }[filter]
   const row = db.query(`SELECT COUNT(*) AS n FROM wallets ${where}`).get() as { n: number }
   return row.n

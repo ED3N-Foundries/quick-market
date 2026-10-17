@@ -14,10 +14,11 @@ Edit `agent/config.ts`. That file is the schedule, the minds, the stake shape, a
 
 Keys:
 
-- `1` crowd, `2` book, `3` money, `4` roster, `5` one wallet
-- `j` / `k` move
+- `1` crowd, `2` book, `3` money, `4` roster, `5` one wallet (`Tab` cycles views)
+- `j` / `k` move selection, `h` / `l` page, `Enter` inspect wallet, `Esc` / `Backspace` back to roster
 - `c` follow the clock, `o` hold off-peak, `e` hold peak
 - `[` / `]` step the pin by one, `-` / `=` step it by ten
-- `b` pause or resume swarm betting, `p` pause or resume the selected wallet
+- `b` pause or resume swarm betting, `p` pause or resume the selected wallet, `P` clear wallet pauses
 - `m` bleed on or off, `f` cycle the roster filter
+- `r` start or stop the background runner
 - `q` closes the dashboard

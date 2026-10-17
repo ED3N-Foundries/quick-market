@@ -42,6 +42,9 @@ export type SwarmSnapshot = {
   hour: number
   window: [number, number]
   online: number
+  enrolled?: number
+  pid?: number | null
+  running?: boolean
   spring: number
   target: number
   arrivedMinute: number

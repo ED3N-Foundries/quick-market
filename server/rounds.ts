@@ -821,14 +821,19 @@ export type SettledBook = {
   resolution: string | null
 }
 
-export function settledSince(sinceId: number, limit = 40): SettledBook[] {
-  const capped = Math.min(Math.max(limit, 1), 40)
+export function settledSince(sinceId: number, limit = 200): SettledBook[] {
+  const capped = Math.min(Math.max(limit, 1), 200)
+  const latest = getDb()
+    .query("SELECT COALESCE(MAX(id), 0) AS max_id FROM rounds WHERE status != 'open'")
+    .get() as { max_id: number }
+  const floorId = Math.max(0, latest.max_id - 2_000)
+  const effectiveSince = Math.max(sinceId, floorId)
   const rows = getDb()
     .query(
       `SELECT id, strike, settle, fee_micros, pool_up_micros, pool_down_micros, winning_side, resolution
        FROM rounds WHERE status != 'open' AND id > ? ORDER BY id ASC LIMIT ?`,
     )
-    .all(sinceId, capped) as {
+    .all(effectiveSince, capped) as {
     id: number
     strike: string | null
     settle: string | null
