@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react"
+import { LATE_BET_CODE } from "../../shared/bet"
 import { chainFromEnv, moneyLabel, tokenKind, tokenLabel, type ChainConfig } from "../../shared/chain"
 import { marketPreferences } from "../../shared/market"
 import type { TapeChart, TapePoint } from "./chart"
@@ -48,6 +49,7 @@ export function useMarket(token: string | null) {
   const [pending, setPending] = useState(false)
   const [historyVersion, setHistoryVersion] = useState(0)
   const [notices, setNotices] = useState<SettledMessage[]>([])
+  const [lateNotices, setLateNotices] = useState<number[]>([])
   const [pulse, setPulse] = useState(0)
   const [unauthorized, setUnauthorized] = useState(false)
 
@@ -237,35 +239,48 @@ export function useMarket(token: string | null) {
     reload().catch(() => {})
   }, [token, board, openKey, you?.openBets, reload])
 
+  const pushLate = useCallback(() => {
+    setLateNotices((current) => (current.length > 0 ? current : [1]))
+  }, [])
+
   const place = useCallback(
-    async (side: Side, stake: string) => {
+    async (side: Side, stake: string, roundId: number, blockStart: number, windowEndsAt: number) => {
       if (!tokenRef.current) return
+      const now = Date.now() + offsetRef.current
+      if (!Number.isSafeInteger(roundId) || now < blockStart || now >= windowEndsAt) {
+        if (now >= windowEndsAt) pushLate()
+        return
+      }
       setPending(true)
       setError(null)
       try {
         const response = await fetch("/api/bets", {
           method: "POST",
           headers: headers(tokenRef.current, true),
-          body: JSON.stringify({ side, stake }),
+          body: JSON.stringify({ side, stake, roundId }),
         })
-        const body = await response.json()
+        const body = (await response.json()) as { error?: string; code?: string; you?: You; board?: Board }
         if (response.status === 401) {
           setUnauthorized(true)
           return
         }
         if (!response.ok) {
+          if (body.code === LATE_BET_CODE) {
+            pushLate()
+            return
+          }
           setError(body.error ?? "Bet failed")
           return
         }
-        setYou(body.you)
-        setBoard(body.board)
+        setYou(body.you ?? null)
+        if (body.board) setBoard(body.board)
       } catch {
         setError("Can't reach the market server")
       } finally {
         setPending(false)
       }
     },
-    [],
+    [pushLate],
   )
 
   const claimGrant = useCallback(async (): Promise<{ ok: true; granted: boolean } | { ok: false; message: string }> => {
@@ -323,8 +338,12 @@ export function useMarket(token: string | null) {
     pending,
     historyVersion,
     notices,
+    lateNotices,
     dismissNotice: useCallback((roundId: number) => {
       setNotices((current) => current.filter((notice) => notice.roundId !== roundId))
+    }, []),
+    dismissLate: useCallback((id: number) => {
+      setLateNotices((current) => current.filter((notice) => notice !== id))
     }, []),
     unauthorized,
     now,

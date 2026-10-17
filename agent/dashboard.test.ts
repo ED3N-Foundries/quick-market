@@ -5,6 +5,10 @@ import {
   keyFromEvent,
   renderSnapshot,
   rosterCapacity,
+  runnerActionLine,
+  runnerConfirmLine,
+  stopThenSpawn,
+  takeRunnerKey,
   type DashState,
 } from "./dashboard"
 import { histogram, parseControl, type SwarmSnapshot } from "./status"
@@ -122,5 +126,71 @@ test("terminal keys map onto the steering letters", () => {
   expect(keyFromEvent({ name: "down", sequence: "\u001b[B" })).toBe("j")
   expect(keyFromEvent({ name: "/", shift: true, sequence: "?" })).toBe("?")
   expect(keyFromEvent({ name: "p", shift: true, sequence: "P" })).toBe("P")
+  expect(keyFromEvent({ name: "r", shift: true, sequence: "R" })).toBe("R")
+  expect(keyFromEvent({ name: "escape", sequence: "\u001b" })).toBe("escape")
   expect(keyFromEvent({ name: "c", ctrl: true, sequence: "\u0003" })).toBe("\u0003")
+})
+
+test("start and restart arm a confirm, and y is the only way through", () => {
+  const quiet = takeRunnerKey(null, false, "s")
+  expect(quiet).toEqual({ handled: true, prompt: "start", intent: null })
+  expect(takeRunnerKey(null, true, "s")).toEqual({ handled: true, prompt: null, intent: null })
+  expect(takeRunnerKey(null, true, "R")).toEqual({ handled: true, prompt: "restart", intent: null })
+  expect(takeRunnerKey(null, false, "R")).toEqual({ handled: true, prompt: null, intent: null })
+  expect(takeRunnerKey(null, true, "r")).toEqual({ handled: true, prompt: null, intent: null })
+
+  expect(takeRunnerKey("start", false, "y")).toEqual({ handled: true, prompt: null, intent: "spawn" })
+  expect(takeRunnerKey("restart", true, "y")).toEqual({ handled: true, prompt: null, intent: "respawn" })
+  expect(takeRunnerKey("start", false, "n")).toEqual({ handled: true, prompt: null, intent: null })
+  expect(takeRunnerKey("restart", true, "escape")).toEqual({ handled: true, prompt: null, intent: null })
+  expect(takeRunnerKey("restart", true, "b")).toEqual({ handled: true, prompt: "restart", intent: null })
+
+  const steered = handleKey({ ...state(), runnerPrompt: "restart", runnerNote: "AGENT_SECRET is required" }, "j", null, 4)
+  expect(steered.state.selected).toBe(1)
+  expect(steered.state.runnerPrompt).toBe("restart")
+  expect(steered.state.runnerNote).toBe("AGENT_SECRET is required")
+})
+
+test("the runner control names start or restart", () => {
+  expect(runnerActionLine(false, null, null)).toBe("s  start runner")
+  expect(runnerActionLine(true, 48538, null)).toBe("R  restart runner  pid 48538")
+  expect(runnerActionLine(true, null, "restart")).toBe("restarting runner")
+  expect(runnerConfirmLine("start", null)).toBe("Start the agent runner?  y start   n cancel")
+  expect(runnerConfirmLine("restart", 48538)).toBe(
+    "Restart the runner? Pid 48538 stops, then a new process starts. Wallets stay in swarm.sqlite.  y restart   n cancel",
+  )
+  const page = renderSnapshot(snapshot(), state(), 2_000)
+  expect(page).toContain("R  restart runner")
+})
+
+test("stop-then-spawn does not start a second process while the old pid is alive", async () => {
+  let alive = true
+  const events: string[] = []
+  const stopped = await stopThenSpawn({
+    pid: 48538,
+    alive: () => alive,
+    signal: (_pid, signal) => {
+      events.push(signal)
+      if (signal === "SIGTERM") alive = false
+    },
+    spawn: () => events.push(alive ? "spawn-alive" : "spawn-dead"),
+    sleep: async () => {},
+    waitMs: 200,
+    pollMs: 50,
+  })
+  expect(stopped).toBe(true)
+  expect(events).toEqual(["SIGTERM", "spawn-dead"])
+
+  const stuck: string[] = []
+  const started = await stopThenSpawn({
+    pid: 48538,
+    alive: () => true,
+    signal: (_pid, signal) => stuck.push(signal),
+    spawn: () => stuck.push("spawn"),
+    sleep: async () => {},
+    waitMs: 100,
+    pollMs: 50,
+  })
+  expect(started).toBe(false)
+  expect(stuck).toEqual(["SIGTERM", "SIGKILL"])
 })

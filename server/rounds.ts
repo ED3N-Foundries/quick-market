@@ -1,4 +1,5 @@
-import { clockAt, feeBps, LIVE_MS, marketBounds, MIN_STAKE_MICROS, TAPE_MS, type PriceSource } from "./config"
+import { LATE_BET_CODE, LATE_BET_ERROR } from "../shared/bet"
+import { clockAt, feeBps, LIVE_MS, marketBounds, MIN_STAKE_MICROS, TAPE_MS, windowAccepts, type PriceSource } from "./config"
 import { getDb } from "./db"
 import { normalizeAddress } from "./money"
 import { settleRound, type Resolution, type Side } from "./settle"
@@ -106,7 +107,13 @@ type BetRow = {
   is_bot?: number
 }
 
-class BetError extends Error {}
+class BetError extends Error {
+  code?: typeof LATE_BET_CODE
+  constructor(message: string, code?: typeof LATE_BET_CODE) {
+    super(message)
+    this.code = code
+  }
+}
 
 const prints: Print[] = []
 let lastReceivedAt = 0
@@ -400,8 +407,9 @@ export function placeBet(input: {
   address: string
   side: Side
   stakeMicros: number
+  roundId: number
   now: number
-}): { ok: true; you: You; board: Board } | { ok: false; error: string } {
+}): { ok: true; you: You; board: Board } | { ok: false; error: string; code?: typeof LATE_BET_CODE } {
   try {
     const tx = getDb().transaction(() => {
       if (input.side !== "up" && input.side !== "down") throw new BetError("Side is invalid")
@@ -409,9 +417,7 @@ export function placeBet(input: {
         throw new BetError("Minimum stake is 1 USDC")
       }
 
-      const clock = clockAt(input.now)
-      const id = clock.joinId
-      if (id < 0) throw new BetError("Betting is closed")
+      const id = namedRound(input.roundId, input.now)
       ensureRound(id)
       const round = getRound(id)
       if (!round || round.status !== "open") throw new BetError("Betting is closed")
@@ -453,9 +459,20 @@ export function placeBet(input: {
     tx()
     return { ok: true, you: youFor(input.address)!, board: board(input.now) }
   } catch (error) {
-    if (error instanceof BetError) return { ok: false, error: error.message }
+    if (error instanceof BetError) {
+      return error.code ? { ok: false, error: error.message, code: error.code } : { ok: false, error: error.message }
+    }
     throw error
   }
+}
+
+/** The round a bet named, or a rejection when the receipt time is outside that window. */
+function namedRound(roundId: number, now: number): number {
+  if (!Number.isSafeInteger(roundId) || roundId < 0) throw new BetError("Market is invalid")
+  if (windowAccepts(roundId, now)) return roundId
+  const { strikeAt } = marketBounds(roundId)
+  if (now >= strikeAt) throw new BetError(LATE_BET_ERROR, LATE_BET_CODE)
+  throw new BetError("That market is not open")
 }
 
 function loadBets(roundId: number): BetRow[] {
@@ -684,13 +701,20 @@ export type BetRowResult = { address: string; ok: true } | { address: string; ok
 
 export function placeBets(input: {
   orders: BetOrder[]
+  roundId: number
   now: number
-}): { ok: true; results: BetRowResult[]; accepted: number } | { ok: false; error: string } {
+}): { ok: true; results: BetRowResult[]; accepted: number } | { ok: false; error: string; code?: typeof LATE_BET_CODE } {
   if (input.orders.length > 200) return { ok: false, error: "Chunk is too large" }
   if (input.orders.length === 0) return { ok: true, results: [], accepted: 0 }
-  const clock = clockAt(input.now)
-  const id = clock.joinId
-  if (id < 0) return { ok: false, error: "Betting is closed" }
+  let id: number
+  try {
+    id = namedRound(input.roundId, input.now)
+  } catch (error) {
+    if (error instanceof BetError) {
+      return error.code ? { ok: false, error: error.message, code: error.code } : { ok: false, error: error.message }
+    }
+    throw error
+  }
   if (feedStatus(input.now) !== "live") return { ok: false, error: "Price feed is delayed" }
   ensureRound(id)
   const round = getRound(id)

@@ -30,7 +30,7 @@ Open http://127.0.0.1:5173. The API listens on http://127.0.0.1:3001. Vite proxi
 
 Bun serves HTTP and a websocket. SQLite holds users, rounds, bets, and one price per second. React draws the screen. The server advances the clock every 16ms.
 
-Betting windows tile UTC time. Each lasts `WINDOW_SECONDS`, and the next opens when the previous closes. Market `id` is `floor(now / window)`. Its book opens at `id * window`, the strike locks when that window closes, and it settles `MARKET_SECONDS` later.
+Betting windows tile UTC time. Each lasts `WINDOW_SECONDS`, and the next opens when the previous closes. Market `id` is `floor(now / window)`. Its book opens at `id * window`, the strike locks when that window closes, and it settles `MARKET_SECONDS` later. A bet names that window. If the server receives it outside the window, the bet is rejected and is not placed on the window that is open on arrival.
 
 A human may hold one open bet. Another window returns "Your last bet is still open". Adding to the same side of the current bet is allowed. The other side is not. Agent wallets are exempt. A bet needs a live feed: a print within the last 5 seconds. The minimum stake is 1 USDC.
 

@@ -162,11 +162,14 @@ export async function handleAgents(
   }
 
   if (req.method === "POST" && url.pathname === "/api/agents/bets") {
+    const now = Date.now()
     const body = await readJson(req)
     const orders = Array.isArray(body?.orders) ? (body.orders as BetOrder[]) : null
+    const roundId = body?.roundId
     if (!orders) return json({ error: "Orders are invalid" }, 400)
-    const result = placeBets({ orders, now: Date.now() })
-    if (!result.ok) return json({ error: result.error }, 400)
+    if (typeof roundId !== "number") return json({ error: "Market is invalid" }, 400)
+    const result = placeBets({ orders, roundId, now })
+    if (!result.ok) return json(result.code ? { error: result.error, code: result.code } : { error: result.error }, 400)
     if (result.accepted > 0) deps.publish()
     return json({ results: result.results, accepted: result.accepted })
   }

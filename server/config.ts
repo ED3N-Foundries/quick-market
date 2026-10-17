@@ -36,6 +36,14 @@ export function marketBounds(id: number): { betsOpen: number; strikeAt: number; 
   return { betsOpen, strikeAt, settlesAt }
 }
 
+/** True when `now` is inside that window. The window is `[betsOpen, strikeAt)`. */
+export function windowAccepts(roundId: number, now: number): boolean {
+  if (!Number.isSafeInteger(roundId) || roundId < 0) return false
+  if (!Number.isFinite(now)) return false
+  const { betsOpen, strikeAt } = marketBounds(roundId)
+  return now >= betsOpen && now < strikeAt
+}
+
 /** Betting windows tile the clock. The next one opens as the previous closes. */
 export function clockAt(now: number) {
   const open = windowMs()

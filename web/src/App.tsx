@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type PointerEvent as ReactPointerEvent, type RefObject } from "react"
+import { LATE_BET_ERROR } from "../../shared/bet"
 import { mountChart, priceY, type ChartScale, type TapeChart, type TapeSample } from "./chart"
-import { chartMarket, focusPool, followWindow, heldMarket, heldStrike } from "./focus"
+import { chartMarket, focusPool, followWindow, heldMarket, heldStrike, joinIsLive } from "./focus"
 import {
   chainBadgeText,
   chainMenuLabel,
@@ -47,6 +48,7 @@ export function App() {
   const openBetsRef = useRef<OpenBet[]>([])
   const [chart, setChart] = useState<TapeChart | null>(null)
   const [stake, setStake] = useState("10")
+  const [windowTick, setWindowTick] = useState(0)
   const [walletMenuOpen, setWalletMenuOpen] = useState(false)
   const [fundAmount, setFundAmount] = useState("")
   const [fundOpen, setFundOpen] = useState(false)
@@ -137,9 +139,17 @@ export function App() {
   const you = market.you
   const openBets = you?.openBets ?? []
   const now = Date.now() + market.offsetRef.current
+  void windowTick
+  useEffect(() => {
+    if (!board) return
+    const left = board.windowEndsAt - (Date.now() + market.offsetRef.current)
+    if (left <= 0) return
+    const id = window.setTimeout(() => setWindowTick(board.windowEndsAt), left)
+    return () => window.clearTimeout(id)
+  }, [board, market.offsetRef])
   const heldSpan = board ? heldMarket(board, openBets, now) : null
   const focus = focusPool(board, openBets, now)
-  const canBet = !!you && !heldSpan && !!board?.join && market.feed === "live" && !market.pending
+  const canBet = !!you && !heldSpan && !!board && joinIsLive(board, now) && market.feed === "live" && !market.pending
   const total = (focus?.poolUpMicros ?? 0) + (focus?.poolDownMicros ?? 0)
   const held = openBets.find((bet) => bet.roundId === focus?.id) ?? null
   const upQuote = focus ? quoteDollar("up", focus.poolUpMicros, focus.poolDownMicros, market.config.feeBps) : "—"
@@ -258,7 +268,10 @@ export function App() {
           quote={upQuote}
           players={focus?.playersUp ?? 0}
           disabled={!canBet}
-          onBet={() => market.place("up", stake)}
+          onBet={() => {
+            if (!board?.join) return
+            void market.place("up", stake, board.join.id, board.blockStart, board.windowEndsAt)
+          }}
         />
         <div className="stake">
           <div className="balance-label">
@@ -397,7 +410,10 @@ export function App() {
           quote={downQuote}
           players={focus?.playersDown ?? 0}
           disabled={!canBet}
-          onBet={() => market.place("down", stake)}
+          onBet={() => {
+            if (!board?.join) return
+            void market.place("down", stake, board.join.id, board.blockStart, board.windowEndsAt)
+          }}
         />
       </section>
       {fundOpen && testnet && (
@@ -522,7 +538,7 @@ export function App() {
       </details>
 
       <History token={session.token} version={market.historyVersion} windowMs={market.config.windowSeconds * 1000} />
-      {market.notices.length > 0 && (
+      {(market.notices.length > 0 || market.lateNotices.length > 0) && (
         <div className="toasts">
           {market.notices.map((event) => (
             <ResultToast
@@ -531,6 +547,9 @@ export function App() {
               address={market.address}
               onDone={() => market.dismissNotice(event.roundId)}
             />
+          ))}
+          {market.lateNotices.map((id) => (
+            <LateToast key={id} onDone={() => market.dismissLate(id)} />
           ))}
         </div>
       )}
@@ -1467,6 +1486,20 @@ function Replay({ row, windowMs, onClose }: { row: HistoryRound; windowMs: numbe
         )}
       </div>
     </div>
+  )
+}
+
+function LateToast({ onDone }: { onDone: () => void }) {
+  const doneRef = useRef(onDone)
+  doneRef.current = onDone
+  useEffect(() => {
+    const id = window.setTimeout(() => doneRef.current(), 4_500)
+    return () => window.clearTimeout(id)
+  }, [])
+  return (
+    <button type="button" className="toast late" onClick={onDone}>
+      <span>{LATE_BET_ERROR}</span>
+    </button>
   )
 }
 

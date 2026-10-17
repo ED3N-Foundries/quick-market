@@ -629,11 +629,18 @@ async function postOrders(
   while (pending.sent < pending.orders.length) {
     if (Date.now() >= pending.endsAt - 150) return { done: false, count, up, down, stakes }
     const part = pending.orders.slice(pending.sent, pending.sent + swarmConfig.runner.betChunk)
-    const response = await api("/api/agents/bets", { method: "POST", body: JSON.stringify({ orders: part }) })
-    const body = response.body as { error?: string; results?: { address: string; ok: boolean; error?: string }[] } | null
+    const response = await api("/api/agents/bets", {
+      method: "POST",
+      body: JSON.stringify({ orders: part, roundId: pending.roundId }),
+    })
+    const body = response.body as
+      | { error?: string; code?: string; results?: { address: string; ok: boolean; error?: string }[] }
+      | null
     if (!response.ok || !body?.results) {
       fail(body?.error ?? "Bet chunk failed")
-      if (body?.error === "Betting is closed" || body?.error === "Price feed is delayed") return { done: true, count, up, down, stakes }
+      if (body?.code === "late" || body?.error === "Betting is closed" || body?.error === "Price feed is delayed") {
+        return { done: true, count, up, down, stakes }
+      }
       return { done: false, count, up, down, stakes }
     }
     for (const result of body.results) {

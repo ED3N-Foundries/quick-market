@@ -51,6 +51,7 @@ test("one poor row does not reject the good rows, and a retry does not double th
   const other = bot(3, 8 * USDC)
   const first = placeBets({
     now: T + 100,
+    roundId: T / WINDOW,
     orders: [
       { address: rich, side: "up", stakeMicros: 1_500_000 },
       { address: poor, side: "down", stakeMicros: USDC },
@@ -69,6 +70,7 @@ test("one poor row does not reject the good rows, and a retry does not double th
 
   const again = placeBets({
     now: T + 150,
+    roundId: T / WINDOW,
     orders: [
       { address: rich, side: "up", stakeMicros: 1_500_000 },
       { address: other, side: "down", stakeMicros: 2_250_000 },

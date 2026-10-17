@@ -21,5 +21,5 @@ Keys:
 - `[` / `]` step the pin by one, `-` / `=` step it by ten
 - `b` pause or resume swarm betting, `p` pause or resume the selected wallet, `P` clear wallet pauses
 - `m` bleed on or off, `f` cycle all, stuck, and richest
-- `r` start or stop the background runner
+- `s` asks to start the runner when it is quiet. `R` asks to restart it when it is live. `y` confirms and `n` cancels. Opening this screen does not start a runner.
 - `q` closes the dashboard

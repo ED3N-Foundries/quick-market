@@ -19,14 +19,19 @@ const FILTERS: readonly RosterFilter[] = ["all", "stuck", "richest"]
 
 export const HELP_LINES = [
   "c clock   o off-peak   e peak   [ ] pin ±1   - = pin ±10",
-  "b bets   m bleed   p wallet   P clear   j/k move   f filter   r runner   q quit",
+  "b bets   m bleed   p wallet   P clear   j/k move   f filter   s start   R restart   q quit",
 ] as const
+
+export type RunnerPrompt = "start" | "restart"
 
 export type DashState = {
   selected: number
   filter: RosterFilter
   help: boolean
   control: ControlFile
+  runnerPrompt?: RunnerPrompt | null
+  runnerBusy?: "start" | "restart" | null
+  runnerNote?: string | null
 }
 
 export type KeyInput = {
@@ -38,6 +43,7 @@ export type KeyInput = {
 
 export function keyFromEvent(key: KeyInput): string | null {
   if (key.ctrl && key.name.toLowerCase() === "c") return "\u0003"
+  if (key.name === "escape" || key.name === "esc") return "escape"
   if (key.name === "up") return "k"
   if (key.name === "down") return "j"
   const sequence = key.sequence ?? ""
@@ -99,7 +105,7 @@ export function handleKey(
       : [...control.paused, address]
   }
   if (key === "P") control.paused = []
-  return { state: { selected, filter, help: state.help, control }, quit: false }
+  return { state: { ...state, selected, filter, help: state.help, control }, quit: false }
 }
 
 export function isRunnerAlive(snapshot: SwarmSnapshot | null, now = Date.now()): boolean {
@@ -121,7 +127,11 @@ export function panelsFit(width: number, snapshot: SwarmSnapshot, control: Contr
   return bookLine(snapshot, false).length + moneyLine(snapshot, control, false).length + 2 <= width - 2
 }
 
-export function rosterCapacity(width: number, height: number, options: { help: boolean; error: boolean; stacked: boolean }): number {
+export function rosterCapacity(
+  width: number,
+  height: number,
+  options: { help: boolean; error: boolean; stacked: boolean; extra?: number },
+): number {
   const roomy = height >= 18
   const chrome =
     1 +
@@ -133,7 +143,8 @@ export function rosterCapacity(width: number, height: number, options: { help: b
     1 +
     1 +
     1 +
-    (options.help ? 2 : 0)
+    (options.help ? 2 : 0) +
+    (options.extra ?? 0)
   return Math.max(1, height - chrome)
 }
 
@@ -243,7 +254,7 @@ export function renderSnapshot(
     return [
       "Waiting for bun run agent.",
       "",
-      "Press r to start the runner, or q to close this dashboard. The runner keeps going.",
+      "Press s to start the runner, or q to close this dashboard. The runner keeps going.",
     ].join("\n")
   }
   const alive = isRunnerAlive(snapshot, now)
@@ -257,6 +268,7 @@ export function renderSnapshot(
     histogramLine(snapshot),
     snapshot.lastError ? `error ${snapshot.lastError}` : "",
     statusLine(control),
+    runnerActionLine(alive, typeof snapshot.pid === "number" ? snapshot.pid : null, null),
     ...(state.help ? HELP_LINES : []),
   ].filter((line) => line !== "")
   return lines.join("\n")
@@ -293,20 +305,135 @@ export function pageRoster(
   }
 }
 
-export function toggleRunner(snapshot: SwarmSnapshot | null) {
-  if (isRunnerAlive(snapshot)) {
-    if (typeof snapshot?.pid === "number" && snapshot.pid > 0) {
-      try {
-        process.kill(snapshot.pid, "SIGTERM")
-      } catch {}
-    }
-    return
-  }
-  startRunnerBackground()
+export type RunnerKey = {
+  handled: boolean
+  prompt: RunnerPrompt | null
+  intent: "spawn" | "respawn" | null
 }
 
-export function bootRunner() {
-  if (!isRunnerAlive(loadSnapshot())) startRunnerBackground()
+export function takeRunnerKey(prompt: RunnerPrompt | null, alive: boolean, key: string): RunnerKey {
+  if (prompt) {
+    if (key === "y" || key === "Y") return { handled: true, prompt: null, intent: prompt === "start" ? "spawn" : "respawn" }
+    if (key === "n" || key === "N" || key === "escape" || key === "\u001b") return { handled: true, prompt: null, intent: null }
+    return { handled: true, prompt, intent: null }
+  }
+  if (key === "s" && !alive) return { handled: true, prompt: "start", intent: null }
+  if (key === "R" && alive) return { handled: true, prompt: "restart", intent: null }
+  if (key === "s" || key === "S" || key === "r" || key === "R") return { handled: true, prompt: null, intent: null }
+  return { handled: false, prompt: null, intent: null }
+}
+
+export function runnerActionLine(alive: boolean, pid: number | null, busy: "start" | "restart" | null): string {
+  if (busy === "start") return "starting runner"
+  if (busy === "restart") return "restarting runner"
+  if (!alive) return "s  start runner"
+  const who = typeof pid === "number" && pid > 0 ? `  pid ${pid}` : ""
+  return `R  restart runner${who}`
+}
+
+export function runnerConfirmCopy(prompt: RunnerPrompt, pid: number | null): { ask: string; yes: string; no: string } {
+  if (prompt === "start") return { ask: "Start the agent runner?", yes: "y start", no: "n cancel" }
+  const who = typeof pid === "number" && pid > 0 ? `Pid ${pid} stops` : "The current process stops"
+  return {
+    ask: `Restart the runner? ${who}, then a new process starts. Wallets stay in swarm.sqlite.`,
+    yes: "y restart",
+    no: "n cancel",
+  }
+}
+
+export function runnerConfirmLine(prompt: RunnerPrompt, pid: number | null): string {
+  const copy = runnerConfirmCopy(prompt, pid)
+  return `${copy.ask}  ${copy.yes}   ${copy.no}`
+}
+
+export function runnerBlock(): string | null {
+  if (marketPreferences.chain === "base") return "The swarm refuses CHAIN=base. Real USDC is out of this mode."
+  if (!loadEnv().agentSecret) return "AGENT_SECRET is required"
+  return null
+}
+
+export function launchRunner(): string | null {
+  const blocked = runnerBlock()
+  if (blocked) return blocked
+  try {
+    const child = Bun.spawn(["bun", "run", join(import.meta.dir, "index.ts")], {
+      stdout: "ignore",
+      stderr: "ignore",
+      stdin: "ignore",
+      env: process.env,
+    })
+    child.unref()
+    return null
+  } catch (error) {
+    return error instanceof Error ? error.message : "The runner did not start"
+  }
+}
+
+export async function stopThenSpawn(input: {
+  pid: number | null
+  alive: (pid: number) => boolean
+  signal: (pid: number, signal: "SIGTERM" | "SIGKILL") => void
+  spawn: () => void
+  sleep: (ms: number) => Promise<void>
+  waitMs?: number
+  pollMs?: number
+}): Promise<boolean> {
+  const waitMs = input.waitMs ?? 2_000
+  const pollMs = input.pollMs ?? 50
+  const pid = input.pid
+  if (typeof pid === "number" && pid > 0 && input.alive(pid)) {
+    try {
+      input.signal(pid, "SIGTERM")
+    } catch {
+      // The pid can exit between the alive check and the signal.
+    }
+    let left = waitMs
+    while (input.alive(pid) && left > 0) {
+      await input.sleep(Math.min(pollMs, left))
+      left -= pollMs
+    }
+    if (input.alive(pid)) {
+      try {
+        input.signal(pid, "SIGKILL")
+      } catch {
+        // Already gone.
+      }
+      await input.sleep(pollMs)
+    }
+    if (input.alive(pid)) return false
+  }
+  input.spawn()
+  return true
+}
+
+function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+export async function runRunnerIntent(intent: "spawn" | "respawn", pid: number | null): Promise<string | null> {
+  const blocked = runnerBlock()
+  if (blocked) return blocked
+  if (intent === "spawn") return launchRunner()
+  if (typeof pid !== "number" || pid <= 0) return "The runner pid is missing"
+  let note: string | null = null
+  const started = await stopThenSpawn({
+    pid,
+    alive: pidAlive,
+    signal: (id, signal) => {
+      process.kill(id, signal)
+    },
+    spawn: () => {
+      note = launchRunner()
+    },
+    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  })
+  if (!started) return "The runner is still stopping"
+  return note
 }
 
 function controlFromSnapshot(snapshot: SwarmSnapshot): ControlFile {
@@ -320,19 +447,6 @@ function controlFromSnapshot(snapshot: SwarmSnapshot): ControlFile {
     paused: [],
     bleed: snapshot.bleed,
   }
-}
-
-function startRunnerBackground() {
-  if (marketPreferences.chain === "base" || !loadEnv().agentSecret) return
-  try {
-    const child = Bun.spawn(["bun", "run", join(import.meta.dir, "index.ts")], {
-      stdout: "ignore",
-      stderr: "ignore",
-      stdin: "ignore",
-      env: process.env,
-    })
-    child.unref()
-  } catch {}
 }
 
 async function main() {

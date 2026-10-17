@@ -828,6 +828,12 @@ tr.open td { color: var(--text); }
 .toast.loss { background: var(--down); color: var(--down-ink); }
 .toast.push { background: var(--push); color: var(--push-ink); }
 .toast.void { background: var(--warn); color: #1c1403; }
+.toast.late {
+  background: var(--warn);
+  color: #1c1403;
+  font-size: 15px;
+  line-height: 1.35;
+}
 
 .footer {
   margin-top: 22px;

@@ -51,6 +51,15 @@ export function heldStrike(market: { strike: string | null } | null): { price: n
   return { price, text: market.strike }
 }
 
+/** The join card is the window the synced clock is still inside. */
+export function joinIsLive(board: Board, now: number): boolean {
+  if (!board.join) return false
+  const windowMs = board.windowEndsAt - board.blockStart
+  if (windowMs <= 0) return false
+  if (now < board.blockStart || now >= board.windowEndsAt) return false
+  return board.join.id === Math.floor(now / windowMs)
+}
+
 /** Pool shown in the trade panel. A held market wins. Otherwise the open betting window. */
 export function focusPool(board: Board | null, openBets: OpenBet[], now: number): PoolCard | null {
   if (!board) return null

@@ -88,6 +88,32 @@ function view(width: number, height: number) {
   )
 }
 
+test("a live runner offers restart, and the confirm line names what y and n do", async () => {
+  const setup = await testRender(
+    <DashboardView
+      snapshot={snapshot()}
+      page={{ rows: [wallet()], count: 1, offset: 0, selected: 0 }}
+      state={{ selected: 0, filter: "all", help: false, control: parseControl(null), runnerPrompt: "restart" }}
+      now={2_000}
+      width={140}
+      height={24}
+      onSelect={() => {}}
+      onScroll={() => {}}
+    />,
+    { width: 140, height: 24 },
+  )
+  try {
+    await setup.renderOnce()
+    const frame = setup.captureCharFrame()
+    expect(frame).toContain("R  restart runner")
+    expect(frame).toContain("The current process stops")
+    expect(frame).toContain("y restart")
+    expect(frame).toContain("n cancel")
+  } finally {
+    await setup.dispose()
+  }
+})
+
 test("a wide terminal shows the book, the money, and the roster on one screen", async () => {
   const setup = await testRender(view(120, 24), { width: 120, height: 24 })
   try {

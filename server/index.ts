@@ -11,7 +11,7 @@ import { applyGrant, grantSettings } from "./grant"
 import { hub } from "./hub"
 import { parseMicros } from "./money"
 import { startOracle } from "./oracle"
-import { advance, board, feedStatus, listRounds, notePrint, placeBet, roundDetail, tapePoints, youFor, type Side } from "./rounds"
+import { advance, board, feedStatus, listRounds, notePrint, placeBet, roundDetail, tapePoints, youFor } from "./rounds"
 import { agentAuthorized, endSession, openSession, readSession } from "./session"
 
 let chain: ReturnType<typeof configuredChain>
@@ -211,15 +211,18 @@ async function handle(req: Request): Promise<Response> {
   }
 
   if (req.method === "POST" && url.pathname === "/api/bets") {
-    const session = readSession(req)
+    const now = Date.now()
+    const session = readSession(req, now)
     if (!session.address) return json({ error: "Connect a wallet first" }, 401)
     const body = await readJson(req)
     const stake = parseMicros(body?.stake)
-    const side = body?.side
-    if (side !== "up" && side !== "down") return json({ error: "Side is invalid" }, 400)
+    const side = body?.side === "up" || body?.side === "down" ? body.side : null
+    const roundId = body?.roundId
+    if (!side) return json({ error: "Side is invalid" }, 400)
     if (stake === null) return json({ error: "Stake is invalid" }, 400)
-    const result = placeBet({ address: session.address, side: side as Side, stakeMicros: stake, now: Date.now() })
-    if (!result.ok) return json({ error: result.error }, 400)
+    if (typeof roundId !== "number") return json({ error: "Market is invalid" }, 400)
+    const result = placeBet({ address: session.address, side, stakeMicros: stake, roundId, now })
+    if (!result.ok) return json(result.code ? { error: result.error, code: result.code } : { error: result.error }, 400)
     publishRound()
     return json({ you: result.you, board: result.board })
   }

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { chartMarket, focusPool, followWindow, heldMarket, heldStrike } from "./focus"
+import { chartMarket, focusPool, followWindow, heldMarket, heldStrike, joinIsLive } from "./focus"
 import type { Band, Board, PoolCard } from "./types"
 
 function band(id: number, betsOpen: number, strike: string | null = null): Band {
@@ -148,4 +148,13 @@ test("two open bets stay on the one that settles first", () => {
   expect(heldMarket(current, bets, 12_000)?.id).toBe(1)
   expect(followWindow(current, bets, 12_000)).toEqual({ start: 7_000, end: 12_000 })
   expect(followWindow(current, bets, 12_000).end - followWindow(current, bets, 12_000).start).toBe(5_000)
+})
+
+test("the join card is bettable only while the synced clock is inside it", () => {
+  const current = board()
+  expect(joinIsLive(current, 10_000)).toBe(true)
+  expect(joinIsLive(current, 14_999)).toBe(true)
+  expect(joinIsLive(current, 15_000)).toBe(false)
+  expect(joinIsLive(current, 9_999)).toBe(false)
+  expect(joinIsLive({ ...current, join: null }, 12_000)).toBe(false)
 })

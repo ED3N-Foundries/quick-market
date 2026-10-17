@@ -4,7 +4,6 @@ import { createRoot, useKeyboard, useRenderer, useTerminalDimensions } from "@op
 import { useEffect, useRef, useState } from "react"
 import {
   HELP_LINES,
-  bootRunner,
   crowdLine,
   detailLine,
   handleKey,
@@ -18,10 +17,14 @@ import {
   panelsFit,
   rosterCapacity,
   rosterCells,
+  runnerActionLine,
+  runnerConfirmCopy,
+  runRunnerIntent,
   saveControl,
-  toggleRunner,
+  takeRunnerKey,
   type DashState,
   type RosterCells,
+  type RunnerPrompt,
   type RowTone,
 } from "./dashboard"
 import { formatMicros, spark, type ControlFile, type SwarmSnapshot } from "./status"
@@ -50,6 +53,9 @@ export function DashboardView({
   height,
   onSelect,
   onScroll,
+  onArm,
+  onYes,
+  onNo,
 }: {
   snapshot: SwarmSnapshot | null
   page: Page
@@ -59,14 +65,24 @@ export function DashboardView({
   height: number
   onSelect: (index: number) => void
   onScroll: (delta: number) => void
+  onArm?: () => void
+  onYes?: () => void
+  onNo?: () => void
 }) {
   const wide = width >= 100
   const roomy = height >= 18
+  const prompt = state.runnerPrompt ?? null
+  const busy = state.runnerBusy ?? null
+  const note = state.runnerNote ?? null
+  const pid = typeof snapshot?.pid === "number" ? snapshot.pid : null
   if (!snapshot) {
     return (
       <box style={{ width: "100%", height: "100%", flexDirection: "column", backgroundColor: bg, padding: 1 }}>
         <text fg={text}>Waiting for bun run agent.</text>
-        <text fg={muted}>Press r to start the runner, or q to close this dashboard. The runner keeps going.</text>
+        <text fg={muted}>Press s to start the runner, or q to close this dashboard. The runner keeps going.</text>
+        <RunnerControl label={runnerActionLine(false, null, busy)} onPress={onArm} />
+        {prompt ? <ConfirmLine prompt={prompt} pid={pid} onYes={onYes} onNo={onNo} /> : null}
+        {note ? <text fg={down}>{note}</text> : null}
       </box>
     )
   }
@@ -118,9 +134,15 @@ export function DashboardView({
       </box>
       <Line fg={muted}>{detailLine(selectedRow, control, alive, now)}</Line>
       <box style={{ height: 1, flexDirection: "row", justifyContent: "space-between", flexShrink: 0 }}>
-        <Status control={control} />
+        <box style={{ height: 1, flexDirection: "row", flexShrink: 1 }}>
+          <Status control={control} />
+          <Text fg={muted}>  ·  </Text>
+          <RunnerControl label={runnerActionLine(alive, pid, busy)} onPress={onArm} />
+        </box>
         <Text fg={muted}>{state.help ? "? hide" : "? keys"}</Text>
       </box>
+      {prompt ? <ConfirmLine prompt={prompt} pid={pid} onYes={onYes} onNo={onNo} /> : null}
+      {note ? <Line fg={down}>{note}</Line> : null}
       {state.help ? HELP_LINES.map((line) => <Line key={line} fg={muted}>{line}</Line>) : null}
     </box>
   )
@@ -153,6 +175,7 @@ function App() {
           help: current.help,
           error: Boolean(next?.lastError),
           stacked: !next || !panelsFit(width, next, current.control),
+          extra: (current.runnerPrompt ? 1 : 0) + (current.runnerNote ? 1 : 0),
         })
         const listed = pageRoster(current.filter, current.selected, offsetRef.current, capacity)
         offsetRef.current = listed.offset
@@ -167,22 +190,47 @@ function App() {
     tick()
     const timer = setInterval(tick, 250)
     return () => clearInterval(timer)
-  }, [width, height, state.help, state.filter, state.selected])
+  }, [width, height, state.help, state.filter, state.selected, state.runnerPrompt, state.runnerNote])
 
-  useKeyboard((key) => {
-    const token = keyFromEvent(key)
-    if (!token || key.eventType === "release") return
+  const press = (token: string) => {
     const current = stateRef.current
-    if (token === "r") {
-      toggleRunner(loadSnapshot())
-      setSnapshot(loadSnapshot())
+    if (current.runnerBusy && token !== "q" && token !== "\u0003") return
+    const snap = loadSnapshot()
+    const alive = isRunnerAlive(snap)
+    const taken = takeRunnerKey(current.runnerPrompt ?? null, alive, token)
+    if (taken.handled) {
+      if (taken.intent) {
+        const pid = typeof snap?.pid === "number" && snap.pid > 0 ? snap.pid : null
+        const runnerBusy = taken.intent === "spawn" ? "start" : "restart"
+        const next = { ...current, runnerPrompt: null, runnerBusy, runnerNote: null } satisfies DashState
+        stateRef.current = next
+        setState(next)
+        void runRunnerIntent(taken.intent, pid).then((runnerNote) => {
+          setState((latest) => {
+            const done = { ...latest, runnerBusy: null, runnerNote }
+            stateRef.current = done
+            return done
+          })
+        })
+        return
+      }
+      const next = { ...current, runnerPrompt: taken.prompt }
+      stateRef.current = next
+      setState(next)
       return
     }
     const local = pageRef.current.rows[current.selected - pageRef.current.offset] ?? null
     const next = handleKey(current, token, local?.address ?? null, pageRef.current.count)
     if (JSON.stringify(next.state.control) !== JSON.stringify(current.control)) saveControl(next.state.control)
+    stateRef.current = next.state
     setState(next.state)
     if (next.quit) renderer.destroy()
+  }
+
+  useKeyboard((key) => {
+    const token = keyFromEvent(key)
+    if (!token || key.eventType === "release") return
+    press(token)
   })
 
   return (
@@ -200,6 +248,9 @@ function App() {
           selected: Math.min(Math.max(0, pageRef.current.count - 1), Math.max(0, current.selected + delta)),
         }))
       }
+      onArm={() => press(isRunnerAlive(snapshot, now) ? "R" : "s")}
+      onYes={() => press("y")}
+      onNo={() => press("n")}
     />
   )
 }
@@ -227,6 +278,64 @@ function Book({ snapshot }: { snapshot: SwarmSnapshot }) {
 
 function Money({ snapshot, control, wide }: { snapshot: SwarmSnapshot; control: ControlFile; wide: boolean }) {
   return <Line fg={control.bleed ? text : gold}>{moneyLine(snapshot, control, wide)}</Line>
+}
+
+function RunnerControl({ label, onPress }: { label: string; onPress?: () => void }) {
+  return (
+    <text
+      wrapMode="none"
+      fg={gold}
+      style={{ height: 1, flexShrink: 0 }}
+      onMouseDown={(event) => {
+        onPress?.()
+        event.stopPropagation()
+      }}
+    >
+      {label}
+    </text>
+  )
+}
+
+function ConfirmLine({
+  prompt,
+  pid,
+  onYes,
+  onNo,
+}: {
+  prompt: RunnerPrompt
+  pid: number | null
+  onYes?: () => void
+  onNo?: () => void
+}) {
+  const copy = runnerConfirmCopy(prompt, pid)
+  return (
+    <box style={{ height: 1, flexDirection: "row", flexShrink: 0 }}>
+      <Text fg={gold}>{copy.ask}  </Text>
+      <text
+        wrapMode="none"
+        fg={gold}
+        style={{ height: 1, flexShrink: 0 }}
+        onMouseDown={(event) => {
+          onYes?.()
+          event.stopPropagation()
+        }}
+      >
+        {copy.yes}
+      </text>
+      <Text fg={gold}>   </Text>
+      <text
+        wrapMode="none"
+        fg={gold}
+        style={{ height: 1, flexShrink: 0 }}
+        onMouseDown={(event) => {
+          onNo?.()
+          event.stopPropagation()
+        }}
+      >
+        {copy.no}
+      </text>
+    </box>
+  )
 }
 
 function Status({ control }: { control: ControlFile }) {
@@ -307,7 +416,6 @@ function fit(value: string, width: number): string {
 }
 
 export async function runScreen(): Promise<void> {
-  bootRunner()
   const renderer = await createCliRenderer({
     exitOnCtrlC: true,
     useMouse: true,

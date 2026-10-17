@@ -63,7 +63,7 @@ const hardcoded: MarketPreferences = {
   marketSeconds: 5,
   viewSeconds: 5,
   feeBps: 0,
-  priceSource: "binance",
+  priceSource: "average",
   minStakeMicros: 1_000_000,
   liveMs: 5_000,
   tapeMs: 15 * 60 * 1000,
