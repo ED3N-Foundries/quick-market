@@ -131,6 +131,24 @@ export type RunnerConfig = {
   keyCap: number
 }
 
+export type TimingConfig = {
+  historyWindows: number
+  thinBars: number
+  thinEdge: number
+  ewmaLambda: number
+  signalScale: number
+  priceGain: number
+  virtualMicros: number
+  marginMs: number
+  sliceMs: number
+  waveCap: number
+  lossScaleMin: number
+  crowdGap: number
+  tapeSlot: Range
+  fadeSlot: Range
+  restlessSlot: Range
+}
+
 export type SwarmConfig = {
   clock: ClockConfig
   presence: PresenceConfig
@@ -138,6 +156,7 @@ export type SwarmConfig = {
   persona: PersonaConfig
   stake: StakeConfig
   runner: RunnerConfig
+  timing: TimingConfig
 }
 
 const range = z.tuple([z.number(), z.number()]).readonly()
@@ -271,6 +290,24 @@ const runnerSchema = z.strictObject({
   keyCap: z.number(),
 })
 
+const timingSchema = z.strictObject({
+  historyWindows: z.number(),
+  thinBars: z.number(),
+  thinEdge: z.number(),
+  ewmaLambda: z.number(),
+  signalScale: z.number(),
+  priceGain: z.number(),
+  virtualMicros: z.number(),
+  marginMs: z.number(),
+  sliceMs: z.number(),
+  waveCap: z.number(),
+  lossScaleMin: z.number(),
+  crowdGap: z.number(),
+  tapeSlot: range,
+  fadeSlot: range,
+  restlessSlot: range,
+})
+
 const swarmSchema = z.strictObject({
   clock: clockSchema,
   presence: presenceSchema,
@@ -278,6 +315,7 @@ const swarmSchema = z.strictObject({
   persona: personaSchema,
   stake: stakeSchema,
   runner: runnerSchema,
+  timing: timingSchema,
 })
 
 type _swarm = Assert<Equal<z.infer<typeof swarmSchema>, SwarmConfig>>
@@ -396,6 +434,23 @@ const swarmInput: SwarmConfig = {
     presenceTickMs: 1_000,
     keyCap: 6_000,
   },
+  timing: {
+    historyWindows: 4,
+    thinBars: 3,
+    thinEdge: 0.02,
+    ewmaLambda: 0.55,
+    signalScale: 1.2,
+    priceGain: 0.01,
+    virtualMicros: 10 * USDC,
+    marginMs: 400,
+    sliceMs: 350,
+    waveCap: 80,
+    lossScaleMin: 0.35,
+    crowdGap: 0.15,
+    tapeSlot: [0.08, 0.42],
+    fadeSlot: [0.45, 0.9],
+    restlessSlot: [0.08, 0.9],
+  },
 }
 
 export const swarmConfig: SwarmConfig = swarmSchema.parse(swarmInput)
@@ -432,6 +487,9 @@ export function checkConfig(config: SwarmConfig): string | null {
     [config.stake.smallMin, config.stake.smallMax, "Small stakes"],
     [config.stake.smallMax, config.stake.midMax, "Mid stakes"],
     [config.stake.offsetMinCents, config.stake.offsetMaxCents, "Cent offset"],
+    [config.timing.tapeSlot[0], config.timing.tapeSlot[1], "Tape slot"],
+    [config.timing.fadeSlot[0], config.timing.fadeSlot[1], "Fade slot"],
+    [config.timing.restlessSlot[0], config.timing.restlessSlot[1], "Restless slot"],
   ]
   for (const [low, high, label] of pairs) {
     if (!(low < high)) return `${label} has its low end second`
@@ -458,5 +516,21 @@ export function checkConfig(config: SwarmConfig): string | null {
   if (!(config.persona.flatBand < config.persona.movingBand)) return "Flat gate sits above the moving gate"
   if (config.bank.floorMicros >= config.bank.capMicros) return "Bank floor sits on the cap"
   if (config.runner.keyCap !== clock.ceiling) return "Key cap and the crowd ceiling differ"
+
+  const { timing } = config
+  if (timing.historyWindows < 1) return "History needs a window"
+  if (timing.thinBars < 1) return "Thin history needs a bar"
+  if (!(timing.ewmaLambda > 0 && timing.ewmaLambda < 1)) return "EWMA lambda sits outside (0, 1)"
+  if (!(timing.signalScale > 0)) return "Signal scale must be positive"
+  if (!(timing.priceGain > 0)) return "Price gain must be positive"
+  if (timing.virtualMicros < USDC) return "Virtual pool is below 1 USDC"
+  if (timing.marginMs < 0) return "Window margin is negative"
+  if (!(timing.sliceMs > 0)) return "Wave slice must be positive"
+  if (timing.waveCap < 1) return "Wave cap must be positive"
+  if (!(timing.lossScaleMin > 0 && timing.lossScaleMin <= 1)) return "Loss scale sits outside (0, 1]"
+  if (!(timing.crowdGap > 0 && timing.crowdGap <= 1)) return "Crowd gap sits outside (0, 1]"
+  const slots = [timing.tapeSlot, timing.fadeSlot, timing.restlessSlot]
+  if (slots.some((slot) => slot[0] < 0 || slot[1] > 1)) return "Fire slots leave 0–1"
+  if (timing.tapeSlot[1] > timing.fadeSlot[0]) return "Tape slot overlaps the late slot"
   return rangeOk(clock.offPeak.box, "Off-peak")
 }

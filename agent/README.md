@@ -2,7 +2,7 @@
 
 `bun run agent` is one Bun process for the whole swarm. It follows Asia/Manila (UTC+8, no daylight saving). The preference window is 300–600 wallets from 02:00 to 07:00, eases up through the morning, wanders inside 3,000–6,000 from 17:00 to 23:00, and eases back overnight. The live count chases that window and can trail it by minutes. Wallets sleep when the room shrinks. Their keys stay.
 
-Each wallet bets for itself. Stakes are uneven cents, usually a few dollars. A balance under $3 is refilled into a small pocket. A balance over $1,000 is burned down into a pocket between $80 and $600. The burn is a transfer of qmUSDC to the dead address. Bots do not take the human grant.
+Each wallet bets for itself. Stakes are uneven cents, usually a few dollars, sized from the wallet and from the last four windows of tape when that history exists. Inside a betting window, tape minds bet earlier and fade and price minds bet later, against the pool those earlier bets just filled. A balance under $3 is refilled into a small pocket. A balance over $1,000 is burned down into a pocket between $80 and $600. The burn is a transfer of qmUSDC to the dead address. Bots do not take the human grant.
 
 `SWARM_PIN` pins the online count and bypasses the clock floor, which is how a 30-wallet check runs. Unset, the process follows the clock. The swarm refuses `CHAIN=base`. Real USDC is out of this mode. Sepolia agents do not call the CDP faucet and do not sweep. The ledger is the bankroll.
 

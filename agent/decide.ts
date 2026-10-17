@@ -1,7 +1,8 @@
 import { clamp, lerp } from "math"
 import { mulberry32, type Mulberry32 } from "math/random"
 import { easing } from "math/time"
-import { USDC, type PersonaConfig, type StakeConfig } from "./config"
+import { USDC, type PersonaConfig, type StakeConfig, type TimingConfig } from "./config"
+import { ewmaSignal, windowBars, type WindowBar } from "./history"
 import type { Persona } from "./persona"
 import { shapeStake } from "./stake"
 
@@ -95,52 +96,53 @@ function sigmoid(value: number): number {
   return 1 / (1 + Math.exp(-value))
 }
 
-function belief(persona: Persona, points: readonly PrintPoint[], now: number, rng: Mulberry32, _config: PersonaConfig): number {
-  const noise = (mulberry32.sample(rng) - 0.5) * persona.noise
-  if (persona.mind === "restless") return clamp(0.5 + noise, 0.02, 0.98)
-  if (persona.mind === "price") {
-    const slow = tapeActivity(points, now, persona.slowLookbackMs)
-    const slowSignal = slow.vol > 0 ? clamp((slow.ret / Math.max(slow.vol, 1e-6)) * slow.activity * 0.015, -0.06, 0.06) : 0
-    return clamp(0.5 + slowSignal + noise * 0.15, 0.05, 0.95)
-  }
-  const move = tapeActivity(points, now, persona.lookbackMs)
-  const vol = Math.max(move.vol, 1e-6)
-  const sign = persona.mind === "fade" ? -1 : 1
-  const signal = clamp((move.ret / vol) * move.activity, -8, 8)
-  const z = sign * Math.abs(persona.momentum) * signal * 0.6 + noise
-  return clamp(sigmoid(z), 0.02, 0.98)
+export function drawdownScale(results: readonly boolean[], floor: number): number {
+  if (results.length === 0) return 1
+  let losses = 0
+  for (const won of results) if (!won) losses += 1
+  return clamp(1 - losses / results.length, floor, 1)
 }
 
-export type MindDecision =
-  | { action: "bet"; side: Side; stakeMicros: number; pUp: number; gate: GateState }
-  | { action: "skip"; reason: SkipReason; pUp: number; gate: GateState }
+export function impliedUp(poolUp: number, poolDown: number): number {
+  const total = poolUp + poolDown
+  if (total <= 0) return 0.5
+  return poolUp / total
+}
 
-type Ungated = Omit<Extract<MindDecision, { action: "bet" }>, "gate"> | Omit<Extract<MindDecision, { action: "skip" }>, "gate">
+export function exhaustStake(probability: number, poolSame: number, poolOther: number, virtualMicros: number): number {
+  if (!(probability > 0 && probability < 1)) return 0
+  const same = poolSame + virtualMicros
+  const other = poolOther + virtualMicros
+  const room = probability * (same + other) - same
+  if (room <= 0) return 0
+  return Math.floor(room / (1 - probability))
+}
 
-export function decideWallet(input: {
+type GateInput = {
   wallet: WalletMind
   windowId: number
   now: number
   windowMs: number
   points: readonly PrintPoint[]
-  poolUp: number
-  poolDown: number
   config: PersonaConfig
-  stake: StakeConfig
-}): MindDecision {
+}
+
+export type Admission =
+  | { action: "skip"; reason: SkipReason; gate: GateState }
+  | { action: "due"; gate: GateState; inBurst: boolean }
+
+export function admitWallet(input: GateInput): Admission {
   const persona = input.wallet.persona
   const gate: GateState = {
     ...input.wallet.gate,
     results: input.wallet.gate.results.slice(-input.config.memory),
   }
   const rng = { a: gate.rngA }
-  const finish = (decision: Ungated): MindDecision => {
+  const finish = (reason: SkipReason): Admission => {
     gate.rngA = rng.a
-    return { ...decision, gate } as MindDecision
+    return { action: "skip", reason, gate }
   }
-  if (input.wallet.paused || input.wallet.bankroll < USDC) {
-    return finish({ action: "skip", reason: "waiting", pUp: 0.5 })
-  }
+  if (input.wallet.paused || input.wallet.bankroll < USDC) return finish("waiting")
 
   const look = tapeActivity(input.points, input.now, Math.max(persona.lookbackMs, input.windowMs * 4))
   const state = regime(look.activity, input.config)
@@ -151,39 +153,104 @@ export function decideWallet(input: {
 
   const due = input.windowId >= gate.readyWindow
   const inBurst = gate.burstLeft > 0
-  if (gate.refractory && !due && !inBurst) return finish({ action: "skip", reason: "refractory", pUp: 0.5 })
+  if (gate.refractory && !due && !inBurst) return finish("refractory")
   if (inBurst) {
     const fire = mulberry32.sample(rng) < input.config.burstFire
     gate.burstLeft -= 1
     if (!fire) {
       if (gate.burstLeft === 0) armRefractory(gate, persona, scale, rng, input.config, input.windowId)
-      return finish({ action: "skip", reason: "waiting", pUp: 0.5 })
+      return finish("waiting")
     }
   } else if (!due) {
-    return finish({ action: "skip", reason: gate.refractory ? "refractory" : "waiting", pUp: 0.5 })
+    return finish(gate.refractory ? "refractory" : "waiting")
   } else if (mulberry32.sample(rng) > input.config.gateFire) {
     gate.readyWindow = input.windowId + 1
-    return finish({ action: "skip", reason: "waiting", pUp: 0.5 })
+    return finish("waiting")
   }
 
-  let pUp = belief(persona, input.points, input.now, rng, input.config)
+  gate.rngA = rng.a
+  return { action: "due", gate, inBurst }
+}
+
+function belief(persona: Persona, bars: readonly WindowBar[], rng: { a: number }, timing: TimingConfig): number | null {
+  const noise = (mulberry32.sample(rng) - 0.5) * persona.noise
+  if (persona.mind === "restless") return clamp(0.5 + noise, 0.02, 0.98)
+  if (bars.length === 0) return null
+  const z = clamp(ewmaSignal(bars.map((bar) => bar.ret), timing.ewmaLambda).z, -8, 8)
+  if (persona.mind === "price") {
+    const drift = clamp(z * timing.priceGain, -0.06, 0.06)
+    return clamp(0.5 + drift + noise * 0.15, 0.05, 0.95)
+  }
+  const sign = persona.mind === "fade" ? -1 : 1
+  return clamp(sigmoid(sign * Math.abs(persona.momentum) * z * timing.signalScale + noise), 0.02, 0.98)
+}
+
+export type MindDecision =
+  | { action: "bet"; side: Side; stakeMicros: number; pUp: number; gate: GateState }
+  | { action: "skip"; reason: SkipReason; pUp: number; gate: GateState }
+
+type PriceInput = {
+  wallet: WalletMind
+  inBurst: boolean
+  windowId: number
+  now: number
+  windowMs: number
+  points: readonly PrintPoint[]
+  poolUp: number
+  poolDown: number
+  config: PersonaConfig
+  stake: StakeConfig
+  timing: TimingConfig
+}
+
+type Ungated = Omit<Extract<MindDecision, { action: "bet" }>, "gate"> | Omit<Extract<MindDecision, { action: "skip" }>, "gate">
+
+export function decideOpen(input: PriceInput): MindDecision {
+  const persona = input.wallet.persona
+  const gate: GateState = {
+    ...input.wallet.gate,
+    results: input.wallet.gate.results.slice(-input.config.memory),
+  }
+  const rng = { a: gate.rngA }
+  const finish = (decision: Ungated): MindDecision => {
+    gate.rngA = rng.a
+    return { ...decision, gate }
+  }
+  if (input.wallet.paused || input.wallet.bankroll < USDC) return finish({ action: "skip", reason: "waiting", pUp: 0.5 })
+
+  const look = tapeActivity(input.points, input.now, Math.max(persona.lookbackMs, input.windowMs * 4))
+  const state = regime(look.activity, input.config)
+  let scale = 1
+  if (state === "moving") scale = input.config.hotScale
+  if (state === "flat") scale = input.config.flatScale
+  scale = clamp(scale * (1 + gate.tempoNudge), input.config.scaleMin, input.config.scaleMax)
+
+  const bars = windowBars(input.points, input.now, input.windowMs, input.timing.historyWindows)
+  let pUp = belief(persona, bars, rng, input.timing)
+  const implied = impliedUp(input.poolUp, input.poolDown)
+  let edge = input.config.memoryStep === 0 ? persona.edge : persona.edge + gate.edgeNudge
+  if (bars.length < input.timing.thinBars) edge += input.timing.thinEdge
+
+  if (pUp === null) {
+    armQuiet(gate, persona, scale, rng, input.config, input.windowId)
+    return finish({ action: "skip", reason: Math.abs(implied - 0.5) < edge ? "flat" : "no edge", pUp: 0.5 })
+  }
   if (persona.second && persona.secondWeight > 0) {
-    const other = belief({ ...persona, mind: persona.second, noise: persona.noise * 0.4 }, input.points, input.now, rng, input.config)
-    pUp = lerp(pUp, other, persona.secondWeight)
+    const other = belief({ ...persona, mind: persona.second, noise: persona.noise * 0.4 }, bars, rng, input.timing)
+    if (other !== null) pUp = lerp(pUp, other, persona.secondWeight)
   }
   pUp = clamp(pUp + gate.bias, 0.02, 0.98)
-  const implied = input.poolUp + input.poolDown === 0 ? 0.5 : input.poolUp / (input.poolUp + input.poolDown)
-  const poolLean = Math.abs(implied - 0.5)
-  if (Math.abs(pUp - 0.5) < input.config.herdBand && poolLean >= input.config.herdBand) {
-    const lean = implied > 0.5 ? 1 : 0
-    pUp = lerp(pUp, lean, input.config.herdWeight)
-  }
-  if (state === "flat" && (persona.mind === "tape" || persona.mind === "fade") && Math.abs(pUp - 0.5) < 0.08) {
+
+  if (
+    state === "flat" &&
+    (persona.mind === "tape" || persona.mind === "fade") &&
+    Math.abs(pUp - 0.5) < 0.08 &&
+    Math.abs(pUp - implied) < input.timing.crowdGap
+  ) {
     armQuiet(gate, persona, scale, rng, input.config, input.windowId)
     return finish({ action: "skip", reason: "flat", pUp })
   }
 
-  const edge = input.config.memoryStep === 0 ? persona.edge : persona.edge + gate.edgeNudge
   let side: Side | null = null
   if (pUp > implied + edge) side = "up"
   else if (pUp < implied - edge) side = "down"
@@ -191,28 +258,48 @@ export function decideWallet(input: {
     armQuiet(gate, persona, scale, rng, input.config, input.windowId)
     return finish({ action: "skip", reason: "no edge", pUp })
   }
+
   const price = side === "up" ? implied : 1 - implied
   const prob = side === "up" ? pUp : 1 - pUp
   const advantage = prob - price
   const odds = (1 - price) / Math.max(price, 0.05)
-  const fraction = clamp(advantage / Math.max(odds, 0.05), 0, 1)
+  const kelly =
+    persona.kelly * (advantage / Math.max(odds, 0.05)) * input.wallet.bankroll * drawdownScale(gate.results, input.timing.lossScaleMin)
+  const same = side === "up" ? input.poolUp : input.poolDown
+  const other = side === "up" ? input.poolDown : input.poolUp
+  const sStar = exhaustStake(prob, same, other, input.timing.virtualMicros)
   const smallFloor = Math.min(input.stake.smallMax * USDC, Math.floor(input.wallet.bankroll * 0.5))
   const shareCap = Math.min(
     input.wallet.bankroll,
     Math.max(Math.floor(input.wallet.bankroll * persona.bankrollShare), smallFloor, USDC),
   )
-  const minKelly = Math.min(shareCap, Math.round(USDC * (1.5 + persona.kelly * 5)))
-  const kelly = Math.min(shareCap, Math.max(minKelly, Math.floor(shareCap * persona.kelly * Math.max(fraction, 0.25))))
-  const stakeMicros = shapeStake(kelly, persona, (rng.a ^ input.windowId) >>> 0, input.wallet.bankroll, input.stake)
+  let raw = Math.floor(Math.min(sStar, Math.max(0, kelly), shareCap, input.wallet.bankroll))
+  if (raw < USDC && sStar >= USDC && input.wallet.bankroll >= USDC) raw = USDC
+  const stakeMicros = raw < USDC ? null : shapeStake(raw, persona, (rng.a ^ input.windowId) >>> 0, input.wallet.bankroll, input.stake)
   if (stakeMicros === null) {
     armQuiet(gate, persona, scale, rng, input.config, input.windowId)
     return finish({ action: "skip", reason: "no edge", pUp })
   }
-  if (!inBurst) gate.burstLeft = Math.max(0, persona.burstWindows - 1)
+  if (!input.inBurst) gate.burstLeft = Math.max(0, persona.burstWindows - 1)
   gate.refractory = false
   gate.readyWindow = input.windowId + 1
   if (gate.burstLeft === 0) armRefractory(gate, persona, scale, rng, input.config, input.windowId)
   return finish({ action: "bet", side, stakeMicros, pUp })
+}
+
+export function decideWallet(input: GateInput & {
+  poolUp: number
+  poolDown: number
+  stake: StakeConfig
+  timing: TimingConfig
+}): MindDecision {
+  const admitted = admitWallet(input)
+  if (admitted.action === "skip") return { action: "skip", reason: admitted.reason, pUp: 0.5, gate: admitted.gate }
+  return decideOpen({
+    ...input,
+    wallet: { ...input.wallet, gate: admitted.gate },
+    inBurst: admitted.inBurst,
+  })
 }
 
 function armQuiet(gate: GateState, persona: Persona, scale: number, rng: Mulberry32, config: PersonaConfig, windowId: number) {
@@ -254,6 +341,7 @@ export function decideWindow(input: {
   wallets: readonly WalletMind[]
   config: PersonaConfig
   stake: StakeConfig
+  timing: TimingConfig
   cap: number
 }): { orders: Order[]; skips: Skip[]; gates: Map<string, GateState> } {
   const rng = mulberry32.create(input.roundId >>> 0)
@@ -285,6 +373,7 @@ export function decideWindow(input: {
       poolDown: down,
       config: input.config,
       stake: input.stake,
+      timing: input.timing,
     })
     gates.set(wallet.address, decision.gate)
     if (decision.action === "skip") {

@@ -8,7 +8,8 @@ import { feeBps, windowMs } from "../server/config"
 import { configuredChain, loadEnv } from "../server/env"
 import { bankAction, seedMicros } from "./bank"
 import { checkConfig, swarmConfig, type TapeStats } from "./config"
-import { decideWindow, freshGate, noteResult, tapeActivity, type GateState, type PrintPoint, type Side } from "./decide"
+import { admitWallet, decideOpen, freshGate, noteResult, tapeActivity, type GateState, type PrintPoint, type Side } from "./decide"
+import { fireAt, releaseWave, type FireSlot } from "./schedule"
 import { createDirector, manilaHour, stepDirector, type DirectorState, type DirectorView } from "./director"
 import { growKeys, type StoredKey } from "./keys"
 import { personaFor, type Persona } from "./persona"
@@ -76,6 +77,14 @@ type Pending = {
   endsAt: number
   orders: { address: string; side: Side; stakeMicros: number }[]
   sent: number
+}
+
+type Wave = {
+  roundId: number
+  openAt: number
+  endsAt: number
+  queue: FireSlot[]
+  taken: number
 }
 
 function apiRoot(): string {
@@ -149,7 +158,8 @@ async function main() {
   if (earliestStakeRound !== null && cursor < earliestStakeRound - 1) {
     cursor = earliestStakeRound - 1
   }
-  let pending: Pending | null = null
+  let wave: Wave | null = null
+  let builtJoin = -1
   let auditAt = 0
   let auditCursor = 0
   let bankAt = 0
@@ -169,7 +179,6 @@ async function main() {
   let flow = parseFlow(readJson(FLOW_PATH))
   let lastError: string | null = null
   let windowStats = { roundId: null as number | null, bets: 0, skips: 0, up: 0, down: 0, stakes: [] as number[] }
-  let decidedJoin = -1
   let lastView: DirectorView | null = null
   let stopping = false
 
@@ -209,6 +218,28 @@ async function main() {
   }
   process.on("SIGINT", stop)
   process.on("SIGTERM", stop)
+
+  const takeBook = (): Promise<Book | null> =>
+    loadBook(db, wallets, () => cursor, (value) => {
+      cursor = value
+    })
+
+  const dropQueued = (closing: Wave) => {
+    for (const slot of closing.queue) {
+      const wallet = wallets.get(slot.address)
+      if (!wallet) continue
+      wallet.lastSkip = "waiting"
+      wallet.dirty = true
+    }
+    noteWindow(db, {
+      id: closing.roundId,
+      bets: windowStats.bets,
+      skips: windowStats.skips,
+      upMicros: windowStats.up,
+      downMicros: windowStats.down,
+      at: Date.now(),
+    })
+  }
 
   while (!stopping) {
     const now = Date.now()
@@ -321,100 +352,182 @@ async function main() {
       }
 
       if (lastJoin !== joinId) {
-        let next = await fetchBook(cursor)
-        if (next) {
-          book = next
+        const loaded = await takeBook()
+        if (loaded) {
+          book = loaded
           bookAt = Date.now()
-          lastJoin = joinId
           lastError = null
-          while (next) {
-            const before = cursor
-            await applySettled(db, wallets, next, () => cursor, (value) => {
-              cursor = value
-            })
-            if (next.settled.length < 200 || cursor <= before) break
-            next = await fetchBook(cursor)
-            if (next) book = next
-          }
+          lastJoin = joinId
         } else lastError = "Book did not load"
       }
 
-      if (pending && book && pending.roundId !== book.joinId) pending = null
-      if (!pending && decidedJoin !== joinId && book && book.feed === "live" && book.joinId === joinId && now < book.windowEndsAt - 250 && !steered.control.bettingPaused) {
-        const minds = [...wallets.values()]
-          .filter((wallet) => wallet.online && wallet.enrolled)
-          .map((wallet) => ({
-            index: wallet.index,
-            address: wallet.address,
-            persona: wallet.persona,
-            bankroll: wallet.bankroll,
-            gate: wallet.gate,
-            paused: steered.control.paused.includes(wallet.address),
-          }))
-        const decided = decideWindow({
-          roundId: book.joinId,
-          now,
-          windowMs: windowMs(),
-          points,
-          poolUp: book.poolUpMicros,
-          poolDown: book.poolDownMicros,
-          wallets: minds,
-          config: swarmConfig.persona,
-          stake: swarmConfig.stake,
-          cap: swarmConfig.runner.orderCap,
-        })
-        for (const wallet of wallets.values()) {
-          const gate = decided.gates.get(wallet.address)
-          if (!gate) continue
-          wallet.gate = gate
-          wallet.dirty = true
-        }
-        for (const skip of decided.skips) {
-          const wallet = wallets.get(skip.address)
-          if (!wallet) continue
-          wallet.lastSkip = skip.reason
-          wallet.dirty = true
-        }
-        windowStats = {
-          roundId: book.joinId,
-          bets: 0,
-          skips: decided.skips.length,
-          up: 0,
-          down: 0,
-          stakes: [],
-        }
-        decidedJoin = book.joinId
-        pending = {
-          roundId: book.joinId,
-          endsAt: book.windowEndsAt,
-          orders: decided.orders.map((order) => ({ address: order.address, side: order.side, stakeMicros: order.stakeMicros })),
-          sent: 0,
-        }
-        if (pending.orders.length === 0) {
-          noteWindow(db, { id: book.joinId, bets: 0, skips: decided.skips.length, upMicros: 0, downMicros: 0, at: now })
-          pending = null
-        }
+      if (wave && wave.roundId !== joinId) {
+        dropQueued(wave)
+        wave = null
       }
-      if (pending && now < pending.endsAt - 150) {
-        const posted = await postOrders(db, pending, wallets, flow, (message) => {
-          lastError = message
-        })
-        windowStats.bets += posted.count
-        windowStats.up += posted.up
-        windowStats.down += posted.down
-        windowStats.stakes.push(...posted.stakes)
-        if (posted.done) {
-          noteWindow(db, {
-            id: pending.roundId,
-            bets: windowStats.bets,
-            skips: windowStats.skips,
-            upMicros: windowStats.up,
-            downMicros: windowStats.down,
-            at: now,
+
+      const bettingPaused = steered.control.bettingPaused
+      const marginMs = swarmConfig.timing.marginMs
+      if (
+        !bettingPaused &&
+        wave === null &&
+        builtJoin !== joinId &&
+        book &&
+        book.feed === "live" &&
+        book.joinId === joinId &&
+        now < book.windowEndsAt - marginMs
+      ) {
+        const openAt = book.windowEndsAt - windowMs()
+        const paused = new Set(steered.control.paused)
+        const livePoints = pointsOf(book.tape, now)
+        const queue: FireSlot[] = []
+        let skips = 0
+        for (const wallet of wallets.values()) {
+          if (!wallet.online || !wallet.enrolled) continue
+          const admitted = admitWallet({
+            wallet: {
+              index: wallet.index,
+              address: wallet.address,
+              persona: wallet.persona,
+              bankroll: wallet.bankroll,
+              gate: wallet.gate,
+              paused: paused.has(wallet.address),
+            },
+            windowId: book.joinId,
+            now,
+            windowMs: windowMs(),
+            points: livePoints,
+            config: swarmConfig.persona,
           })
-          pending = null
+          wallet.gate = admitted.gate
+          wallet.dirty = true
+          if (admitted.action === "skip") {
+            wallet.lastSkip = admitted.reason
+            skips += 1
+            continue
+          }
+          queue.push({
+            address: wallet.address,
+            inBurst: admitted.inBurst,
+            fireAt: fireAt(wallet.index, wallet.persona.mind, book.joinId, openAt, book.windowEndsAt, swarmConfig.timing),
+          })
         }
-      } else if (pending && now >= pending.endsAt - 150) pending = null
+        windowStats = { roundId: book.joinId, bets: 0, skips, up: 0, down: 0, stakes: [] }
+        builtJoin = joinId
+        if (queue.length === 0) {
+          noteWindow(db, { id: book.joinId, bets: 0, skips, upMicros: 0, downMicros: 0, at: now })
+        } else {
+          wave = { roundId: book.joinId, openAt, endsAt: book.windowEndsAt, queue, taken: 0 }
+        }
+      } else if (book && book.joinId === joinId && now >= book.windowEndsAt - marginMs && wave === null) {
+        builtJoin = joinId
+      }
+
+      if (wave && !bettingPaused && now < wave.endsAt - 150) {
+        const open = wave
+        const loaded = await takeBook()
+        if (loaded) {
+          book = loaded
+          bookAt = Date.now()
+          lastError = null
+        }
+        const source = book
+        if (source && source.feed === "live" && source.joinId === open.roundId) {
+            const at = Date.now()
+            const released = releaseWave({
+              queue: wave.queue,
+              now: at,
+              closeAt: wave.endsAt,
+              timing: swarmConfig.timing,
+            })
+            wave.queue = released.queue
+            for (const slot of released.dropped) {
+              const wallet = wallets.get(slot.address)
+              if (!wallet) continue
+              wallet.lastSkip = "waiting"
+              wallet.dirty = true
+              windowStats.skips += 1
+            }
+            const livePoints = pointsOf(source.tape, at)
+            let upPool = source.poolUpMicros
+            let downPool = source.poolDownMicros
+            const orders: Pending["orders"] = []
+            const room = swarmConfig.runner.orderCap - wave.taken
+            const due = released.due.slice(0, Math.max(0, room))
+            for (const slot of released.due.slice(due.length)) {
+              wave.queue.push({ ...slot, fireAt: at + swarmConfig.timing.sliceMs })
+            }
+            for (const slot of due) {
+              const wallet = wallets.get(slot.address)
+              if (!wallet) continue
+              const decision = decideOpen({
+                wallet: {
+                  index: wallet.index,
+                  address: wallet.address,
+                  persona: wallet.persona,
+                  bankroll: wallet.bankroll,
+                  gate: wallet.gate,
+                  paused: steered.control.paused.includes(wallet.address),
+                },
+                inBurst: slot.inBurst,
+                windowId: wave.roundId,
+                now: at,
+                windowMs: windowMs(),
+                points: livePoints,
+                poolUp: upPool,
+                poolDown: downPool,
+                config: swarmConfig.persona,
+                stake: swarmConfig.stake,
+                timing: swarmConfig.timing,
+              })
+              wallet.gate = decision.gate
+              wallet.dirty = true
+              if (decision.action === "skip") {
+                wallet.lastSkip = decision.reason
+                windowStats.skips += 1
+                continue
+              }
+              orders.push({ address: wallet.address, side: decision.side, stakeMicros: decision.stakeMicros })
+              wave.taken += 1
+              if (decision.side === "up") upPool += decision.stakeMicros
+              else downPool += decision.stakeMicros
+            }
+            if (wave.taken >= swarmConfig.runner.orderCap) {
+              for (const slot of wave.queue) {
+                const wallet = wallets.get(slot.address)
+                if (!wallet) continue
+                wallet.lastSkip = "waiting"
+                wallet.dirty = true
+                windowStats.skips += 1
+              }
+              wave.queue = []
+            }
+            if (orders.length > 0) {
+              const pending: Pending = { roundId: wave.roundId, endsAt: wave.endsAt, orders, sent: 0 }
+              const posted = await postOrders(db, pending, wallets, flow, (message) => {
+                lastError = message
+              })
+              windowStats.bets += posted.count
+              windowStats.up += posted.up
+              windowStats.down += posted.down
+              windowStats.stakes.push(...posted.stakes)
+            }
+            if (wave.queue.length === 0) {
+              noteWindow(db, {
+                id: wave.roundId,
+                bets: windowStats.bets,
+                skips: windowStats.skips,
+                upMicros: windowStats.up,
+                downMicros: windowStats.down,
+                at: Date.now(),
+              })
+              wave = null
+            }
+        }
+      } else if (wave && now >= wave.endsAt - 150) {
+        dropQueued(wave)
+        wave = null
+      }
 
       if (now - auditAt >= swarmConfig.runner.auditEveryMs) {
         await audit(wallets, auditCursor, (next) => {
@@ -569,6 +682,25 @@ async function enrollDue(
     wallet.bankroll = body.balanceMicros
     wallet.dirty = true
   })
+}
+
+async function loadBook(
+  db: ReturnType<typeof openSwarm>,
+  wallets: Map<string, LiveWallet>,
+  readCursor: () => number,
+  writeCursor: (value: number) => void,
+): Promise<Book | null> {
+  let latest = await fetchBook(readCursor())
+  if (!latest) return null
+  for (;;) {
+    const before = readCursor()
+    await applySettled(db, wallets, latest, readCursor, writeCursor)
+    if (latest.settled.length < 200 || readCursor() <= before) break
+    const more = await fetchBook(readCursor())
+    if (!more) break
+    latest = more
+  }
+  return latest
 }
 
 async function applySettled(

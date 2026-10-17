@@ -58,6 +58,7 @@ The file exports one typed object, `swarmConfig`, in groups that match the layer
 | `persona` | Mind shares, second-mind rate, lookbacks, edge, Kelly fraction, bankroll share, noise scale, tempo, burst, refractory gap, moving and flat gate bands, herd cap, and the memory length and step. |
 | `stake` | Cent bands and the round-dollar offset. |
 | `runner` | Enroll width, bet chunk size, order cap, audit slice, bank pass, snapshot interval, and tape-tail length. |
+| `timing` | How many past windows feed the signal, the EWMA and thin-history edge, virtual pool, fire-time slots, wave size, and the loss-streak floor. |
 
 `agent/index.ts` imports that object once and passes each slice in. `director`, `presence`, `bank`, `persona`, `decide`, and `stake` take the slice as an argument. A test uses the shipped object or a smaller one. Changing a knob is an edit to `agent/config.ts` and a restart of the runner.
 
@@ -157,7 +158,7 @@ A persona holds:
 - a disagreement noise scale (large only for restless)
 - a tempo: the typical gap between bets, in windows, skewed so most wallets are slower than the window
 
-The public tape tail is the only price input. An awake wallet still does not bet every window. `decide` runs the tempo gate first.
+The public tape tail is the only price input. Decision bars are the last four completed windows inside that tail, or fewer when the feed has not covered them. An awake wallet still does not bet every window. `decide` runs the tempo gate first. A wallet that passes the gate draws a fire time inside the open window and does not post until that time.
 
 - When a visit starts or a bet lands, draw the next gap from that persona's tempo with `easing.expoOut`. Most gaps cover several windows. A few are short.
 - Scale the gap down when the recent move is large versus volatility, and up when the tape is flat. Clamp the scale. A hot tape is not "every window." A flat tape is not "silent for the whole visit."
@@ -166,22 +167,23 @@ The public tape tail is the only price input. An awake wallet still does not bet
 - Restless minds use a shorter tempo and still miss most windows.
 - On a moving tape, about 5–20% of awake wallets pass the gate. On a flat tape, well under 5%.
 
-Then the mind sets `pUp`:
+Then the mind sets `pUp` from an EWMA of those window returns:
 
-- Tape. A sigmoid of positive momentum times recent return, scaled by recent volatility, plus private noise.
-- Fade. The same sigmoid with the sign flipped.
-- Price. Near 0.5, plus a slow drift from the longer lookback. A one-second twitch is not a setup. The pool price is the thing it trades against.
-- Restless. 0.5 plus a large private residual. Stakes stay in the small cent mass.
+- Tape. A sigmoid of positive momentum times the EWMA z-score, plus private noise. Its fire time sits in the early part of the window.
+- Fade. The same sigmoid with the sign flipped. Its fire time sits in the late part of the window, so it sees the pool the early money just filled.
+- Price. Near 0.5, plus a small drift from the same z-score. A one-window twitch is not a setup. The pool price is the thing it trades against. It fires late, with fade.
+- Restless. 0.5 plus a large private residual, at any time in the window. Stakes stay in the small cent mass.
 
-About one in five wallets adds a second mind's term at low weight. A light herd pull, toward the side the pool already holds, may break a near tie. It cannot override a clear edge the other way. A flat tape still puts the serious minds near 0.5, so they skip.
+About one in five wallets adds a second mind's term at low weight. Fewer than three bars widens the edge. Zero bars makes the serious minds skip. A flat tape still puts tape and fade near 0.5, so they skip when the pool is within `crowdGap` of that number. A wider gap, such as an 80/20 pool, cancels the skip and the wallet can take the cheap side.
 
 Against the pool:
 
 - Implied up-price is `up / (up + down)`, or 0.5 when both sides are empty.
 - Bet the side where `p` beats the implied price by more than that persona's edge. Otherwise skip.
-- Stake is a fractional-Kelly slice of that wallet's bankroll, clamped to the persona max and to the spendable balance. Minimum remains $1. Below $1 the wallet skips until a floor mint.
+- The pari-mutuel stake that spends the edge is `s* = (p (U+D+2V) − (U+V)) / (1−p)` on Up, with virtual liquidity `V` on each side so an empty pool has a price. The posted size is the minimum of `s*`, fractional Kelly on the current price times the bankroll, and the persona share cap. A losing streak in the last 32 results scales the Kelly term down. Minimum remains $1. Below $1 the wallet skips until a floor mint.
+- Same-side bets shrink as the pool moves toward the belief. Opposite-side bets grow. That is how the wallets bet against each other.
 
-Orders are walked in a `mulberry32(roundId)` shuffle against a shadow pool. Each accepted stake updates the shadow, so the next wallet sees a worse price. They compete. They do not take turns losing. Both sides fill when personas disagree. A flat or already-fair pool produces a quiet window.
+Fire times are seeded from the wallet index and the window id. The runner refetches the book before each wave and posts at most `waveCap` orders, then waits. Inside one wave the orders walk a shadow pool in fire-time order. A wallet that never reaches its fire time does not arm a refractory gap. Both sides fill when personas disagree. A flat and already-fair pool produces a quiet window.
 
 Cap at 800 orders per window. The tempo gate and the edge rule are the real filters. The cap is only a backstop.
 
@@ -208,10 +210,10 @@ One Bun process. Batch sizes, the order cap, the audit slice, and the pass inter
 1. Read `agent/control.json`. Load `swarmConfig` once. Run `checkConfig`.
 2. Step the director and presence.
 3. Enroll newly awake wallets in parallel, about 16 at a time. One signature per wallet per lifetime. `POST /api/agents/enroll` with `AGENT_SECRET`. The server verifies the signature, inserts `is_bot = 1`, and applies the seed credit. An address that already exists as a human is rejected. A leaked secret cannot take over a person.
-4. Once per betting window, one `GET /api/agents/book`: join id, both pools, a tape tail of about the last 90 seconds, and rounds settled since a cursor (strike, settle, fee, pools, winning side). No per-wallet RPC. No `eth_getBalance`. No `balanceOf` on the hot path.
+4. On each new betting window, one `GET /api/agents/book`: join id, both pools, a tape tail of about the last 90 seconds, and rounds settled since a cursor (strike, settle, fee, pools, winning side). No per-wallet RPC. No `eth_getBalance`. No `balanceOf` on the hot path. Admit the tempo gate then, and store a fire time for each wallet that is due.
 5. Replay settlements locally with the shared pure settle function, using the stakes this process recorded. That updates the cached bankroll. A slow audit (`GET /api/agents/balances` for a slice of ~200 addresses every few seconds) corrects drift.
-6. Run the shadow-pool decisions in memory.
-7. `POST /api/agents/bets` in chunks of about 200: `{ address, side, stakeMicros }`. One SQLite transaction per chunk, one `publishRound` after the chunk. Per-row errors do not roll back the rows that passed. Target under ~20ms per chunk so the 16ms market loop is not stalled for long. Bun's SQLite connection is the single writer.
+6. Each tick, refetch the book and decide the wallets whose fire time has arrived, against the live pools plus a shadow of this wave. Cap the wave. Slip the overflow one slice later if it still fits in the window.
+7. `POST /api/agents/bets` for that wave: `{ address, side, stakeMicros }`. One SQLite transaction per chunk, one `publishRound` after the chunk. Per-row errors do not roll back the rows that passed. The next tick posts the next wave, so one window does not share a single timestamp.
 8. Apply bank actions (burn or floor mint) on a 5 second pass, not inside the bet transaction.
 9. Write aggregates. Sleep until the next window or the next presence tick, whichever comes first. There is no 1 second pause between wallets.
 

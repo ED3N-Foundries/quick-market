@@ -1,10 +1,11 @@
 import { expect, test } from "bun:test"
 import { USDC, swarmConfig } from "./config"
-import { decideWallet, decideWindow, freshGate, type PrintPoint, type WalletMind } from "./decide"
+import { decideWallet, decideWindow, drawdownScale, exhaustStake, freshGate, type PrintPoint, type WalletMind } from "./decide"
 import { personaFor, type Persona } from "./persona"
 
 const persona = swarmConfig.persona
 const stake = swarmConfig.stake
+const timing = swarmConfig.timing
 const WINDOW = 5_000
 
 function rising(now: number): PrintPoint[] {
@@ -44,6 +45,7 @@ test("a rising tape and a cheap up pool splits tape and fade", () => {
     poolDown: 80 * USDC,
     config: persona,
     stake,
+    timing,
   })
   expect(up.action).toBe("bet")
   if (up.action === "bet") expect(up.side).toBe("up")
@@ -57,6 +59,7 @@ test("a rising tape and a cheap up pool splits tape and fade", () => {
     poolDown: 80 * USDC,
     config: persona,
     stake,
+    timing,
   })
   expect(down.action === "skip" || (down.action === "bet" && down.side === "down")).toBe(true)
 })
@@ -82,6 +85,7 @@ test("a price mind skips a twitch and bets a pool that is off its number", () =>
     poolDown: 50 * USDC,
     config: persona,
     stake,
+    timing,
   })
   expect(fair.action).toBe("skip")
   const cheap = decideWallet({
@@ -94,6 +98,7 @@ test("a price mind skips a twitch and bets a pool that is off its number", () =>
     poolDown: 90 * USDC,
     config: persona,
     stake,
+    timing,
   })
   expect(cheap.action).toBe("bet")
   if (cheap.action === "bet") expect(cheap.side).toBe("up")
@@ -113,6 +118,7 @@ test("a fair pool on a calm tape is a skip, and two minds can take opposite side
     poolDown: 40 * USDC,
     config: persona,
     stake,
+    timing,
   })
   expect(skipped.action).toBe("skip")
   const wallets = [
@@ -129,6 +135,7 @@ test("a fair pool on a calm tape is a skip, and two minds can take opposite side
     wallets,
     config: persona,
     stake,
+    timing,
     cap: 800,
   })
   const sides = book.orders.map((order) => order.side).sort()
@@ -143,6 +150,7 @@ test("a fair pool on a calm tape is a skip, and two minds can take opposite side
     wallets,
     config: persona,
     stake,
+    timing,
     cap: 800,
   })
   expect(again.orders).toEqual(book.orders)
@@ -162,6 +170,7 @@ test("a fair pool on a calm tape is a skip, and two minds can take opposite side
     wallets: seeded,
     config: persona,
     stake,
+    timing,
     cap: 800,
   })
   expect(smallBook.orders.length).toBeGreaterThan(1)
@@ -187,6 +196,7 @@ test("one wallet bets in flurries and a moving tape still leaves most wallets ou
       poolDown: 70 * USDC,
       config: persona,
       stake,
+      timing,
     })
     gate = decision.gate
     if (decision.action === "bet") bets.push(windowId)
@@ -230,6 +240,7 @@ function passRate(tape: (now: number) => PrintPoint[], windows: number): number 
       wallets,
       config: persona,
       stake,
+      timing,
       cap: 800,
     })
     gates = wallets.map((wallet) => book.gates.get(wallet.address) ?? wallet.gate)
@@ -237,3 +248,62 @@ function passRate(tape: (now: number) => PrintPoint[], windows: number): number 
   }
   return last
 }
+
+test("a quiet tape fades a lopsided pool", () => {
+  const now = 50_000_000
+  const calm = Array.from({ length: 40 }, (_, index) => ({ t: now - (39 - index) * 1_000, price: 100 }))
+  const wallet = mind(9, { mind: "tape", second: null, secondWeight: 0, momentum: 1, noise: 0, edge: 0.02, lookbackMs: 8_000 })
+  const faded = decideWallet({
+    wallet,
+    windowId: 10_000,
+    now,
+    windowMs: WINDOW,
+    points: calm,
+    poolUp: 80 * USDC,
+    poolDown: 20 * USDC,
+    config: persona,
+    stake,
+    timing,
+  })
+  expect(faded.action).toBe("bet")
+  if (faded.action === "bet") {
+    expect(faded.side).toBe("down")
+    expect(faded.stakeMicros).toBeGreaterThanOrEqual(USDC)
+    expect(faded.stakeMicros).toBeLessThanOrEqual(wallet.bankroll)
+  }
+})
+
+test("pari-mutuel size shrinks once the pool reaches the belief", () => {
+  const virtual = 10 * USDC
+  const first = exhaustStake(0.6, 0, 0, virtual)
+  expect(first).toBe(5 * USDC)
+  const second = exhaustStake(0.6, first, 0, virtual)
+  expect(second).toBe(0)
+  const thin = exhaustStake(0.7, 10 * USDC, 10 * USDC, virtual)
+  const fat = exhaustStake(0.7, 10 * USDC, 80 * USDC, virtual)
+  expect(fat).toBeGreaterThan(thin)
+})
+
+test("a losing streak scales the stake down to the floor", () => {
+  expect(drawdownScale([], timing.lossScaleMin)).toBe(1)
+  expect(drawdownScale([true, false], timing.lossScaleMin)).toBe(0.5)
+  expect(drawdownScale([false, false, false, false], timing.lossScaleMin)).toBe(timing.lossScaleMin)
+})
+
+test("a wallet under 1 USDC skips", () => {
+  const now = 60_000_000
+  const wallet = mind(15, { mind: "restless", second: null, secondWeight: 0, noise: 0.9, edge: 0.001 }, Math.floor(USDC / 2))
+  const decision = decideWallet({
+    wallet,
+    windowId: 12_000,
+    now,
+    windowMs: WINDOW,
+    points: rising(now),
+    poolUp: 0,
+    poolDown: 0,
+    config: persona,
+    stake,
+    timing,
+  })
+  expect(decision.action).toBe("skip")
+})
