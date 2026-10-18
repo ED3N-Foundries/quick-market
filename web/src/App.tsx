@@ -370,11 +370,12 @@ export function App() {
                   onClick={session.connect}
                   disabled={session.chainError !== null}
                 >
-                  Connect
+                  {session.connectMode === "deeplink" ? "Open in Phantom" : "Connect"}
                 </button>
               </span>
             )}
           </div>
+          {!session.address && session.connectError && <p className="note bad connect-error">{session.connectError}</p>}
           <BalanceFigure micros={you?.balanceMicros ?? null} />
           {testnet && market.config.grantIntervalMs > 0 && (
             <p className="grant-status">{grantStatusLabel(grantWait, market.config.grantMicros)}</p>

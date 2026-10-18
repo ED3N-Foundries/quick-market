@@ -4,8 +4,9 @@ import { getAddress, type Address } from "viem"
 import { createConnector, type CreateConnectorFn } from "wagmi"
 import { isUnrecognizedChain } from "./depositFlow"
 
-// Deeplink counts as an embedded provider and the SDK requires a Portal appId for it.
-// Injected Phantom works without one. New Portal apps are paused, and embedded EVM is not live.
+// Listing "deeplink" in providers makes BrowserSDK treat it as embedded and throw
+// without a Portal appId. The browse URL does not need one, so mobile Chrome calls
+// getDeeplinkToPhantom() itself. Injected Phantom works without an appId.
 type PhantomSdk = {
   isConnected(): boolean
   connect(options: { provider: "injected" }): Promise<unknown>

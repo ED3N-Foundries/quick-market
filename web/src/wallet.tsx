@@ -1,3 +1,4 @@
+import { getDeeplinkToPhantom, isMobileDevice } from "@phantom/browser-sdk"
 import { AddressType, PhantomProvider, useModal, usePhantom } from "@phantom/react-sdk"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react"
@@ -28,6 +29,7 @@ import {
   type StoredSession,
 } from "./depositFlow"
 import { extractAccountLabel, parseAmountMicros } from "./format"
+import { connectKind, phantomInjected } from "./phantomConnect"
 import { bindPhantomSdk, phantomConnector } from "./phantomConnector"
 
 const SESSION_KEY = "qm.session"
@@ -42,6 +44,8 @@ export type WalletSession = {
   signing: boolean
   signError: string | null
   connect: () => void
+  connectMode: "modal" | "deeplink"
+  connectError: string | null
   disconnect: () => void
   switchChain: () => void
   signIn: () => void
@@ -59,6 +63,8 @@ const missing: WalletSession = {
   signing: false,
   signError: null,
   connect: () => {},
+  connectMode: "modal",
+  connectError: null,
   disconnect: () => {},
   switchChain: () => {},
   signIn: () => {},
@@ -155,6 +161,7 @@ function Bridge({ children }: { children: ReactNode }) {
   const [token, setToken] = useState<string | null>(null)
   const [signing, setSigning] = useState(false)
   const [signError, setSignError] = useState<string | null>(null)
+  const [connectError, setConnectError] = useState<string | null>(null)
   const [attempt, setAttempt] = useState(0)
   const pendingModal = useRef(false)
   const syncAttempts = useRef(0)
@@ -267,6 +274,11 @@ function Bridge({ children }: { children: ReactNode }) {
   const signedIn = matchingSession(readStored(expected), address ?? null, expected)
   const activeToken = signedIn && signedIn.token === token ? token : null
 
+  const connectMode = connectKind({
+    mobile: isMobileDevice(),
+    injected: phantomInjected(window),
+  })
+
   const session: WalletSession = {
     chainError: null,
     pageChain: read.chain,
@@ -276,7 +288,18 @@ function Bridge({ children }: { children: ReactNode }) {
     token: activeToken,
     signing,
     signError,
+    connectMode,
+    connectError,
     connect: () => {
+      if (connectMode === "deeplink") {
+        try {
+          window.location.assign(getDeeplinkToPhantom())
+        } catch {
+          setConnectError("Phantom needs an https link to this page.")
+        }
+        return
+      }
+      setConnectError(null)
       if (isLoading || !sdk) {
         pendingModal.current = true
         return
