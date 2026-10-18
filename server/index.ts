@@ -301,9 +301,11 @@ async function staticFile(pathname: string): Promise<Response | null> {
   return null
 }
 
+const host = process.env.HOST?.trim() || "127.0.0.1"
+
 Bun.serve({
   port,
-  hostname: "127.0.0.1",
+  hostname: host,
   fetch(req, server) {
     const url = new URL(req.url)
     if (url.pathname === "/ws") {
