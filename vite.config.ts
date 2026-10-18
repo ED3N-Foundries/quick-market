@@ -20,7 +20,7 @@ export default defineConfig({
   server: {
     port: 5173,
     strictPort: true,
-    allowedHosts: ["qm.ed3n.com"],
+    allowedHosts: ["qm-aurora-m4.ed3n.com", "qm.ed3n.com"],
     hmr: process.env.QM_TUNNEL ? false : undefined,
     proxy: {
       "/api": { target: "http://127.0.0.1:3001", changeOrigin: true },
