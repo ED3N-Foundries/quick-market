@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "bun run server/dev.ts",
+    "share": "caffeinate -dims bun run scripts/share.ts",
     "dev:server": "bun --hot server/index.ts",
     "dev:web": "vite --host 127.0.0.1",
     "start": "NODE_ENV=production bun server/index.ts",
