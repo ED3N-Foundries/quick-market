@@ -58,6 +58,10 @@ export type SwarmSnapshot = {
   bleed: boolean
   mode: string
   pin: number | null
+  /** Host the runner is requesting, including the port. */
+  apiHost?: string
+  /** Addresses that host resolved to. Null until DNS answers. */
+  apiIp?: string | null
 }
 
 export function emptyControl(): ControlFile {

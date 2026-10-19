@@ -1,7 +1,9 @@
 import { expect, test } from "bun:test"
 import {
+  connectionOf,
   followOffset,
   handleKey,
+  hostLine,
   keyFromEvent,
   renderSnapshot,
   rosterCapacity,
@@ -56,6 +58,27 @@ function snapshot(): SwarmSnapshot {
 function state(partial: Partial<DashState> = {}): DashState {
   return { selected: 0, filter: "all", help: false, control: parseControl(null), ...partial }
 }
+
+test("the page names the host and the ip of the instance being hit", () => {
+  const local = { host: "127.0.0.1:3001", ip: "127.0.0.1" }
+  const waiting = renderSnapshot(null, { endpoint: local }, 2_000)
+  expect(waiting.split("\n")[0]).toBe("host 127.0.0.1:3001   ip 127.0.0.1")
+  expect(hostLine({ host: "qm.example:3001", ip: null })).toBe("host qm.example:3001   ip —")
+
+  const live = snapshot()
+  live.apiHost = "qm.example:3001"
+  live.apiIp = "203.0.113.8"
+  const page = renderSnapshot(live, { endpoint: local }, 2_000)
+  expect(page.split("\n")[0]).toBe("host qm.example:3001   ip 203.0.113.8")
+  expect(connectionOf(live, true, local)).toEqual({ host: "qm.example:3001", ip: "203.0.113.8" })
+
+  const quiet = snapshot()
+  quiet.running = false
+  quiet.apiHost = "old.example:3001"
+  quiet.apiIp = "198.51.100.9"
+  const parked = renderSnapshot(quiet, { endpoint: local }, 2_000)
+  expect(parked.split("\n")[0]).toBe("host 127.0.0.1:3001   ip 127.0.0.1")
+})
 
 test("the overview is one page", () => {
   const screen = renderSnapshot(snapshot(), state(), 2_000)

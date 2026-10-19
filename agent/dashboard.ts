@@ -3,6 +3,7 @@ import { join } from "node:path"
 import { Database } from "bun:sqlite"
 import { marketPreferences } from "../shared/market"
 import { loadEnv } from "../server/env"
+import { peekApiEndpoint, refreshApiEndpoint, type ApiTarget } from "./endpoint"
 import { CONTROL_PATH, STATUS_PATH, SWARM_DB_PATH, SWARM_PATH, readJson, writeJsonAtomic } from "./store"
 import { roster, rosterCount, type RosterFilter, type WalletRow } from "./swarmdb"
 import {
@@ -136,6 +137,7 @@ export function rosterCapacity(
   const chrome =
     1 +
     1 +
+    1 +
     (roomy ? 1 : 0) +
     (options.stacked ? 2 : 1) +
     (roomy ? 1 : 0) +
@@ -245,21 +247,39 @@ export function detailLine(row: WalletRow | null, control: ControlFile, alive: b
   return `#${row.idx}  ${row.mind}  tempo ${tempo}  ${visit}  ${formatMicros(row.bankroll)}  last ${last}  ${row.lastSkip ?? "—"}  ${row.wins}/${row.losses}${rate}${paused ? "  paused" : ""}`
 }
 
+export function hostLine(target: ApiTarget): string {
+  return `host ${target.host}   ip ${target.ip ?? "—"}`
+}
+
+/** A live runner reports the host it is hitting. Otherwise show where this process would connect. */
+export function connectionOf(snapshot: SwarmSnapshot | null, alive: boolean, local: ApiTarget | null): ApiTarget | null {
+  if (alive && snapshot && typeof snapshot.apiHost === "string" && snapshot.apiHost) {
+    const ip = typeof snapshot.apiIp === "string" && snapshot.apiIp ? snapshot.apiIp : null
+    return { host: snapshot.apiHost, ip }
+  }
+  return local
+}
+
 export function renderSnapshot(
   snapshot: SwarmSnapshot | null,
-  state: { help?: boolean; control?: ControlFile } = {},
+  state: { help?: boolean; control?: ControlFile; endpoint?: ApiTarget | null } = {},
   now = Date.now(),
 ): string {
+  const alive = snapshot ? isRunnerAlive(snapshot, now) : false
+  const endpoint = connectionOf(snapshot, alive, state.endpoint ?? null)
+  const where = endpoint ? hostLine(endpoint) : ""
   if (!snapshot) {
-    return [
+    const lines = [
       "Waiting for bun run agent.",
       "",
       "Press s to start the runner, or q to close this dashboard. The runner keeps going.",
-    ].join("\n")
+    ]
+    if (where) lines.unshift(where)
+    return lines.join("\n")
   }
-  const alive = isRunnerAlive(snapshot, now)
   const control = state.control ?? controlFromSnapshot(snapshot)
   const lines = [
+    where,
     `Manila ${snapshot.manila}   ${snapshot.phase}   ${alive ? "runner live" : "agent quiet"}`,
     crowdLine(snapshot, alive),
     spark(snapshot.trace) || "·",
@@ -452,7 +472,10 @@ function controlFromSnapshot(snapshot: SwarmSnapshot): ControlFile {
 async function main() {
   const interactive = Boolean(process.stdin.isTTY && process.stdout.isTTY)
   if (!interactive) {
-    console.log(renderSnapshot(loadSnapshot(), { control: loadControl() }))
+    const apiUrl = loadEnv().apiUrl
+    await refreshApiEndpoint(apiUrl)
+    const snapshot = loadSnapshot()
+    console.log(renderSnapshot(snapshot, { control: loadControl(), endpoint: peekApiEndpoint(apiUrl) }))
     return
   }
   const { runScreen } = await import("./screen.tsx")

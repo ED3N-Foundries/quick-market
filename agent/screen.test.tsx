@@ -42,6 +42,8 @@ function snapshot(): SwarmSnapshot {
     bleed: true,
     mode: "clock",
     pin: null,
+    apiHost: "qm.example:3001",
+    apiIp: "203.0.113.8",
   }
 }
 
@@ -82,6 +84,7 @@ function view(width: number, height: number) {
       now={2_000}
       width={width}
       height={height}
+      endpoint={{ host: "127.0.0.1:3001", ip: "127.0.0.1" }}
       onSelect={() => {}}
       onScroll={() => {}}
     />
@@ -97,6 +100,7 @@ test("a live runner offers restart, and the confirm line names what y and n do",
       now={2_000}
       width={140}
       height={24}
+      endpoint={{ host: "127.0.0.1:3001", ip: "127.0.0.1" }}
       onSelect={() => {}}
       onScroll={() => {}}
     />,
@@ -120,6 +124,9 @@ test("a wide terminal shows the book, the money, and the roster on one screen", 
     await setup.renderOnce()
     const frame = setup.captureCharFrame()
     const lines = frame.split("\n")
+    expect(frame).toContain("host qm.example:3001")
+    expect(frame).toContain("ip 203.0.113.8")
+    expect(frame).not.toContain("127.0.0.1")
     expect(frame).toContain("Manila 03:15:00")
     expect(frame).toContain("0xabc1")
     expect(frame).toContain("p50")
@@ -137,6 +144,8 @@ test("a narrow short terminal stacks the book and drops the sparkline", async ()
     await setup.renderOnce()
     const frame = setup.captureCharFrame()
     const lines = frame.split("\n")
+    expect(frame).toContain("host qm.example:3001")
+    expect(frame).toContain("ip 203.0.113.8")
     const book = lines.find((line) => line.includes("book"))
     expect(book).toBeDefined()
     expect(book ?? "").not.toContain("money")

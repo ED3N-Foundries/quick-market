@@ -15,6 +15,7 @@ import { growKeys, type StoredKey } from "./keys"
 import { personaFor, type Persona } from "./persona"
 import { openClock, stepPresence, type Arrival, type WalletClock } from "./presence"
 import { replayPayouts } from "./replay"
+import { peekApiEndpoint, refreshApiEndpoint } from "./endpoint"
 import { histogram, manilaClock, parseControl, parseFlow, percentiles, type FlowFile, type SwarmSnapshot } from "./status"
 import { CONTROL_PATH, FLOW_PATH, KEYS_PATH, STATUS_PATH, SWARM_DB_PATH, SWARM_PATH, readJson, writeJsonAtomic } from "./store"
 import {
@@ -240,6 +241,8 @@ async function main() {
       at: Date.now(),
     })
   }
+
+  await refreshApiEndpoint(loadEnv().apiUrl)
 
   while (!stopping) {
     const now = Date.now()
@@ -547,6 +550,7 @@ async function main() {
     } catch (error) {
       lastError = error instanceof Error ? error.message : "Swarm tick failed"
     }
+    void refreshApiEndpoint(loadEnv().apiUrl)
     flush()
     const remain = book ? book.windowEndsAt - Date.now() : swarmConfig.runner.presenceTickMs
     const wait = Math.min(swarmConfig.runner.snapshotEveryMs, Math.max(40, remain))
@@ -942,6 +946,7 @@ function buildSnapshot(input: {
 }): SwarmSnapshot {
   const steered = steering()
   const view = input.view
+  const endpoint = peekApiEndpoint(loadEnv().apiUrl)
   const stakes = percentiles(input.windowStats.stakes)
   const balances = [...input.wallets.values()].filter((wallet) => wallet.enrolled).map((wallet) => wallet.bankroll)
   return {
@@ -977,6 +982,8 @@ function buildSnapshot(input: {
     bleed: steered.control.bleed,
     mode: steered.pin !== null ? "pin" : steered.control.mode,
     pin: steered.pin,
+    apiHost: endpoint.host,
+    apiIp: endpoint.ip,
   }
 }
 

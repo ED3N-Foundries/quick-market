@@ -2,12 +2,15 @@
 import { createCliRenderer, type MouseEvent } from "@opentui/core"
 import { createRoot, useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react"
 import { useEffect, useRef, useState } from "react"
+import { loadEnv } from "../server/env"
 import {
   HELP_LINES,
+  connectionOf,
   crowdLine,
   detailLine,
   handleKey,
   histogramLine,
+  hostLine,
   isRunnerAlive,
   keyFromEvent,
   loadControl,
@@ -27,6 +30,7 @@ import {
   type RunnerPrompt,
   type RowTone,
 } from "./dashboard"
+import { peekApiEndpoint, refreshApiEndpoint, type ApiTarget } from "./endpoint"
 import { formatMicros, spark, type ControlFile, type SwarmSnapshot } from "./status"
 import type { WalletRow } from "./swarmdb"
 
@@ -51,6 +55,7 @@ export function DashboardView({
   now,
   width,
   height,
+  endpoint,
   onSelect,
   onScroll,
   onArm,
@@ -63,6 +68,7 @@ export function DashboardView({
   now: number
   width: number
   height: number
+  endpoint: ApiTarget
   onSelect: (index: number) => void
   onScroll: (delta: number) => void
   onArm?: () => void
@@ -75,9 +81,12 @@ export function DashboardView({
   const busy = state.runnerBusy ?? null
   const note = state.runnerNote ?? null
   const pid = typeof snapshot?.pid === "number" ? snapshot.pid : null
+  const aliveNow = snapshot ? isRunnerAlive(snapshot, now) : false
+  const target = connectionOf(snapshot, aliveNow, endpoint)
   if (!snapshot) {
     return (
       <box style={{ width: "100%", height: "100%", flexDirection: "column", backgroundColor: bg, padding: 1 }}>
+        {target ? <Line>{hostLine(target)}</Line> : null}
         <text fg={text}>Waiting for bun run agent.</text>
         <text fg={muted}>Press s to start the runner, or q to close this dashboard. The runner keeps going.</text>
         <RunnerControl label={runnerActionLine(false, null, busy)} onPress={onArm} />
@@ -86,7 +95,7 @@ export function DashboardView({
       </box>
     )
   }
-  const alive = isRunnerAlive(snapshot, now)
+  const alive = aliveNow
   const control = state.control
   const together = panelsFit(width, snapshot, control)
   const selectedRow = page.rows[state.selected - page.offset] ?? null
@@ -101,6 +110,7 @@ export function DashboardView({
       style={{ width: "100%", height: "100%", flexDirection: "column", backgroundColor: bg, paddingLeft: 1, paddingRight: 1 }}
       onMouseScroll={onWheel}
     >
+      {target ? <Line>{hostLine(target)}</Line> : null}
       <Line fg={alive ? text : gold}>
         Manila {snapshot.manila}   {snapshot.phase}   {alive ? "runner live" : "agent quiet"}
       </Line>
@@ -160,11 +170,28 @@ function App() {
   const [snapshot, setSnapshot] = useState<SwarmSnapshot | null>(null)
   const [page, setPage] = useState<Page>({ rows: [], count: 0, offset: 0, selected: 0 })
   const [now, setNow] = useState(() => Date.now())
+  const [endpoint, setEndpoint] = useState<ApiTarget>(() => peekApiEndpoint(loadEnv().apiUrl))
   const stateRef = useRef(state)
   const pageRef = useRef(page)
   const offsetRef = useRef(0)
   stateRef.current = state
   pageRef.current = page
+
+  useEffect(() => {
+    let cancel = false
+    const pull = () => {
+      const apiUrl = loadEnv().apiUrl
+      void refreshApiEndpoint(apiUrl).then(() => {
+        if (!cancel) setEndpoint(peekApiEndpoint(apiUrl))
+      })
+    }
+    pull()
+    const timer = setInterval(pull, 10_000)
+    return () => {
+      cancel = true
+      clearInterval(timer)
+    }
+  }, [])
 
   useEffect(() => {
     const tick = () => {
@@ -241,6 +268,7 @@ function App() {
       now={now}
       width={width}
       height={height}
+      endpoint={endpoint}
       onSelect={(index) => setState((current) => ({ ...current, selected: index }))}
       onScroll={(delta) =>
         setState((current) => ({
