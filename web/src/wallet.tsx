@@ -3,6 +3,7 @@ import { AddressType, PhantomProvider, useModal, usePhantom } from "@phantom/rea
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react"
 import { getPublicClient } from "wagmi/actions"
+import { stringToHex } from "viem"
 import {
   createConfig,
   http,
@@ -10,7 +11,6 @@ import {
   useChainId,
   useConnect,
   useDisconnect,
-  useSignMessage,
   useSwitchChain,
   useWriteContract,
   WagmiProvider,
@@ -29,10 +29,11 @@ import {
   type StoredSession,
 } from "./depositFlow"
 import { extractAccountLabel, parseAmountMicros } from "./format"
-import { connectKind, phantomInjected } from "./phantomConnect"
+import { authorizedAccount, connectKind, isUnauthorized, phantomInjected } from "./phantomConnect"
 import { bindPhantomSdk, phantomConnector } from "./phantomConnector"
 
 const SESSION_KEY = "qm.session"
+const UNAUTHORIZED_SIGN = "Phantom has not approved this account. Connect again."
 
 export type WalletSession = {
   chainError: string | null
@@ -151,7 +152,6 @@ function Bridge({ children }: { children: ReactNode }) {
   const expected = read.chain!.id
   const { address, status } = useAccount()
   const walletChainId = useChainId()
-  const { signMessageAsync } = useSignMessage()
   const { switchChainAsync } = useSwitchChain()
   const { connectAsync, connectors } = useConnect()
   const { disconnectAsync } = useDisconnect()
@@ -167,10 +167,14 @@ function Bridge({ children }: { children: ReactNode }) {
   const syncAttempts = useRef(0)
   const syncing = useRef(false)
   const hadAccount = useRef(false)
-  const signedAttempt = useRef(0)
-  const signRef = useRef(signMessageAsync)
+  const signEpoch = useRef(0)
   const connectRef = useRef<() => void>(() => {})
-  signRef.current = signMessageAsync
+  const sdkRef = useRef(sdk)
+  const addressRef = useRef(address)
+  const disconnectRef = useRef(disconnectAsync)
+  sdkRef.current = sdk
+  addressRef.current = address
+  disconnectRef.current = disconnectAsync
 
   useEffect(() => {
     bindPhantomSdk(sdk)
@@ -211,6 +215,7 @@ function Bridge({ children }: { children: ReactNode }) {
     if (status !== "connected" || !address) {
       if (!hadAccount.current) return
       hadAccount.current = false
+      signEpoch.current += 1
       const stored = sessionStorage.getItem(SESSION_KEY)
       sessionStorage.removeItem(SESSION_KEY)
       if (stored) {
@@ -239,16 +244,39 @@ function Bridge({ children }: { children: ReactNode }) {
       sessionStorage.removeItem(SESSION_KEY)
       void fetch("/api/session", { method: "DELETE", headers: { authorization: `Bearer ${stored.token}` } })
     }
-    // An address on its own does not open Phantom. Sign in starts from the button,
-    // or from expire(), which bumps `attempt` after the server rejects the session.
-    if (attempt === 0 || signedAttempt.current >= attempt) return
-    signedAttempt.current = attempt
+  }, [address, expected, status])
+
+  // An address on its own does not open Phantom. Sign in starts from the button,
+  // or from expire(), which bumps `attempt` after the server rejects the session.
+  // A restored session has only called eth_accounts, so this click asks Phantom to authorize.
+  useEffect(() => {
+    if (attempt === 0) return
+    const epoch = signEpoch.current
     let cancel = false
+    const stale = () => cancel || signEpoch.current !== epoch
     setSigning(true)
     setSignError(null)
-    const issued = Date.now()
-    signRef.current({ message: loginMessage(expected, lower, issued) })
-      .then(async (signature) => {
+    void (async () => {
+      const current = sdkRef.current
+      if (!current) {
+        if (!stale()) {
+          setSignError("Phantom is not ready")
+          setSigning(false)
+        }
+        return
+      }
+      try {
+        const granted = await current.ethereum.connect()
+        if (stale()) return
+        const exact = authorizedAccount(Array.isArray(granted) ? granted : [], addressRef.current ?? null)
+        if (!exact) throw new Error("No Ethereum account")
+        const lower = exact.toLowerCase()
+        const issued = Date.now()
+        const signature = await current.ethereum.request<string>({
+          method: "personal_sign",
+          params: [stringToHex(loginMessage(expected, lower, issued)), exact],
+        })
+        if (stale()) return
         const response = await fetch("/api/session", {
           method: "POST",
           headers: { "content-type": "application/json" },
@@ -257,21 +285,31 @@ function Bridge({ children }: { children: ReactNode }) {
         const body = await response.json()
         if (!response.ok) throw new Error(body.error ?? "Sign-in failed")
         sessionStorage.setItem(SESSION_KEY, JSON.stringify({ token: body.token, address: lower, chainId: expected }))
-        if (!cancel) setToken(body.token)
-      })
-      .catch((error: unknown) => {
-        if (cancel) return
+        if (!stale()) setToken(body.token)
+      } catch (error: unknown) {
+        if (stale()) return
+        if (isUnauthorized(error)) {
+          setConnectError(UNAUTHORIZED_SIGN)
+          setSignError(UNAUTHORIZED_SIGN)
+          try {
+            if (sdkRef.current?.isConnected()) await sdkRef.current.disconnect()
+          } catch {
+            // Wagmi still needs to drop the cached account.
+          }
+          await disconnectRef.current().catch(() => {})
+          return
+        }
         const message = error instanceof Error ? error.message : "Sign-in failed"
-        setSignError(message.includes("User rejected") ? "Sign in to trade" : message)
-      })
-      .finally(() => {
-        if (!cancel) setSigning(false)
-      })
+        const code = typeof error === "object" && error ? (error as { code?: unknown }).code : undefined
+        setSignError(code === 4001 || message.includes("User rejected") ? "Sign in to trade" : message)
+      } finally {
+        if (!stale()) setSigning(false)
+      }
+    })()
     return () => {
       cancel = true
-      setSigning(false)
     }
-  }, [address, attempt, expected, status])
+  }, [attempt, expected])
 
   const label = extractAccountLabel(address, {
     addresses: addresses?.length ? addresses : sdk?.getAddresses?.(),
