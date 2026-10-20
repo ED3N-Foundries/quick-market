@@ -4,7 +4,11 @@ import {
   authorizedAccount,
   connectKind,
   isUnauthorized,
+  grantWaitStatus,
   loginAction,
+  loginStatus,
+  loginStepState,
+  loginSteps,
   phantomBrowseUrl,
   phantomInjected,
   shouldAddChain,
@@ -49,6 +53,22 @@ test("mobile without Phantom browses, and a press on an open page connects then 
   expect(loginAction({ mobile: false, injected: false, connected: false, sessionMatches: false })).toBe("connect-and-sign")
   expect(loginAction({ mobile: true, injected: true, connected: false, sessionMatches: false })).toBe("connect-and-sign")
   expect(loginAction({ mobile: false, injected: true, connected: true, sessionMatches: false })).toBe("sign")
+})
+
+test("sign-in status names Phantom, then the signature, then the grant", () => {
+  expect(loginStatus("phantom", true)).toBe("Waiting for Phantom")
+  expect(loginStatus("sign", false)).toBe("Approve the sign-in in Phantom")
+  expect(loginStatus("session", true)).toBe("Signed. Adding your balance on Base Sepolia. This can take a bit.")
+  expect(loginStatus("session", false)).toBe("Confirming sign-in")
+  expect(loginSteps(true)).toEqual(["Phantom", "Approve", "Balance"])
+  expect(loginSteps(false)).toEqual(["Phantom", "Approve", "Confirm"])
+  expect(loginStepState(0, "phantom")).toBe("now")
+  expect(loginStepState(1, "phantom")).toBe("later")
+  expect(loginStepState(0, "sign")).toBe("done")
+  expect(loginStepState(1, "sign")).toBe("now")
+  expect(loginStepState(2, "session")).toBe("now")
+  expect(loginStepState(1, "session")).toBe("done")
+  expect(grantWaitStatus()).toBe("Minting the grant on Base Sepolia. This can take a bit.")
 })
 
 test("a matching session does not prompt again", () => {

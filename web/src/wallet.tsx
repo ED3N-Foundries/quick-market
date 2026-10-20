@@ -34,6 +34,7 @@ import {
   connectKind,
   isUnauthorized,
   loginAction,
+  type LoginPhase,
   phantomBrowseUrl,
   phantomInjected,
   switchFault,
@@ -53,6 +54,7 @@ export type WalletSession = {
   chainId: number | undefined
   token: string | null
   signing: boolean
+  loginPhase: LoginPhase | null
   signError: string | null
   login: () => void
   connectMode: "modal" | "deeplink"
@@ -71,6 +73,7 @@ const missing: WalletSession = {
   chainId: undefined,
   token: null,
   signing: false,
+  loginPhase: null,
   signError: null,
   login: () => {},
   connectMode: "modal",
@@ -191,6 +194,7 @@ function Bridge({ children }: { children: ReactNode }) {
   const { connect: connectPhantom } = usePhantomConnect()
   const [token, setToken] = useState<string | null>(null)
   const [signing, setSigning] = useState(false)
+  const [loginPhase, setLoginPhase] = useState<LoginPhase | null>(null)
   const [signError, setSignError] = useState<string | null>(null)
   const [connectError, setConnectError] = useState<string | null>(null)
   const [walletChainId, setWalletChainId] = useState<number | undefined>(undefined)
@@ -279,6 +283,7 @@ function Bridge({ children }: { children: ReactNode }) {
       setSignError(null)
       setConnectError(null)
       setSigning(false)
+      setLoginPhase(null)
       return
     }
     hadAccount.current = true
@@ -325,6 +330,7 @@ function Bridge({ children }: { children: ReactNode }) {
     const epoch = ++signEpoch.current
     const stale = () => signEpoch.current !== epoch
     setSigning(true)
+    setLoginPhase(forceConnect || !sdkRef.current?.isConnected() ? "phantom" : "sign")
     setSignError(null)
     setConnectError(null)
     void (async () => {
@@ -333,6 +339,7 @@ function Bridge({ children }: { children: ReactNode }) {
         if (!current) throw new Error("Phantom is not ready")
         let exact: string | null = null
         if (forceConnect || !current.isConnected()) {
+          setLoginPhase("phantom")
           const result = await connectPhantom({ provider: "injected" })
           if (stale()) return
           exact = authorizedAccount(ethereumAccounts(result.addresses), addressRef.current)
@@ -342,12 +349,14 @@ function Bridge({ children }: { children: ReactNode }) {
         if (stale()) return
         let ethereum = liveEthereum()
         if (!exact) {
+          setLoginPhase("phantom")
           const granted = await ethereum.connect()
           if (stale()) return
           exact = authorizedAccount(Array.isArray(granted) ? granted : [], addressRef.current)
         }
         if (!exact) throw new Error("No Ethereum account")
         const signWith = async (account: string) => {
+          setLoginPhase("sign")
           const issued = Date.now()
           const signature = await ethereum.signPersonalMessage(loginMessage(expected, account.toLowerCase(), issued), account)
           return { signature, issued, account }
@@ -357,6 +366,7 @@ function Bridge({ children }: { children: ReactNode }) {
           signed = await signWith(exact)
         } catch (error) {
           if (stale() || !isUnauthorized(error)) throw error
+          setLoginPhase("phantom")
           const granted = await ethereum.connect()
           if (stale()) return
           const next = authorizedAccount(Array.isArray(granted) ? granted : [], exact)
@@ -368,6 +378,7 @@ function Bridge({ children }: { children: ReactNode }) {
         const lower = signed.account.toLowerCase()
         const shown = addressRef.current
         if (shown && shown.toLowerCase() !== lower) return
+        setLoginPhase("session")
         const response = await fetch("/api/session", {
           method: "POST",
           headers: { "content-type": "application/json" },
@@ -383,6 +394,7 @@ function Bridge({ children }: { children: ReactNode }) {
         if (!stale()) {
           busy.current = false
           setSigning(false)
+          setLoginPhase(null)
         }
       }
     })()
@@ -398,6 +410,7 @@ function Bridge({ children }: { children: ReactNode }) {
     })
     if (action === "done") {
       setSigning(false)
+      setLoginPhase(null)
       return
     }
     if (action === "browse") {
@@ -412,6 +425,7 @@ function Bridge({ children }: { children: ReactNode }) {
     if (isLoading || !sdkRef.current) {
       pendingLogin.current = true
       setSigning(true)
+      setLoginPhase("phantom")
       setSignError(null)
       setConnectError(null)
       return
@@ -428,6 +442,7 @@ function Bridge({ children }: { children: ReactNode }) {
     chainId: walletChainId,
     token: activeToken,
     signing,
+    loginPhase,
     signError,
     connectMode,
     connectError,
@@ -466,6 +481,7 @@ function Bridge({ children }: { children: ReactNode }) {
       signEpoch.current += 1
       busy.current = false
       setSigning(false)
+      setLoginPhase(null)
       beginLogin()
     },
     deposit: async (amount, treasury, usdc, chainId) => {

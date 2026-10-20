@@ -3,6 +3,7 @@ import { isUnrecognizedChain } from "./depositFlow"
 
 export type ConnectKind = "modal" | "deeplink"
 export type LoginAction = "browse" | "connect-and-sign" | "sign" | "done"
+export type LoginPhase = "phantom" | "sign" | "session"
 
 export const LOGIN_QUERY = "login"
 export const TESTNET_MODE = "Turn on Testnet Mode in Phantom: Settings → Developer Settings."
@@ -28,6 +29,29 @@ export function loginAction(input: {
   if (input.mobile && !input.injected) return "browse"
   if (input.connected) return "sign"
   return "connect-and-sign"
+}
+
+/** Sentence for the sign-in row. The session step is the grant, not another Phantom prompt. */
+export function loginStatus(phase: LoginPhase, testnet: boolean): string {
+  if (phase === "phantom") return "Waiting for Phantom"
+  if (phase === "sign") return "Approve the sign-in in Phantom"
+  if (testnet) return "Signed. Adding your balance on Base Sepolia. This can take a bit."
+  return "Confirming sign-in"
+}
+
+export function loginSteps(testnet: boolean): readonly [string, string, string] {
+  return testnet ? ["Phantom", "Approve", "Balance"] : ["Phantom", "Approve", "Confirm"]
+}
+
+export function loginStepState(index: number, phase: LoginPhase): "done" | "now" | "later" {
+  const current = phase === "phantom" ? 0 : phase === "sign" ? 1 : 2
+  if (index < current) return "done"
+  if (index === current) return "now"
+  return "later"
+}
+
+export function grantWaitStatus(): string {
+  return "Minting the grant on Base Sepolia. This can take a bit."
 }
 
 /**

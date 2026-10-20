@@ -782,6 +782,64 @@ body {
   color: var(--warn);
   font-size: 12px;
 }
+.wait-status {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 10px 0 0;
+  animation: wait-in 220ms ease;
+}
+.fund-overlay .wait-status { margin: 0; }
+.wait-spin {
+  width: 14px;
+  height: 14px;
+  margin-top: 2px;
+  flex: none;
+  border-radius: 50%;
+  border: 1.5px solid rgba(243, 240, 232, 0.16);
+  border-top-color: var(--warn);
+  animation: lock-spin 0.85s linear infinite;
+}
+.wait-body {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+.wait-copy {
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.35;
+  animation: wait-in 220ms ease;
+}
+.wait-steps {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+}
+.wait-steps span {
+  color: var(--muted);
+  transition: color 180ms ease;
+}
+.wait-steps span + span::before {
+  content: "·";
+  margin: 0 6px;
+  color: var(--muted);
+}
+.wait-steps span[data-state="now"] { color: var(--warn); }
+.wait-steps span[data-state="done"] { color: var(--text); }
+.wait-steps span[data-state="later"] { opacity: 0.4; }
+@keyframes wait-in {
+  from { opacity: 0; transform: translateY(3px); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .wait-status, .wait-copy { animation: none; }
+  .wait-spin { animation: none; border-top-color: var(--warn); }
+  .wait-steps span { transition: none; }
+}
 .share-preview, .note, .fee { font-size: 13px; color: var(--muted); }
 .share-preview { min-height: 2.6em; }
 .note { color: var(--text); margin-bottom: 0; }

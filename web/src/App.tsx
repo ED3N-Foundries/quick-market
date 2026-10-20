@@ -34,6 +34,7 @@ import {
 import type { Band, Board, HistoryRound, OpenBet, SettledMessage, Side, TrayRow } from "./types"
 import { useMarket } from "./useMarket"
 import { useSideBook } from "./useSideBook"
+import { grantWaitStatus, loginStatus, loginSteps, loginStepState } from "./phantomConnect"
 import { useSession } from "./wallet"
 
 export function App() {
@@ -179,7 +180,7 @@ export function App() {
     session.address !== null && session.chainId !== undefined && session.chainId !== market.config.chainId
   const walletTone = wrongChain || session.signing ? "warn" : "ok"
   const loginLabel = session.signing
-    ? "Signing…"
+    ? "Please wait"
     : !session.address && session.connectMode === "deeplink"
       ? "Open in Phantom"
       : "Sign in"
@@ -398,7 +399,7 @@ export function App() {
                     <div className="wallet-menu-net">
                       <TokenBadge kind={testnet ? "qm" : "circle"} />
                       <span className="net-badge" data-testnet={isTestnetChain(market.config.chainId) ? "1" : "0"}>
-                        {session.signing ? "Signing…" : chainMenuLabel(market.config.chainId, market.config.chainName)}
+                        {session.signing ? "Please wait" : chainMenuLabel(market.config.chainId, market.config.chainName)}
                       </span>
                       {wrongChain && (
                         <button type="button" className="plain net-action" onClick={session.switchChain}>
@@ -433,6 +434,9 @@ export function App() {
               </span>
             )}
           </div>
+          {session.signing && session.loginPhase && (
+            <WaitNote text={loginStatus(session.loginPhase, testnet)} steps={loginSteps(testnet)} phase={session.loginPhase} />
+          )}
           {session.connectError && <p className="note bad connect-error">{session.connectError}</p>}
           {!session.token && session.signError && session.signError !== "Sign in to trade" && (
             <p className="note bad connect-error">{session.signError}</p>
@@ -1115,6 +1119,7 @@ function GrantOverlay({
         <button type="button" className="primary grant-submit" onClick={onGrant} disabled={granting || !timing.due}>
           {granting ? "Granting…" : grantButtonLabel(timing, grantMicros)}
         </button>
+        {granting && <WaitNote text={grantWaitStatus()} />}
         {error && <p className="note bad">{error}</p>}
       </div>
     </div>
@@ -1264,6 +1269,36 @@ function SideCard(props: {
         <span>{up ? "Buy up" : "Buy down"}</span>
       </button>
     </article>
+  )
+}
+
+function WaitNote({
+  text,
+  steps,
+  phase,
+}: {
+  text: string
+  steps?: readonly string[]
+  phase?: "phantom" | "sign" | "session"
+}) {
+  return (
+    <p className="wait-status" role="status" aria-live="polite">
+      <span className="wait-spin" aria-hidden="true" />
+      <span className="wait-body">
+        <span key={text} className="wait-copy">
+          {text}
+        </span>
+        {steps && phase && (
+          <span className="wait-steps" aria-hidden="true">
+            {steps.map((step, index) => (
+              <span key={step} data-state={loginStepState(index, phase)}>
+                {step}
+              </span>
+            ))}
+          </span>
+        )}
+      </span>
+    </p>
   )
 }
 
