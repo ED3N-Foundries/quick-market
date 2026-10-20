@@ -1002,7 +1002,7 @@ function FundOverlay({
             </span>
           </div>
           <button type="button" className="overlay-close" aria-label="Close" onClick={onClose}>
-            ×
+            {"×"}
           </button>
         </header>
         <dl className="overlay-meta">
@@ -1098,7 +1098,7 @@ function GrantOverlay({
             </span>
           </div>
           <button type="button" className="overlay-close" aria-label="Close" onClick={onClose}>
-            ×
+            {"×"}
           </button>
         </header>
         <p className="note grant-copy">{grantSentence(grantMicros, grantIntervalMs)}</p>
@@ -1171,7 +1171,7 @@ function WithdrawOverlay({
             </span>
           </div>
           <button type="button" className="overlay-close" aria-label="Close" onClick={onClose}>
-            ×
+            {"×"}
           </button>
         </header>
         <dl className="overlay-meta">

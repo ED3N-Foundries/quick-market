@@ -686,16 +686,20 @@ body {
   margin: 0;
   font-size: 16px;
 }
-.overlay-close {
+.app button.overlay-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
   width: 28px;
   height: 28px;
   padding: 0;
   border-radius: 999px;
   font-size: 16px;
+  font-weight: 400;
   line-height: 1;
+  letter-spacing: 0;
   color: var(--muted);
-  display: inline-grid;
-  place-items: center;
 }
 .overlay-meta {
   margin: 0;
@@ -759,13 +763,16 @@ body {
   width: 100%;
   padding-right: 48px;
 }
-.max-btn {
+.app button.max-btn {
   position: absolute;
+  top: 50%;
   right: 5px;
+  transform: translateY(-50%);
   padding: 4px 7px;
   border-radius: 6px;
   font-size: 11px;
   font-weight: 600;
+  line-height: 1;
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--warn);
