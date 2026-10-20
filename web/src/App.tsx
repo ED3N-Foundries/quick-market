@@ -33,6 +33,7 @@ import {
 } from "./format"
 import type { Band, Board, HistoryRound, OpenBet, SettledMessage, Side, TrayRow } from "./types"
 import { useMarket } from "./useMarket"
+import { useSideBook } from "./useSideBook"
 import { useSession } from "./wallet"
 
 export function App() {
@@ -159,12 +160,23 @@ export function App() {
   const held = openBets.find((bet) => bet.roundId === focus?.id) ?? null
   const upQuote = focus ? quoteDollar("up", focus.poolUpMicros, focus.poolDownMicros, market.config.feeBps) : "—"
   const downQuote = focus ? quoteDollar("down", focus.poolUpMicros, focus.poolDownMicros, market.config.feeBps) : "—"
+  const figures = useSideBook({
+    roundId: focus?.id ?? null,
+    upShare: moneyShare(focus?.poolUpMicros ?? 0, total),
+    downShare: moneyShare(focus?.poolDownMicros ?? 0, total),
+    upPool: focus?.poolUpMicros ?? 0,
+    downPool: focus?.poolDownMicros ?? 0,
+    upPlayers: focus?.playersUp ?? 0,
+    downPlayers: focus?.playersDown ?? 0,
+    upQuote,
+    downQuote,
+  })
   const ticketWin = held ? payoutMicros(held.stakeMicros, held.side, focus?.poolUpMicros ?? 0, focus?.poolDownMicros ?? 0, market.config.feeBps) : 0
   const fundMicros = parseAmountMicros(fundAmount)
   const testnet = market.config.tokenKind === "qm" || isTestnetChain(market.config.chainId)
   const grantWait = grantTiming(you?.grantAt ?? null, now, market.config.grantIntervalMs)
   const wrongChain = session.address !== null && session.chainId !== market.config.chainId
-  const needsSignIn = session.address !== null && !wrongChain && Boolean(session.signError && !session.token)
+  const needsSignIn = session.address !== null && !wrongChain && !session.token
   const walletTone = wrongChain || needsSignIn || session.signing ? "warn" : "ok"
 
   async function onWithdraw() {
@@ -214,10 +226,12 @@ export function App() {
       <header className="top">
         <div className="brand">
           <span className="mark">Quick</span>
-          <span className="pair">BTC</span>
+          <span className="pair-badge" title={market.ticker.label || sourceLabel(market.ticker.venue)}>
+            {quotePair(market.ticker.venue)}
+          </span>
         </div>
         <div className="clock-cluster" data-move={heldSpan?.strike ? "1" : "0"}>
-          <PriceReadout priceRef={market.priceRef} strike={heldSpan?.strike ?? null} source={market.ticker.venue} />
+          <PriceReadout priceRef={market.priceRef} strike={heldSpan?.strike ?? null} />
           <div className="clock-block">
             <span className="clock-label">{market.handoff ? "Opens" : heldSpan ? "Settles" : "Buy-in"}</span>
             {market.handoff?.resumeAt ? (
@@ -271,10 +285,12 @@ export function App() {
       <section className="trade">
         <SideCard
           side="up"
-          share={moneyShare(focus?.poolUpMicros ?? 0, total)}
-          pool={focus?.poolUpMicros ?? 0}
-          quote={upQuote}
-          players={focus?.playersUp ?? 0}
+          share={figures.book.upShare}
+          pool={figures.book.upPool}
+          quote={figures.book.upQuote}
+          players={figures.book.upPlayers}
+          fade={figures.fade}
+          fadeKey={figures.gen}
           disabled={!canBet}
           onBet={() => {
             if (!board?.join) return
@@ -284,7 +300,58 @@ export function App() {
         <div className="stake">
           <div className="balance-label">
             <TokenBadge kind={testnet ? "qm" : "circle"} />
-            {session.address ? (
+            {!session.address ? (
+              <span className="who">
+                <button
+                  type="button"
+                  className="primary connect-pill"
+                  title={session.chainError ?? undefined}
+                  onClick={session.connect}
+                  disabled={session.chainError !== null}
+                >
+                  {session.connectMode === "deeplink" ? "Open in Phantom" : "Connect"}
+                </button>
+              </span>
+            ) : needsSignIn ? (
+              <span className="who" ref={walletMenuRef}>
+                <button
+                  type="button"
+                  className="wallet-pill"
+                  data-open={walletMenuOpen ? "1" : "0"}
+                  title={session.address}
+                  aria-label="Wallet menu"
+                  aria-expanded={walletMenuOpen}
+                  aria-haspopup="menu"
+                  onClick={() => setWalletMenuOpen((open) => !open)}
+                >
+                  <span className="wallet-dot" data-tone="warn" aria-hidden="true" />
+                  <span className="wallet-name">{walletDisplayLabel(session.address, session.label)}</span>
+                  <span className="wallet-caret" aria-hidden="true">▾</span>
+                </button>
+                <button type="button" className="primary connect-pill" onClick={session.signIn} disabled={session.signing}>
+                  {session.signing ? "Signing…" : "Sign in"}
+                </button>
+                {walletMenuOpen && (
+                  <div className="wallet-menu" role="menu">
+                    {session.label && <p className="wallet-menu-label">{session.label}</p>}
+                    <p className="wallet-menu-addr" title={session.address}>
+                      {session.address}
+                    </p>
+                    <div className="wallet-menu-actions">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setWalletMenuOpen(false)
+                          session.disconnect()
+                        }}
+                      >
+                        Disconnect
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </span>
+            ) : (
               <span className="who" ref={walletMenuRef}>
                 <button
                   type="button"
@@ -333,11 +400,6 @@ export function App() {
                           Switch network
                         </button>
                       )}
-                      {needsSignIn && (
-                        <button type="button" className="plain net-action" onClick={session.signIn}>
-                          Sign in
-                        </button>
-                      )}
                     </div>
                     <div className="wallet-menu-actions">
                       <button
@@ -364,21 +426,12 @@ export function App() {
                   </div>
                 )}
               </span>
-            ) : (
-              <span className="who">
-                <button
-                  type="button"
-                  className="primary connect-pill"
-                  title={session.chainError ?? undefined}
-                  onClick={session.connect}
-                  disabled={session.chainError !== null}
-                >
-                  {session.connectMode === "deeplink" ? "Open in Phantom" : "Connect"}
-                </button>
-              </span>
             )}
           </div>
           {!session.address && session.connectError && <p className="note bad connect-error">{session.connectError}</p>}
+          {needsSignIn && session.signError && session.signError !== "Sign in to trade" && (
+            <p className="note bad connect-error">{session.signError}</p>
+          )}
           <BalanceFigure micros={you?.balanceMicros ?? null} />
           {testnet && market.config.grantIntervalMs > 0 && (
             <p className="grant-status">{grantStatusLabel(grantWait, market.config.grantMicros)}</p>
@@ -414,10 +467,12 @@ export function App() {
         </div>
         <SideCard
           side="down"
-          share={moneyShare(focus?.poolDownMicros ?? 0, total)}
-          pool={focus?.poolDownMicros ?? 0}
-          quote={downQuote}
-          players={focus?.playersDown ?? 0}
+          share={figures.book.downShare}
+          pool={figures.book.downPool}
+          quote={figures.book.downQuote}
+          players={figures.book.downPlayers}
+          fade={figures.fade}
+          fadeKey={figures.gen}
           disabled={!canBet}
           onBet={() => {
             if (!board?.join) return
@@ -781,11 +836,9 @@ function moveWord(side: "up" | "down" | "push"): string {
 function PriceReadout({
   priceRef,
   strike,
-  source,
 }: {
   priceRef: RefObject<string | null>
   strike: string | null
-  source: string
 }) {
   const priceEl = useRef<HTMLSpanElement>(null)
   const deltaEl = useRef<HTMLSpanElement>(null)
@@ -810,7 +863,7 @@ function PriceReadout({
   return (
     <>
       <div className="price-block">
-        <span className="quote">{quotePair(source)}</span>
+        <span className="quote" aria-hidden="true" />
         <span className="price-line">
           <LockMark locked={!!strike} />
           <span ref={priceEl} className="price">
@@ -1179,6 +1232,8 @@ function SideCard(props: {
   pool: number
   quote: string
   players: number
+  fade: boolean
+  fadeKey: number
   disabled: boolean
   onBet: () => void
 }) {
@@ -1186,11 +1241,13 @@ function SideCard(props: {
   return (
     <article className={up ? "side up" : "side down"}>
       <p className="side-name">{up ? "▲ Up" : "▼ Down"}</p>
-      <p className="share">{props.share}</p>
-      <p className="pool">
-        {formatMoney(props.pool)} · {props.players} {props.players === 1 ? "player" : "players"}
-      </p>
-      <p className="to-win">{props.quote}</p>
+      <div className="side-figures" data-fade={props.fade ? "1" : "0"} key={props.fadeKey}>
+        <p className="share">{props.share}</p>
+        <p className="pool">
+          {formatMoney(props.pool)} · {props.players} {props.players === 1 ? "player" : "players"}
+        </p>
+        <p className="to-win">{props.quote}</p>
+      </div>
       <button type="button" disabled={props.disabled} onClick={props.onBet}>
         <span className="arrow" aria-hidden="true">{up ? "▲" : "▼"}</span>
         <span>{up ? "Buy up" : "Buy down"}</span>

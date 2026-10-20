@@ -156,7 +156,7 @@ function Bridge({ children }: { children: ReactNode }) {
   const { connectAsync, connectors } = useConnect()
   const { disconnectAsync } = useDisconnect()
   const { writeContractAsync } = useWriteContract()
-  const { sdk, isConnected, isLoading, addresses, user } = usePhantom()
+  const { sdk, isConnected, isLoading, addresses, user, clearError } = usePhantom()
   const { open } = useModal()
   const [token, setToken] = useState<string | null>(null)
   const [signing, setSigning] = useState(false)
@@ -167,6 +167,10 @@ function Bridge({ children }: { children: ReactNode }) {
   const syncAttempts = useRef(0)
   const syncing = useRef(false)
   const hadAccount = useRef(false)
+  const signedAttempt = useRef(0)
+  const signRef = useRef(signMessageAsync)
+  const connectRef = useRef<() => void>(() => {})
+  signRef.current = signMessageAsync
 
   useEffect(() => {
     bindPhantomSdk(sdk)
@@ -175,8 +179,8 @@ function Bridge({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (isLoading || !pendingModal.current) return
     pendingModal.current = false
-    open()
-  }, [isLoading, open])
+    connectRef.current()
+  }, [isLoading, sdk])
 
   useEffect(() => {
     const connector = connectors.find((item) => item.id === "phantom")
@@ -218,6 +222,8 @@ function Bridge({ children }: { children: ReactNode }) {
         }
       }
       setToken(null)
+      setSignError(null)
+      setSigning(false)
       return
     }
     hadAccount.current = true
@@ -233,11 +239,15 @@ function Bridge({ children }: { children: ReactNode }) {
       sessionStorage.removeItem(SESSION_KEY)
       void fetch("/api/session", { method: "DELETE", headers: { authorization: `Bearer ${stored.token}` } })
     }
+    // An address on its own does not open Phantom. Sign in starts from the button,
+    // or from expire(), which bumps `attempt` after the server rejects the session.
+    if (attempt === 0 || signedAttempt.current >= attempt) return
+    signedAttempt.current = attempt
     let cancel = false
     setSigning(true)
     setSignError(null)
     const issued = Date.now()
-    signMessageAsync({ message: loginMessage(expected, lower, issued) })
+    signRef.current({ message: loginMessage(expected, lower, issued) })
       .then(async (signature) => {
         const response = await fetch("/api/session", {
           method: "POST",
@@ -259,8 +269,9 @@ function Bridge({ children }: { children: ReactNode }) {
       })
     return () => {
       cancel = true
+      setSigning(false)
     }
-  }, [address, attempt, expected, signMessageAsync, status])
+  }, [address, attempt, expected, status])
 
   const label = extractAccountLabel(address, {
     addresses: addresses?.length ? addresses : sdk?.getAddresses?.(),
@@ -272,12 +283,54 @@ function Bridge({ children }: { children: ReactNode }) {
   const chainName = read.chain?.name ?? "Base Sepolia"
   const asset = read.chain ? tokenLabel(read.chain) : "USDC"
   const signedIn = matchingSession(readStored(expected), address ?? null, expected)
-  const activeToken = signedIn && signedIn.token === token ? token : null
+  const activeToken = signedIn && (token === null || token === signedIn.token) ? signedIn.token : null
 
   const connectMode = connectKind({
     mobile: isMobileDevice(),
     injected: phantomInjected(window),
   })
+
+  const beginConnect = () => {
+    if (connectMode === "deeplink") {
+      try {
+        window.location.assign(getDeeplinkToPhantom())
+      } catch {
+        setConnectError("Phantom needs an https link to this page.")
+      }
+      return
+    }
+    setConnectError(null)
+    clearError("connect")
+    if (isLoading || !sdk) {
+      pendingModal.current = true
+      return
+    }
+    // A cached Phantom session only has Disconnect in the SDK modal. Finish the
+    // wagmi link instead of opening that modal, and allow another click after a miss.
+    if (sdk.isConnected()) {
+      const connector = connectors.find((item) => item.id === "phantom")
+      if (!connector) {
+        setConnectError("Phantom is not ready")
+        return
+      }
+      syncAttempts.current = 0
+      if (syncing.current) return
+      syncing.current = true
+      void connectAsync({ connector })
+        .catch((error: unknown) => {
+          const message = error instanceof Error ? error.message : "Connect failed"
+          const lower = message.toLowerCase()
+          if (lower.includes("rejected") || lower.includes("denied") || lower.includes("already connected")) return
+          setConnectError(message)
+        })
+        .finally(() => {
+          syncing.current = false
+        })
+      return
+    }
+    open()
+  }
+  connectRef.current = beginConnect
 
   const session: WalletSession = {
     chainError: null,
@@ -290,22 +343,7 @@ function Bridge({ children }: { children: ReactNode }) {
     signError,
     connectMode,
     connectError,
-    connect: () => {
-      if (connectMode === "deeplink") {
-        try {
-          window.location.assign(getDeeplinkToPhantom())
-        } catch {
-          setConnectError("Phantom needs an https link to this page.")
-        }
-        return
-      }
-      setConnectError(null)
-      if (isLoading || !sdk) {
-        pendingModal.current = true
-        return
-      }
-      open()
-    },
+    connect: () => connectRef.current(),
     disconnect: () => {
       void (async () => {
         try {
@@ -430,7 +468,7 @@ export function WalletProviders({ children }: { children: ReactNode }) {
     return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>
   }
   return (
-    <WagmiProvider config={wagmiConfig}>
+    <WagmiProvider config={wagmiConfig} reconnectOnMount={false}>
       <QueryClientProvider client={queryClient}>
         <PhantomProvider config={phantomConfig} theme={phantomTheme} appName="Quick Market">
           <Bridge>{children}</Bridge>
