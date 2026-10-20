@@ -12,6 +12,7 @@ import {
 import { privateKeyToAccount, type PrivateKeyAccount } from "viem/accounts"
 import { base, baseSepolia } from "viem/chains"
 import type { ChainConfig } from "../shared/chain"
+import { mintReceiptWait } from "../shared/mint"
 import { mintAbi, usdcAbi } from "../shared/usdc"
 import { getDb } from "./db"
 import { configuredChain, loadEnv } from "./env"
@@ -96,14 +97,18 @@ async function signedTransfer(to: Address, amount: bigint): Promise<Hex> {
 }
 
 let pendingMintMicros = 0
-let pendingMintWaiters: { resolve: () => void; reject: (error: unknown) => void }[] = []
+let pendingMintWaiters: {
+  resolve: () => void
+  reject: (error: unknown) => void
+  onHash?: (hash: Hash) => void
+}[] = []
 let mintScheduled = false
 
-export async function mintToTreasury(amountMicros: number): Promise<void> {
+export async function mintToTreasury(amountMicros: number, onHash?: (hash: Hash) => void): Promise<void> {
   if (!Number.isSafeInteger(amountMicros) || amountMicros <= 0) throw new Error("Amount is invalid")
   return new Promise<void>((resolve, reject) => {
     pendingMintMicros += amountMicros
-    pendingMintWaiters.push({ resolve, reject })
+    pendingMintWaiters.push({ resolve, reject, onHash })
     if (mintScheduled) return
     mintScheduled = true
     queueMicrotask(() => {
@@ -122,7 +127,14 @@ export async function mintToTreasury(amountMicros: number): Promise<void> {
           args: [account.address, BigInt(total)],
           gas: 200_000n,
         })
-        const receipt = await publicClient.waitForTransactionReceipt({ hash })
+        for (const waiter of waiters) {
+          try {
+            waiter.onHash?.(hash)
+          } catch (error) {
+            console.error(error instanceof Error ? error.message : error)
+          }
+        }
+        const receipt = await publicClient.waitForTransactionReceipt(mintReceiptWait(hash))
         if (receipt.status !== "success") throw new Error(`Mint failed ${hash}`)
       }).then(
         () => {

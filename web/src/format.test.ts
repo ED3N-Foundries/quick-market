@@ -6,6 +6,7 @@ import {
   extractAccountLabel,
   formatDollarMove,
   formatGainLoss,
+  formatGrantTimer,
   formatGrantWait,
   formatMoney,
   formatPrice,
@@ -162,6 +163,9 @@ test("grant timing and labels describe an hourly claim", () => {
   expect(grantTiming(0, hour - 1, hour)).toEqual({ due: false, waitMs: 1 })
   expect(grantTiming(0, hour, hour)).toEqual({ due: true, waitMs: 0 })
   expect(grantTiming(0, 0, 0)).toEqual({ due: false, waitMs: 0 })
+  expect(formatGrantTimer(0)).toBe("0:00")
+  expect(formatGrantTimer(1_500)).toBe("0:01")
+  expect(formatGrantTimer(65_000)).toBe("1:05")
   expect(formatGrantWait(23 * 60_000)).toBe("23m")
   expect(formatGrantWait(42_000)).toBe("42s")
   expect(formatGrantWait(3_600_000 + 5 * 60_000)).toBe("1h 5m")

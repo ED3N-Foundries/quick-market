@@ -8,7 +8,8 @@ import { configuredChain, loadEnv } from "./env"
 import { handleAgents } from "./agents"
 import { mintToTreasury, requestWithdraw, startCustody, treasuryAddress } from "./custody"
 import { getDb } from "./db"
-import { applyGrant, grantOnSignIn, grantSettings } from "./grant"
+import { MINT_CONFIRMATIONS } from "../shared/mint"
+import { applyGrant, grantOnSignIn, grantSettings, settleGrantRequest } from "./grant"
 import { hub } from "./hub"
 import { parseMicros } from "./money"
 import { feedsNow } from "./feeds"
@@ -227,19 +228,48 @@ async function handle(req: Request): Promise<Response> {
     if (!session.address) return json({ error: "Sign in to receive a grant." }, 401)
     const now = Date.now()
     const settings = grantSettings()
+    let seenHash: string | null = null
+    let reportHash: (hash: string) => void = () => {}
+    const hashPromise = new Promise<string>((resolve) => {
+      reportHash = (hash) => {
+        if (seenHash) return
+        seenHash = hash
+        resolve(hash)
+      }
+    })
+    const done = applyGrant({
+      address: session.address,
+      now,
+      chainKey: chain.key,
+      amount: settings.amount,
+      intervalMs: settings.intervalMs,
+      mint: (amount) => mintToTreasury(amount, (hash) => reportHash(hash)),
+    })
     try {
-      const granted = await applyGrant({
-        address: session.address,
-        now,
-        chainKey: chain.key,
-        amount: settings.amount,
-        intervalMs: settings.intervalMs,
-        mint: mintToTreasury,
+      const settled = await settleGrantRequest({ done, hash: hashPromise })
+      if (settled.kind === "pending") {
+        void done.then(
+          () => undefined,
+          (error) => console.error(error instanceof Error ? error.message : error),
+        )
+        return json({
+          granted: false,
+          pending: true,
+          txHash: settled.txHash,
+          confirmations: MINT_CONFIRMATIONS,
+          you: youFor(session.address),
+        })
+      }
+      return json({
+        granted: settled.value,
+        pending: false,
+        txHash: seenHash,
+        confirmations: MINT_CONFIRMATIONS,
+        you: youFor(session.address),
       })
-      return json({ granted, you: youFor(session.address) })
     } catch (error) {
       console.error(error instanceof Error ? error.message : error)
-      return json({ error: "The grant did not land. Try again.", you: youFor(session.address) }, 502)
+      return json({ error: "The grant did not land. Try again.", txHash: seenHash, you: youFor(session.address) }, 502)
     }
   }
 
@@ -317,6 +347,9 @@ const host = process.env.HOST?.trim() || "127.0.0.1"
 Bun.serve({
   port,
   hostname: host,
+  // Default is 10s. A mint submit plus three blocks can run longer, and cutting
+  // the request there reported a failure while the credit still landed.
+  idleTimeout: 90,
   fetch(req, server) {
     const url = new URL(req.url)
     if (url.pathname === "/ws") {

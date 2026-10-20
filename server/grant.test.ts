@@ -1,7 +1,7 @@
 import { beforeEach, expect, test } from "bun:test"
 import { getDb, useDatabase } from "./db"
 import { loadMarket } from "../shared/market"
-import { applyGrant, cutoverAmount, grantDue, grantOnSignIn, grantSettings } from "./grant"
+import { applyGrant, cutoverAmount, grantDue, grantOnSignIn, grantSettings, settleGrantRequest } from "./grant"
 import { youFor } from "./rounds"
 
 const who = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -76,6 +76,30 @@ test("Base does not grant", async () => {
   expect(credited).toBe(false)
   expect(minted).toBe(false)
   expect(youFor(who)).toBeNull()
+})
+
+test("a broadcast hash is pending while the mint is still confirming", async () => {
+  let release: (granted: boolean) => void = () => {}
+  const done = new Promise<boolean>((resolve) => {
+    release = resolve
+  })
+  let report: (hash: string) => void = () => {}
+  const hash = new Promise<string>((resolve) => {
+    report = resolve
+  })
+  const pending = settleGrantRequest({ done, hash })
+  report("0xabc")
+  await expect(pending).resolves.toEqual({ kind: "pending", txHash: "0xabc" })
+  release(true)
+  await expect(done).resolves.toBe(true)
+})
+
+test("a grant that finishes without a hash is done", async () => {
+  const settled = await settleGrantRequest({
+    done: Promise.resolve(false),
+    hash: new Promise<string>(() => {}),
+  })
+  expect(settled).toEqual({ kind: "done", value: false })
 })
 
 test("grant timing and cutover are pure", () => {

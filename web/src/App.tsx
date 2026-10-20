@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type PointerEvent as ReactPointerEvent, type RefObject } from "react"
 import { LATE_BET_ERROR } from "../../shared/bet"
+import { MINT_CONFIRMATIONS } from "../../shared/mint"
 import { mountChart, priceY, type ChartScale, type TapeChart, type TapeSample } from "./chart"
 import { chartMarket, focusPool, followWindow, heldMarket, heldStrike, joinIsLive } from "./focus"
 import {
@@ -14,6 +15,7 @@ import {
   formatPriceDelta,
   formatSigned,
   formatGrantDollars,
+  formatGrantTimer,
   handoffBanner,
   grantButtonLabel,
   grantNextLabel,
@@ -33,6 +35,8 @@ import {
 } from "./format"
 import type { Band, Board, HistoryRound, OpenBet, SettledMessage, Side, TrayRow } from "./types"
 import { readCachedBalance, visibleBalance } from "./balanceCache"
+import { readGrantConfirmations } from "./grantChain"
+import { grantTxUrl } from "./grantWatch"
 import { useMarket } from "./useMarket"
 import { useSideBook } from "./useSideBook"
 import { grantWaitStatus, loginStatus, loginSteps, loginStepState } from "./phantomConnect"
@@ -58,6 +62,9 @@ export function App() {
   const [fundOpen, setFundOpen] = useState(false)
   const [fundError, setFundError] = useState<string | null>(null)
   const [funding, setFunding] = useState(false)
+  const [grantTx, setGrantTx] = useState<string | null>(null)
+  const [grantSeen, setGrantSeen] = useState(0)
+  const [grantNeeded, setGrantNeeded] = useState(MINT_CONFIRMATIONS)
   const [fundPhase, setFundPhase] = useState<"idle" | "phantom" | "confirming" | "pending">("idle")
   const [fundHash, setFundHash] = useState<string | null>(null)
   const [withdrawOpen, setWithdrawOpen] = useState(false)
@@ -77,6 +84,22 @@ export function App() {
   useEffect(() => {
     if (!session.address) setWalletMenuOpen(false)
   }, [session.address])
+
+  useEffect(() => {
+    if (!funding || !grantTx) return
+    let cancel = false
+    const tick = () => {
+      void readGrantConfirmations(grantTx, market.config.chainId).then((seen) => {
+        if (!cancel) setGrantSeen((current) => Math.max(current, seen))
+      })
+    }
+    tick()
+    const id = window.setInterval(tick, 1_000)
+    return () => {
+      cancel = true
+      window.clearInterval(id)
+    }
+  }, [funding, grantTx, market.config.chainId])
 
   useEffect(() => {
     if (!walletMenuOpen) return
@@ -512,19 +535,60 @@ export function App() {
           grantAt={grantAt}
           now={now}
           granting={funding}
+          txHash={grantTx}
+          confirmationsSeen={grantSeen}
+          confirmationsNeeded={grantNeeded}
           error={fundError}
-          onClose={() => setFundOpen(false)}
+          onClose={() => {
+            setFundOpen(false)
+            if (!funding) {
+              setGrantTx(null)
+              setGrantSeen(0)
+              setFundError(null)
+            }
+          }}
           onGrant={() => {
+            if (funding) return
+            const before = grantAt
             setFunding(true)
             setFundError(null)
-            void market.claimGrant().then((result) => {
-              setFunding(false)
+            setGrantTx(null)
+            setGrantSeen(0)
+            setGrantNeeded(MINT_CONFIRMATIONS)
+            void (async () => {
+              const result = await market.claimGrant()
+              if (result.txHash) setGrantTx(result.txHash)
+              if (result.ok) setGrantNeeded(result.confirmations)
+              const follow = async () => {
+                const landed = await market.waitForGrant(before)
+                setFunding(false)
+                if (landed) {
+                  setGrantTx(null)
+                  setFundOpen(false)
+                  return true
+                }
+                return false
+              }
               if (!result.ok) {
+                if (result.dropped && (await follow())) return
+                setFunding(false)
                 setFundError(result.message)
                 return
               }
-              if (result.granted) setFundOpen(false)
-            })
+              if (result.granted) {
+                setFunding(false)
+                setGrantTx(null)
+                setFundOpen(false)
+                return
+              }
+              if (!result.pending) {
+                setFunding(false)
+                return
+              }
+              if (await follow()) return
+              setFunding(false)
+              setFundError("The grant did not land. Try again.")
+            })()
           }}
         />
       )}
@@ -807,7 +871,7 @@ function BetChip({
 }
 
 function BalanceFigure({ micros }: { micros: number | null }) {
-  const [dir, setDir] = useState<"" | "up" | "down">("")
+  const [dir, setDir] = useState<"" | "credit" | "debit">("")
   const prevRef = useRef<number | null>(micros)
 
   useEffect(() => {
@@ -817,7 +881,7 @@ function BalanceFigure({ micros }: { micros: number | null }) {
       if (micros == null) setDir("")
       return
     }
-    setDir(micros > previous ? "up" : "down")
+    setDir(micros > previous ? "credit" : "debit")
     const clearDir = window.setTimeout(() => setDir(""), 730)
     return () => window.clearTimeout(clearDir)
   }, [micros])
@@ -1081,6 +1145,9 @@ function GrantOverlay({
   grantAt,
   now,
   granting,
+  txHash,
+  confirmationsSeen,
+  confirmationsNeeded,
   error,
   onClose,
   onGrant,
@@ -1092,6 +1159,9 @@ function GrantOverlay({
   grantAt: number | null
   now: number
   granting: boolean
+  txHash: string | null
+  confirmationsSeen: number
+  confirmationsNeeded: number
   error: string | null
   onClose: () => void
   onGrant: () => void
@@ -1103,7 +1173,19 @@ function GrantOverlay({
     window.addEventListener("keydown", onKey)
     return () => window.removeEventListener("keydown", onKey)
   }, [onClose])
+  const [elapsedMs, setElapsedMs] = useState(0)
+  useEffect(() => {
+    if (!granting) return
+    const started = Date.now()
+    setElapsedMs(0)
+    const id = window.setInterval(() => setElapsedMs(Date.now() - started), 200)
+    return () => window.clearInterval(id)
+  }, [granting])
   const timing = grantTiming(grantAt, now, grantIntervalMs)
+  const txUrl = txHash ? grantTxUrl(chainId, txHash) : null
+  const waiting = granting
+    ? grantWaitStatus(txHash ? { seen: confirmationsSeen, needed: confirmationsNeeded } : undefined)
+    : null
   return (
     <div className="fund-back" onClick={onClose}>
       <div className="fund-overlay" role="dialog" aria-modal="true" aria-label="Grant QM USDC" onClick={(event) => event.stopPropagation()}>
@@ -1133,7 +1215,20 @@ function GrantOverlay({
         <button type="button" className="primary grant-submit" onClick={onGrant} disabled={granting || !timing.due}>
           {granting ? "Granting…" : grantButtonLabel(timing, grantMicros)}
         </button>
-        {granting && <WaitNote text={grantWaitStatus()} />}
+        {(waiting || txHash) && (
+          <div className="grant-progress">
+            {waiting && <WaitNote text={waiting} />}
+            {granting && <p className="grant-timer">{formatGrantTimer(elapsedMs)}</p>}
+            {txHash &&
+              (txUrl ? (
+                <a className="grant-tx" href={txUrl} target="_blank" rel="noreferrer">
+                  {txHash}
+                </a>
+              ) : (
+                <p className="grant-tx">{txHash}</p>
+              ))}
+          </div>
+        )}
         {error && <p className="note bad">{error}</p>}
       </div>
     </div>
@@ -1636,9 +1731,9 @@ function sideText(side: Side | undefined): string {
 
 function gainTone(stake: number | undefined, payout: number | null | undefined): string {
   if (stake === undefined || payout == null) return ""
-  if (payout > stake) return "up"
-  if (payout === 0) return "down"
-  return "push"
+  if (payout > stake) return "gain"
+  if (payout === 0) return "loss"
+  return "flat"
 }
 
 function toastTone(event: SettledMessage, stake: number, payout: number): string {

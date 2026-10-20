@@ -70,6 +70,20 @@ async function grantOnce(
   return tx()
 }
 
+/**
+ * The hash can arrive while the mint is still waiting on blocks.
+ * Pending means the caller should answer now and let `done` credit afterwards.
+ */
+export async function settleGrantRequest<T>(input: {
+  done: Promise<T>
+  hash: Promise<string>
+}): Promise<{ kind: "done"; value: T } | { kind: "pending"; txHash: string }> {
+  return Promise.race([
+    input.done.then((value) => ({ kind: "done" as const, value })),
+    input.hash.then((txHash) => ({ kind: "pending" as const, txHash })),
+  ])
+}
+
 function due(address: string, now: number, intervalMs: number): boolean {
   const row = getDb().query("SELECT grant_at, is_bot FROM users WHERE address = ?").get(address) as
     | { grant_at: number | null; is_bot: number }

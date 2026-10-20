@@ -206,6 +206,14 @@ export function formatGrantDollars(micros: number): string {
   return formatMoney(micros)
 }
 
+/** Elapsed time in the grant window, as m:ss. */
+export function formatGrantTimer(elapsedMs: number): string {
+  const total = Math.max(0, Math.floor(elapsedMs / 1000))
+  const minutes = Math.floor(total / 60)
+  const seconds = total % 60
+  return `${minutes}:${seconds.toString().padStart(2, "0")}`
+}
+
 export function formatGrantWait(waitMs: number): string {
   const totalSeconds = Math.max(1, Math.ceil(Math.max(0, waitMs) / 1000))
   if (totalSeconds >= 3600) {

@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import { LATE_BET_CODE } from "../../shared/bet"
 import { chainFromEnv, moneyLabel, tokenKind, tokenLabel, type ChainConfig } from "../../shared/chain"
+import { GRANT_FOLLOW_MS, MINT_CONFIRMATIONS } from "../../shared/mint"
 import { marketPreferences } from "../../shared/market"
 import { writeCachedBalance } from "./balanceCache"
 import { applyBet } from "./betIntent"
 import type { TapeChart, TapePoint } from "./chart"
 import { createClock, easeClock, noteClock } from "./clock"
 import { parseAmountMicros } from "./format"
+import { grantLanded } from "./grantWatch"
 import { betMarket } from "./focus"
 import type { Handoff, Ticker } from "../../shared/source"
 import { tickerFor } from "../../shared/source"
@@ -372,28 +374,60 @@ export function useMarket(token: string | null) {
     [acceptYou, pushLate],
   )
 
-  const claimGrant = useCallback(async (): Promise<{ ok: true; granted: boolean } | { ok: false; message: string }> => {
-    if (!tokenRef.current) return { ok: false, message: "Sign in to receive a grant." }
+  const claimGrant = useCallback(async (): Promise<
+    | { ok: true; granted: boolean; pending: boolean; txHash: string | null; confirmations: number }
+    | { ok: false; message: string; dropped: boolean; txHash: string | null }
+  > => {
+    if (!tokenRef.current) return { ok: false, message: "Sign in to receive a grant.", dropped: false, txHash: null }
     try {
       const response = await fetch("/api/grant", {
         method: "POST",
         headers: headers(tokenRef.current),
       })
-      const body = (await response.json().catch(() => null)) as { error?: string; granted?: boolean; you?: You } | null
+      const body = (await response.json().catch(() => null)) as {
+        error?: string
+        granted?: boolean
+        pending?: boolean
+        txHash?: string
+        confirmations?: number
+        you?: You
+      } | null
       if (body?.you) {
         acceptYou(body.you)
         markConfirmed(true)
       }
+      const txHash = typeof body?.txHash === "string" && body.txHash.length > 0 ? body.txHash : null
       if (response.status === 401) {
         setUnauthorized(true)
-        return { ok: false, message: "Sign in to receive a grant." }
+        return { ok: false, message: "Sign in to receive a grant.", dropped: false, txHash }
       }
-      if (!response.ok) return { ok: false, message: body?.error ?? "The grant did not land. Try again." }
-      return { ok: true, granted: Boolean(body?.granted) }
+      if (!response.ok) return { ok: false, message: body?.error ?? "The grant did not land. Try again.", dropped: false, txHash }
+      const confirmations =
+        typeof body?.confirmations === "number" && body.confirmations > 0 ? body.confirmations : MINT_CONFIRMATIONS
+      return {
+        ok: true,
+        granted: Boolean(body?.granted),
+        pending: Boolean(body?.pending),
+        txHash,
+        confirmations,
+      }
     } catch {
-      return { ok: false, message: "Can't reach the market server" }
+      return { ok: false, message: "Can't reach the market server", dropped: true, txHash: null }
     }
   }, [acceptYou, markConfirmed])
+
+  const waitForGrant = useCallback(
+    async (beforeGrantAt: number | null) => {
+      const start = Date.now()
+      while (Date.now() - start < GRANT_FOLLOW_MS) {
+        const next = await reload().catch(() => null)
+        if (next && grantLanded(beforeGrantAt, next.grantAt)) return next
+        await new Promise((resolve) => setTimeout(resolve, 1_000))
+      }
+      return null
+    },
+    [reload],
+  )
 
   const withdrawWallet = useCallback(async (amount: string): Promise<string | null> => {
     if (!tokenRef.current) return "Connect a wallet first"
@@ -446,6 +480,7 @@ export function useMarket(token: string | null) {
     priceRef,
     place,
     claimGrant,
+    waitForGrant,
     withdrawWallet,
     reload,
     waitForBalance,

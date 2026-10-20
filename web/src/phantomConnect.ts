@@ -50,8 +50,13 @@ export function loginStepState(index: number, phase: LoginPhase): "done" | "now"
   return "later"
 }
 
-export function grantWaitStatus(): string {
-  return "Minting the grant on Base Sepolia. This can take a bit."
+export function grantWaitStatus(progress?: { seen: number; needed: number }): string {
+  if (!progress) return "Minting the grant on Base Sepolia. This can take a bit."
+  const needed = Math.max(0, Math.floor(progress.needed))
+  const seen = Math.min(needed, Math.max(0, Math.floor(progress.seen)))
+  const left = needed - seen
+  if (left === 0) return "Confirmations in. Crediting the balance."
+  return left === 1 ? "Waiting on 1 confirmation" : `Waiting on ${left} confirmations`
 }
 
 /**
