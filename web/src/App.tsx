@@ -442,7 +442,7 @@ export function App() {
             <p className="note bad connect-error">{session.signError}</p>
           )}
           <BalanceFigure micros={you?.balanceMicros ?? null} />
-          {testnet && market.config.grantIntervalMs > 0 && (
+          {testnet && !session.signing && market.config.grantIntervalMs > 0 && (
             <p className="grant-status">{grantStatusLabel(grantWait, market.config.grantMicros)}</p>
           )}
           {held && (
@@ -1290,11 +1290,15 @@ function WaitNote({
         </span>
         {steps && phase && (
           <span className="wait-steps" aria-hidden="true">
-            {steps.map((step, index) => (
-              <span key={step} data-state={loginStepState(index, phase)}>
-                {step}
-              </span>
-            ))}
+            {steps.map((step, index) => {
+              const state = loginStepState(index, phase)
+              return (
+                <span key={step} data-state={state}>
+                  <span className="step-check" />
+                  {step}
+                </span>
+              )
+            })}
           </span>
         )}
       </span>

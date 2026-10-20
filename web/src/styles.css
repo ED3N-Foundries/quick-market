@@ -828,8 +828,36 @@ body {
   margin: 0 6px;
   color: var(--muted);
 }
+.step-check {
+  display: inline-block;
+  position: relative;
+  width: 13px;
+  height: 13px;
+  margin-right: 5px;
+  border: 1.5px solid currentColor;
+  border-radius: 3px;
+  box-sizing: border-box;
+  vertical-align: -2px;
+  transition: background 180ms ease, border-color 180ms ease;
+}
+.wait-steps span[data-state="done"] { color: var(--up); }
+.wait-steps span[data-state="done"] .step-check {
+  background: var(--up);
+  border-color: var(--up);
+}
+.wait-steps span[data-state="done"] .step-check::after {
+  content: "";
+  position: absolute;
+  left: 3px;
+  top: 1px;
+  width: 3px;
+  height: 6px;
+  border: solid var(--up-ink);
+  border-width: 0 1.5px 1.5px 0;
+  transform: rotate(45deg);
+}
 .wait-steps span[data-state="now"] { color: var(--warn); }
-.wait-steps span[data-state="done"] { color: var(--text); }
+.wait-steps span[data-state="now"] .step-check { border-color: var(--warn); }
 .wait-steps span[data-state="later"] { opacity: 0.4; }
 @keyframes wait-in {
   from { opacity: 0; transform: translateY(3px); }
@@ -838,7 +866,7 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .wait-status, .wait-copy { animation: none; }
   .wait-spin { animation: none; border-top-color: var(--warn); }
-  .wait-steps span { transition: none; }
+  .wait-steps span, .step-check { transition: none; }
 }
 .share-preview, .note, .fee { font-size: 13px; color: var(--muted); }
 .share-preview { min-height: 2.6em; }
