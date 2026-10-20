@@ -225,13 +225,15 @@ export function App() {
     <div className="app">
       <header className="top">
         <div className="brand">
-          <span className="mark">Quick</span>
-          <span className="pair-badge" title={market.ticker.label || sourceLabel(market.ticker.venue)}>
-            {quotePair(market.ticker.venue)}
-          </span>
+          <span className="mark">Quick Market</span>
         </div>
         <div className="clock-cluster" data-move={heldSpan?.strike ? "1" : "0"}>
-          <PriceReadout priceRef={market.priceRef} strike={heldSpan?.strike ?? null} />
+          <PriceReadout
+            priceRef={market.priceRef}
+            strike={heldSpan?.strike ?? null}
+            pair={quotePair(market.ticker.venue)}
+            pairTitle={market.ticker.label || sourceLabel(market.ticker.venue)}
+          />
           <div className="clock-block">
             <span className="clock-label">{market.handoff ? "Opens" : heldSpan ? "Settles" : "Buy-in"}</span>
             {market.handoff?.resumeAt ? (
@@ -439,12 +441,12 @@ export function App() {
           {held && (
             <div className="ticket">
               <p className={held.side}>{held.side === "up" ? "▲ Up" : "▼ Down"}</p>
-              <p>Staked {formatMoney(held.stakeMicros)}</p>
+              <p>Amount {formatMoney(held.stakeMicros)}</p>
               <p>To win {formatMoney(ticketWin)}</p>
             </div>
           )}
           <label className="stake-field">
-            <span>Stake</span>
+            <span>Amount</span>
             <input
               inputMode="decimal"
               value={stake}
@@ -801,7 +803,7 @@ function BalanceFigure({ micros }: { micros: number | null }) {
 
   return (
     <p className="balance" data-dir={dir}>
-      {micros == null ? "—" : formatMoney(micros)}
+      {micros == null ? "$—" : formatMoney(micros)}
     </p>
   )
 }
@@ -836,9 +838,13 @@ function moveWord(side: "up" | "down" | "push"): string {
 function PriceReadout({
   priceRef,
   strike,
+  pair,
+  pairTitle,
 }: {
   priceRef: RefObject<string | null>
   strike: string | null
+  pair: string
+  pairTitle: string
 }) {
   const priceEl = useRef<HTMLSpanElement>(null)
   const deltaEl = useRef<HTMLSpanElement>(null)
@@ -863,7 +869,9 @@ function PriceReadout({
   return (
     <>
       <div className="price-block">
-        <span className="quote" aria-hidden="true" />
+        <span className="pair-badge" title={pairTitle}>
+          {pair}
+        </span>
         <span className="price-line">
           <LockMark locked={!!strike} />
           <span ref={priceEl} className="price">
@@ -1305,7 +1313,7 @@ function History({ token, version, windowMs }: { token: string | null; version: 
               {mine && (
                 <>
                   <th>Side</th>
-                  <th>Stake</th>
+                  <th>Amount</th>
                   <th>Gain/loss</th>
                 </>
               )}
