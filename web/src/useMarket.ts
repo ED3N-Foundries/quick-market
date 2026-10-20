@@ -2,8 +2,10 @@ import { useCallback, useEffect, useRef, useState } from "react"
 import { LATE_BET_CODE } from "../../shared/bet"
 import { chainFromEnv, moneyLabel, tokenKind, tokenLabel, type ChainConfig } from "../../shared/chain"
 import { marketPreferences } from "../../shared/market"
+import { applyBet } from "./betIntent"
 import type { TapeChart, TapePoint } from "./chart"
 import { createClock, easeClock, noteClock } from "./clock"
+import { parseAmountMicros } from "./format"
 import { betMarket } from "./focus"
 import type { Handoff, Ticker } from "../../shared/source"
 import { tickerFor } from "../../shared/source"
@@ -65,11 +67,15 @@ export function useMarket(token: string | null) {
   const chartRef = useRef<TapeChart | null>(null)
   const tokenRef = useRef(token)
   const youRef = useRef<You | null>(null)
+  const configRef = useRef(config)
   const seedRef = useRef<TapePoint[] | null>(null)
   const bufferRef = useRef<TapePoint[]>([])
   const seededRef = useRef(false)
+  const betLock = useRef(false)
+  const betIntent = useRef(0)
   tokenRef.current = token
   youRef.current = you
+  configRef.current = config
 
   const applySeed = useCallback((chart: TapeChart) => {
     if (!seedRef.current) return
@@ -273,14 +279,34 @@ export function useMarket(token: string | null) {
 
   const place = useCallback(
     async (side: Side, stake: string, roundId: number, blockStart: number, windowEndsAt: number) => {
-      if (!tokenRef.current) return
+      if (!tokenRef.current || betLock.current) return
       const now = Date.now() + offsetRef.current
       if (betMarket(roundId, blockStart, windowEndsAt, now) === "miss") {
         if (now >= windowEndsAt) pushLate()
         return
       }
+      const current = youRef.current
+      if (!current) return
+      const stakeMicros = parseAmountMicros(stake)
+      if (stakeMicros === null) {
+        setError("Stake is invalid")
+        return
+      }
+      if (stakeMicros < configRef.current.minStakeMicros) {
+        setError("Minimum stake is 1 USDC")
+        return
+      }
+      if (stakeMicros > current.balanceMicros) {
+        setError("Insufficient balance")
+        return
+      }
+      betLock.current = true
+      const intent = ++betIntent.current
+      const snapshot = current
+      setYou(applyBet(current, { side, stakeMicros, roundId }))
       setPending(true)
       setError(null)
+      const stale = () => intent !== betIntent.current
       try {
         const response = await fetch("/api/bets", {
           method: "POST",
@@ -288,11 +314,14 @@ export function useMarket(token: string | null) {
           body: JSON.stringify({ side, stake, roundId }),
         })
         const body = (await response.json()) as { error?: string; code?: string; you?: You; board?: Board }
+        if (stale()) return
         if (response.status === 401) {
+          setYou(snapshot)
           setUnauthorized(true)
           return
         }
         if (!response.ok) {
+          setYou(snapshot)
           if (body.code === LATE_BET_CODE) {
             pushLate()
             return
@@ -300,12 +329,17 @@ export function useMarket(token: string | null) {
           setError(body.error ?? "Bet failed")
           return
         }
-        setYou(body.you ?? null)
+        if (body.you) setYou(body.you)
         if (body.board) setBoard(body.board)
       } catch {
+        if (stale()) return
+        setYou(snapshot)
         setError("Can't reach the market server")
       } finally {
-        setPending(false)
+        if (!stale()) {
+          betLock.current = false
+          setPending(false)
+        }
       }
     },
     [pushLate],

@@ -70,7 +70,14 @@ runtime.quickMarketStopOracle = startOracle({
   },
 })
 
+let roundDirty = false
+
+function markRoundDirty() {
+  roundDirty = true
+}
+
 function publishRound(now = Date.now()) {
+  roundDirty = false
   const feed = feedStatus(now)
   lastFeed = feed
   const ticker = tickerNow()
@@ -100,7 +107,7 @@ runtime.quickMarketTimer = setInterval(() => {
       }
     }
     for (const event of settled) hub.broadcast({ type: "settled", serverNow: now, ...event })
-    if (broadcastRound || feed !== lastFeed) publishRound(now)
+    if (broadcastRound || roundDirty || feed !== lastFeed) publishRound(now)
   } catch (error) {
     console.error(error)
   }
@@ -250,7 +257,7 @@ async function handle(req: Request): Promise<Response> {
 
   if (url.pathname.startsWith("/api/agents/")) {
     if (!agentAuthorized(req.headers.get("x-agent-secret"))) return json({ error: "Unauthorized" }, 401)
-    return handleAgents(req, url, { mint: mintToTreasury, publish: () => publishRound() })
+    return handleAgents(req, url, { mint: mintToTreasury, publish: markRoundDirty })
   }
 
   if (req.method === "POST" && url.pathname === "/api/bets") {
@@ -266,8 +273,8 @@ async function handle(req: Request): Promise<Response> {
     if (typeof roundId !== "number") return json({ error: "Market is invalid" }, 400)
     const result = placeBet({ address: session.address, side, stakeMicros: stake, roundId, now })
     if (!result.ok) return json(result.code ? { error: result.error, code: result.code } : { error: result.error }, 400)
-    publishRound()
-    return json({ you: result.you, board: result.board })
+    markRoundDirty()
+    return json({ you: result.you })
   }
 
   if (req.method === "GET" && url.pathname === "/api/rounds") {

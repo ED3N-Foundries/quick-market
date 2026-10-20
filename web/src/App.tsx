@@ -729,52 +729,24 @@ function BetChip({
 }
 
 function BalanceFigure({ micros }: { micros: number | null }) {
-  const [shown, setShown] = useState<number | null>(micros)
   const [dir, setDir] = useState<"" | "up" | "down">("")
-  const shownRef = useRef(shown)
-  const readyRef = useRef(false)
-  shownRef.current = shown
+  const prevRef = useRef<number | null>(micros)
 
   useEffect(() => {
-    if (micros == null) {
-      readyRef.current = false
-      setShown(null)
-      setDir("")
+    const previous = prevRef.current
+    prevRef.current = micros
+    if (micros == null || previous == null || previous === micros) {
+      if (micros == null) setDir("")
       return
     }
-    const previous = shownRef.current
-    if (!readyRef.current || previous == null) {
-      readyRef.current = true
-      setShown(micros)
-      return
-    }
-    if (previous === micros) return
-    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches
     setDir(micros > previous ? "up" : "down")
     const clearDir = window.setTimeout(() => setDir(""), 730)
-    if (reduce) {
-      setShown(micros)
-      return () => window.clearTimeout(clearDir)
-    }
-    const from = previous
-    const started = performance.now()
-    let frame = 0
-    const step = (stamp: number) => {
-      const t = Math.min(1, (stamp - started) / 450)
-      const eased = 1 - (1 - t) * (1 - t)
-      setShown(Math.round(from + (micros - from) * eased))
-      if (t < 1) frame = requestAnimationFrame(step)
-    }
-    frame = requestAnimationFrame(step)
-    return () => {
-      window.cancelAnimationFrame(frame)
-      window.clearTimeout(clearDir)
-    }
+    return () => window.clearTimeout(clearDir)
   }, [micros])
 
   return (
     <p className="balance" data-dir={dir}>
-      {shown == null ? "—" : formatMoney(shown)}
+      {micros == null ? "—" : formatMoney(micros)}
     </p>
   )
 }

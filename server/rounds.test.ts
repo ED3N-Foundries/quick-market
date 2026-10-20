@@ -133,6 +133,27 @@ test("windowAccepts is the half-open betting window", () => {
   expect(windowAccepts(1.5, T)).toBe(false)
 })
 
+test("placeBet returns the debited balance and the open stake", () => {
+  const you = address(15)
+  grant(you)
+  notePrint(print("100", T - 20))
+  advance(T + 10)
+  const first = bet({ address: you, side: "up", stakeMicros: USDC, now: T + 100 })
+  expect(first.ok).toBe(true)
+  if (!first.ok) return
+  const afterFirst = youFor(you)
+  if (!afterFirst) throw new Error("missing wallet")
+  expect(first.you).toEqual(afterFirst)
+  const second = bet({ address: you, side: "up", stakeMicros: 2 * USDC, now: T + 200 })
+  expect(second.ok).toBe(true)
+  if (!second.ok) return
+  expect(second.you.balanceMicros).toBe(10_000 * USDC - 3 * USDC)
+  expect(second.you.openBets).toEqual([{ roundId: MARKET_ID, side: "up", stakeMicros: 3 * USDC }])
+  const afterSecond = youFor(you)
+  if (!afterSecond) throw new Error("missing wallet")
+  expect(second.you).toEqual(afterSecond)
+})
+
 test("a late receipt stays off the next market", () => {
   const you = address(12)
   grant(you)

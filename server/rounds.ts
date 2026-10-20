@@ -417,7 +417,7 @@ export function ensureUser(address: string): You {
   getDb()
     .query("INSERT INTO users (address, balance_micros, created_at, is_bot) VALUES (?, 0, ?, 0)")
     .run(address, Date.now())
-  return youFor(address)!
+  return { address, balanceMicros: 0, grantAt: null, openBets: [] }
 }
 
 export function credit(
@@ -463,7 +463,7 @@ export function placeBet(input: {
   stakeMicros: number
   roundId: number
   now: number
-}): { ok: true; you: You; board: Board } | { ok: false; error: string; code?: typeof LATE_BET_CODE } {
+}): { ok: true; you: You } | { ok: false; error: string; code?: typeof LATE_BET_CODE } {
   try {
     const tx = getDb().transaction(() => {
       if (input.side !== "up" && input.side !== "down") throw new BetError("Side is invalid")
@@ -476,12 +476,21 @@ export function placeBet(input: {
       ensureRound(id)
       const round = getRound(id)
       if (!round || round.status !== "open") throw new BetError("Betting is closed")
+      if (feedStatus(input.now) !== "live") throw new BetError("Price feed is delayed")
 
-      ensureUser(input.address)
-      const botRow = getDb().query("SELECT is_bot FROM users WHERE address = ?").get(input.address) as
-        | { is_bot: number }
-        | null
-      const bot = botRow?.is_bot === 1
+      const row = getDb()
+        .query("SELECT balance_micros, grant_at, is_bot FROM users WHERE address = ?")
+        .get(input.address) as { balance_micros: number; grant_at: number | null; is_bot: number } | null
+      let balance = row?.balance_micros ?? 0
+      const grantAt = row?.grant_at ?? null
+      const bot = row?.is_bot === 1
+      if (!row) {
+        getDb()
+          .query("INSERT INTO users (address, balance_micros, created_at, is_bot) VALUES (?, 0, ?, 0)")
+          .run(input.address, input.now)
+        balance = 0
+      }
+
       const opens = openBetsFor(input.address)
       const onThis = opens.find((bet) => bet.roundId === id)
       for (const bet of opens) {
@@ -491,10 +500,7 @@ export function placeBet(input: {
         throw new BetError("Your last bet is still open")
       }
       if (onThis && onThis.side !== input.side) throw new BetError("You are already on the other side")
-      if (feedStatus(input.now) !== "live") throw new BetError("Price feed is delayed")
-
-      const user = youFor(input.address)!
-      if (input.stakeMicros > user.balanceMicros) throw new BetError("Insufficient balance")
+      if (input.stakeMicros > balance) throw new BetError("Insufficient balance")
 
       if (onThis) {
         getDb()
@@ -510,9 +516,18 @@ export function placeBet(input: {
       getDb()
         .query("UPDATE users SET balance_micros = balance_micros - ? WHERE address = ?")
         .run(input.stakeMicros, input.address)
+
+      const openBets = opens.map((bet) =>
+        bet.roundId === id ? { ...bet, stakeMicros: bet.stakeMicros + input.stakeMicros } : bet,
+      )
+      if (!onThis) {
+        openBets.push({ roundId: id, side: input.side, stakeMicros: input.stakeMicros })
+        openBets.sort((left, right) => left.roundId - right.roundId)
+      }
+      const you: You = { address: input.address, balanceMicros: balance - input.stakeMicros, grantAt, openBets }
+      return you
     })
-    tx()
-    return { ok: true, you: youFor(input.address)!, board: board(input.now) }
+    return { ok: true, you: tx() }
   } catch (error) {
     if (error instanceof BetError) {
       return error.code ? { ok: false, error: error.message, code: error.code } : { ok: false, error: error.message }
