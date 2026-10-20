@@ -7,6 +7,7 @@ import { base, baseSepolia } from "viem/chains"
 import { CHAINS, chainFromEnv, type ChainConfig, type ChainKey } from "../shared/chain"
 import { loadMarket, marketPreferences } from "../shared/market"
 import { usdcAbi } from "../shared/usdc"
+import { tuneDatabase } from "../server/db"
 import { loadEnv } from "../server/env"
 
 const ENV_PATH = join(process.cwd(), ".env")
@@ -81,6 +82,7 @@ export type LedgerSnapshot = {
   users: number
   deposits: number
   withdrawals: number
+  feeMicros: number
   entries: BookEntry[]
 }
 
@@ -501,6 +503,7 @@ export function readLedger(path: string): LedgerView {
   let db: Database | null = null
   try {
     db = new Database(path, { readonly: true })
+    tuneDatabase(db, { readonly: true })
     const spendableMicros = one(db, "SELECT COALESCE(SUM(balance_micros), 0) AS n FROM users")
     const openStakeMicros = one(
       db,
@@ -513,6 +516,7 @@ export function readLedger(path: string): LedgerView {
     const users = one(db, "SELECT COUNT(*) AS n FROM users")
     const deposits = one(db, "SELECT COUNT(*) AS n FROM deposits")
     const withdrawals = one(db, "SELECT COUNT(*) AS n FROM withdrawals")
+    const feeMicros = one(db, "SELECT COALESCE(SUM(fee_micros), 0) AS n FROM rounds")
     const rows = db
       .query(
         `SELECT direction, kind, address, amount_micros, tx_hash, status, created_at
@@ -553,6 +557,7 @@ export function readLedger(path: string): LedgerView {
       users,
       deposits,
       withdrawals,
+      feeMicros,
       entries,
     }
   } catch (error) {
@@ -671,6 +676,7 @@ export function renderTreasury(report: TreasuryReport): string {
     }
     lines.push(field("Deposits", String(report.ledger.deposits)))
     lines.push(field("Withdrawals", String(report.ledger.withdrawals)))
+    lines.push(field("Fees", formatUsd(BigInt(report.ledger.feeMicros))))
     lines.push(field("Pending", `${report.ledger.pendingCount}  ${formatUsd(BigInt(report.ledger.pendingMicros))}`))
     if (report.ledger.pendingCount > 0) {
       lines.push("  Pending withdrawals are already removed from spendable and may still be in the wallet.")

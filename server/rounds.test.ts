@@ -4,7 +4,7 @@ import { windowAccepts } from "./config"
 import { getDb, useDatabase } from "./db"
 import { parseMicros } from "./money"
 import { handoffBanner } from "../shared/source"
-import { adoptFeed, advance, board, credit, ensureUser, failFeed, feedStatus, handoffNow, noteAlive, notePrint, placeBet, placeBets, resetRuntime, resumeAtFor, roundDetail, tapePoints, tickerNow, withdraw, youFor, type Print, type Side } from "./rounds"
+import { adoptFeed, advance, board, credit, ensureUser, failFeed, feedStatus, handoffNow, noteAlive, notePrint, placeBet, placeBets, recentSettles, resetRuntime, resumeAtFor, roundDetail, tapePoints, tickerNow, withdraw, youFor, type Print, type Side } from "./rounds"
 
 const USDC = 1_000_000
 const T = 10_000_000_000_000
@@ -37,6 +37,24 @@ beforeEach(() => {
   process.env.PRICE_SOURCE = "binance"
   resetRuntime()
   useDatabase(":memory:")
+})
+
+test("recent settles keep directional markets, oldest first", () => {
+  const insert = getDb().query(
+    `INSERT INTO rounds (id, starts_at, ends_at, status, winning_side, resolution)
+     VALUES (?, 0, 1, ?, ?, ?)`,
+  )
+  insert.run(1, "settled", "up", "paid")
+  insert.run(2, "void", "up", "void")
+  insert.run(3, "settled", "push", "push")
+  insert.run(4, "settled", "down", "paid")
+  insert.run(5, "open", "up", null)
+  insert.run(6, "settled", "up", "paid")
+  expect(recentSettles()).toEqual([
+    { id: 1, winningSide: "up" },
+    { id: 4, winningSide: "down" },
+    { id: 6, winningSide: "up" },
+  ])
 })
 
 test("parseMicros keeps six decimal places", () => {
@@ -247,7 +265,7 @@ test("a print a few seconds before the close still settles, and a tie is a push"
   expect(youFor(you)?.balanceMicros).toBe(10_000 * USDC)
 })
 
-test("the tray keeps humans and summarizes bots", () => {
+test("the tray shows the five newest bets and counts everyone", () => {
   const human = address(30)
   grant(human, 20 * USDC)
   notePrint(print("100", T - 20))
@@ -260,11 +278,16 @@ test("the tray keeps humans and summarizes bots", () => {
     expect(bet({ address: bot, side: index % 2 === 0 ? "up" : "down", stakeMicros: USDC, now: T + 120 + index }).ok).toBe(true)
   }
   const card = board(T + 200).join
-  expect(card?.tray.filter((row) => !row.bot)).toHaveLength(1)
-  expect(card?.tray.filter((row) => row.bot).length).toBeLessThanOrEqual(4)
-  expect((card?.botSummary.upCount ?? 0) + (card?.botSummary.downCount ?? 0)).toBe(6)
-  expect(card?.playersUp).toBe(1 + 3)
+  const newest = [5, 4, 3, 2, 1].map((index) => address(40 + index))
+  expect(card?.tray.map((row) => row.address)).toEqual(newest)
+  expect(card?.tray.every((row) => !("bot" in row))).toBe(true)
+  expect(card?.playersUp).toBe(4)
   expect(card?.playersDown).toBe(3)
+  const detail = roundDetail(MARKET_ID)
+  expect(detail?.bets.map((row) => row.address)).toEqual([...newest, address(40), human])
+  expect(detail?.bets.every((row) => !("bot" in row))).toBe(true)
+  expect(detail && "botSummary" in detail).toBe(false)
+  expect(detail?.round && "feeMicros" in detail.round).toBe(false)
 })
 
 test("settlement credits a bot and leaves that payout off the public event", () => {
@@ -299,7 +322,7 @@ test("a bot can bet the next window while a bet is still open", () => {
   notePrint(print("100", T + WINDOW - 20))
   const next = bet({ address: bot, side: "down", stakeMicros: USDC, now: T + WINDOW + 10 })
   expect(next.ok).toBe(true)
-  expect(board(T + WINDOW + 10).join?.tray.some((row) => row.bot && row.side === "down")).toBe(true)
+  expect(board(T + WINDOW + 10).join?.tray.some((row) => row.address === bot && row.side === "down")).toBe(true)
 })
 
 test("round detail includes the tape and the price held into the open", () => {

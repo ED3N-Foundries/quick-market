@@ -66,7 +66,7 @@ export type BankConfig = {
   burnMaxMicros: number
 }
 
-export type MindName = "tape" | "fade" | "price" | "restless"
+export type MindName = "tape" | "fade" | "price" | "restless" | "streak"
 
 export type PersonaConfig = {
   shares: Record<MindName, number>
@@ -105,6 +105,10 @@ export type PersonaConfig = {
   memoryStep: number
   looseRate: number
   gateFire: number
+  streakFadeShare: number
+  streakNeedWeights: readonly [number, number, number, number]
+  streakConvictionMin: number
+  streakConvictionMax: number
 }
 
 export type StakeConfig = {
@@ -147,6 +151,11 @@ export type TimingConfig = {
   tapeSlot: Range
   fadeSlot: Range
   restlessSlot: Range
+  streakSlot: Range
+  streakLean: number
+  streakLeanStep: number
+  streakLeanCap: number
+  streakNoiseScale: number
 }
 
 export type SwarmConfig = {
@@ -228,6 +237,7 @@ const personaSchema = z.strictObject({
     fade: z.number(),
     price: z.number(),
     restless: z.number(),
+    streak: z.number(),
   }),
   secondRate: z.number(),
   secondWeight: z.number(),
@@ -264,6 +274,10 @@ const personaSchema = z.strictObject({
   memoryStep: z.number(),
   looseRate: z.number(),
   gateFire: z.number(),
+  streakFadeShare: z.number(),
+  streakNeedWeights: z.tuple([z.number(), z.number(), z.number(), z.number()]).readonly(),
+  streakConvictionMin: z.number(),
+  streakConvictionMax: z.number(),
 })
 
 const stakeSchema = z.strictObject({
@@ -306,6 +320,11 @@ const timingSchema = z.strictObject({
   tapeSlot: range,
   fadeSlot: range,
   restlessSlot: range,
+  streakSlot: range,
+  streakLean: z.number(),
+  streakLeanStep: z.number(),
+  streakLeanCap: z.number(),
+  streakNoiseScale: z.number(),
 })
 
 const swarmSchema = z.strictObject({
@@ -375,7 +394,7 @@ const swarmInput: SwarmConfig = {
     burnMaxMicros: 600 * USDC,
   },
   persona: {
-    shares: { tape: 0.45, fade: 0.25, price: 0.2, restless: 0.1 },
+    shares: { tape: 0.35, fade: 0.2, price: 0.2, restless: 0.1, streak: 0.15 },
     secondRate: 0.2,
     secondWeight: 0.16,
     lookbackMinMs: 2_000,
@@ -411,6 +430,10 @@ const swarmInput: SwarmConfig = {
     memoryStep: 0.004,
     looseRate: 0.15,
     gateFire: 0.86,
+    streakFadeShare: 0.62,
+    streakNeedWeights: [0.15, 0.35, 0.35, 0.15],
+    streakConvictionMin: 0.65,
+    streakConvictionMax: 1.35,
   },
   stake: {
     smallMin: 1,
@@ -450,6 +473,11 @@ const swarmInput: SwarmConfig = {
     tapeSlot: [0.08, 0.42],
     fadeSlot: [0.45, 0.9],
     restlessSlot: [0.08, 0.9],
+    streakSlot: [0.3, 0.7],
+    streakLean: 0.09,
+    streakLeanStep: 0.04,
+    streakLeanCap: 0.22,
+    streakNoiseScale: 0.35,
   },
 }
 
@@ -490,6 +518,8 @@ export function checkConfig(config: SwarmConfig): string | null {
     [config.timing.tapeSlot[0], config.timing.tapeSlot[1], "Tape slot"],
     [config.timing.fadeSlot[0], config.timing.fadeSlot[1], "Fade slot"],
     [config.timing.restlessSlot[0], config.timing.restlessSlot[1], "Restless slot"],
+    [config.timing.streakSlot[0], config.timing.streakSlot[1], "Streak slot"],
+    [config.persona.streakConvictionMin, config.persona.streakConvictionMax, "Streak conviction"],
   ]
   for (const [low, high, label] of pairs) {
     if (!(low < high)) return `${label} has its low end second`
@@ -529,8 +559,19 @@ export function checkConfig(config: SwarmConfig): string | null {
   if (timing.waveCap < 1) return "Wave cap must be positive"
   if (!(timing.lossScaleMin > 0 && timing.lossScaleMin <= 1)) return "Loss scale sits outside (0, 1]"
   if (!(timing.crowdGap > 0 && timing.crowdGap <= 1)) return "Crowd gap sits outside (0, 1]"
-  const slots = [timing.tapeSlot, timing.fadeSlot, timing.restlessSlot]
+  const slots = [timing.tapeSlot, timing.fadeSlot, timing.restlessSlot, timing.streakSlot]
   if (slots.some((slot) => slot[0] < 0 || slot[1] > 1)) return "Fire slots leave 0–1"
   if (timing.tapeSlot[1] > timing.fadeSlot[0]) return "Tape slot overlaps the late slot"
+  if (!(timing.streakLean > 0)) return "Streak lean must be positive"
+  if (!(timing.streakLeanStep > 0)) return "Streak lean step must be positive"
+  if (!(timing.streakLeanCap >= timing.streakLean)) return "Streak lean cap sits under the base lean"
+  if (!(timing.streakNoiseScale > 0 && timing.streakNoiseScale <= 1)) return "Streak noise sits outside (0, 1]"
+  const needWeights = config.persona.streakNeedWeights
+  const needSum = needWeights.reduce((sum, weight) => sum + weight, 0)
+  if (Math.abs(needSum - 1) > 1e-6) return "Streak lengths must sum to 1"
+  if (needWeights.some((weight) => weight < 0)) return "Streak lengths must be positive"
+  if (!(config.persona.streakFadeShare > 0 && config.persona.streakFadeShare < 1)) {
+    return "Streak fade share sits outside (0, 1)"
+  }
   return rangeOk(clock.offPeak.box, "Off-peak")
 }

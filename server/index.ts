@@ -278,11 +278,11 @@ async function handle(req: Request): Promise<Response> {
   }
 
   if (req.method === "GET" && url.pathname === "/api/rounds") {
-    const limit = Number(url.searchParams.get("limit") ?? 30)
+    const limit = Number(url.searchParams.get("limit") ?? 10)
     const mine = url.searchParams.get("mine") === "1"
     const session = mine ? readSession(req) : { address: null, rejected: false }
     if (mine && !session.address) return json({ error: "Connect a wallet first" }, 401)
-    return json({ rounds: listRounds(Number.isFinite(limit) ? limit : 30, session.address, mine) })
+    return json({ rounds: listRounds(Number.isFinite(limit) ? limit : 10, session.address, mine) })
   }
 
   const detailMatch = url.pathname.match(/^\/api\/rounds\/(\d+)$/)

@@ -19,9 +19,9 @@ Judgment, all clamped so a hot tape cannot rewrite the Manila window:
 - Alternating visits. A wallet arrives for a visit and leaves when the visit ends. Rank is only the spare list, not a seat for the whole evening.
 - Tape response. A moving tape shortens the wait until the next bet and can stretch the open visit a little. A flat tape lengthens the wait and ends visits sooner. Sleeping wallets stay asleep until a visit is due.
 - Bursts, then quiet. A bet raises that wallet's chance of another bet for a couple of windows, then a refractory gap. A few similar chronotypes may follow an arrival. Both bumps are a capped self-exciting kernel: a hard limit on the extra bets and the extra arrivals, then decay.
-- A mixture of minds. Tape, fade, and the pool price are different reasons to bet. Most wallets lean on one. About one in five adds a second term at low weight. A restless minority is mostly noise, with small stakes and a low rate.
+- A mixture of minds. Tape, fade, the pool price, and the settled-result column are different reasons to bet. Most wallets lean on one. About one in five adds a second term at low weight. A restless minority is mostly noise, with small stakes and a low rate. A streak minority counts the last few settled markets and disagrees about how long a run has to be.
 
-No wallet is told the next print. No wallet calls a model. The rules read the public tape and that wallet's own last results.
+No wallet is told the next print. No wallet calls a model. The rules read the public tape, the settled up/down column, and that wallet's own last results.
 
 ## How many are online
 
@@ -58,7 +58,7 @@ The file exports one typed object, `swarmConfig`, in groups that match the layer
 | `persona` | Mind shares, second-mind rate, lookbacks, edge, Kelly fraction, bankroll share, noise scale, tempo, burst, refractory gap, moving and flat gate bands, herd cap, and the memory length and step. |
 | `stake` | Cent bands and the round-dollar offset. |
 | `runner` | Enroll width, bet chunk size, order cap, audit slice, bank pass, snapshot interval, and tape-tail length. |
-| `timing` | How many past windows feed the signal, the EWMA and thin-history edge, virtual pool, fire-time slots, wave size, and the loss-streak floor. |
+| `timing` | How many past windows feed the price signal, the EWMA and thin-history edge, the streak lean and middle fire slot, virtual pool, wave size, and the loss-streak floor. |
 
 `agent/index.ts` imports that object once and passes each slice in. `director`, `presence`, `bank`, `persona`, `decide`, and `stake` take the slice as an argument. A test uses the shipped object or a smaller one. Changing a knob is an edit to `agent/config.ts` and a restart of the runner.
 
@@ -150,7 +150,8 @@ Personas are seeded once from the wallet index and stored. They are not a shared
 
 A persona holds:
 
-- a mind, seeded once and kept for the life of the key: tape (~45%), fade (~25%), price (~20%), or restless (~10%)
+- a mind, seeded once and kept for the life of the key: tape (~35%), fade (~20%), price (~20%), restless (~10%), or streak (~15%)
+- for every wallet, a private streak reading used when that mind is streak: how many settled markets count (2, 3, 4, or 5), whether a long enough run is a pullback or a continuation, and a conviction that scales the lean
 - momentum weight from about −1 to +1 (tape uses the positive side, fade the negative)
 - lookback of 2–12 seconds; a price mind also keeps a slower lookback inside the same tape tail, up to about 90 seconds
 - minimum edge before it will bet (near zero only for restless)
@@ -158,7 +159,7 @@ A persona holds:
 - a disagreement noise scale (large only for restless)
 - a tempo: the typical gap between bets, in windows, skewed so most wallets are slower than the window
 
-The public tape tail is the only price input. Decision bars are the last four completed windows inside that tail, or fewer when the feed has not covered them. An awake wallet still does not bet every window. `decide` runs the tempo gate first. A wallet that passes the gate draws a fire time inside the open window and does not post until that time.
+The public tape tail is the price input for tape, fade, and price. Decision bars are the last four completed windows inside that tail, or fewer when the feed has not covered them. Streak minds ignore those bars and read the last directional settles on the book (`recent`), oldest first, with voids and pushes left out. An awake wallet still does not bet every window. `decide` runs the tempo gate first. A wallet that passes the gate draws a fire time inside the open window and does not post until that time.
 
 - When a visit starts or a bet lands, draw the next gap from that persona's tempo with `easing.expoOut`. Most gaps cover several windows. A few are short.
 - Scale the gap down when the recent move is large versus volatility, and up when the tape is flat. Clamp the scale. A hot tape is not "every window." A flat tape is not "silent for the whole visit."
@@ -173,8 +174,9 @@ Then the mind sets `pUp` from an EWMA of those window returns:
 - Fade. The same sigmoid with the sign flipped. Its fire time sits in the late part of the window, so it sees the pool the early money just filled.
 - Price. Near 0.5, plus a small drift from the same z-score. A one-window twitch is not a setup. The pool price is the thing it trades against. It fires late, with fade.
 - Restless. 0.5 plus a large private residual, at any time in the window. Stakes stay in the small cent mass.
+- Streak. The run at the end of the last directional settles, capped at 5. A run shorter than that wallet's own length is no view, and the wallet skips. A long enough run moves `pUp` off 0.5 by a base lean plus a step per extra market, times that wallet's conviction. About 62% fade the run (four ups, bet down). The rest ride it (four ups, bet up). A flat price tape does not cancel a formed streak. Fire time sits in the middle of the window. The same Kelly path sizes the bet, so a longer run and a higher conviction stake more.
 
-About one in five wallets adds a second mind's term at low weight. Fewer than three bars widens the edge. Zero bars makes the serious minds skip. A flat tape still puts tape and fade near 0.5, so they skip when the pool is within `crowdGap` of that number. A wider gap, such as an 80/20 pool, cancels the skip and the wallet can take the cheap side.
+About one in five wallets adds a second mind's term at low weight. Fewer than three bars widens the edge for the price minds. Zero bars makes those minds skip. A streak with no formed run skips even when it has a second mind. A flat tape still puts tape and fade near 0.5, so they skip when the pool is within `crowdGap` of that number. A wider gap, such as an 80/20 pool, cancels the skip and the wallet can take the cheap side.
 
 Against the pool:
 

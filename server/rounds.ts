@@ -18,7 +18,6 @@ export type TrayRow = {
   address: string
   side: Side
   stakeMicros: number
-  bot: boolean
 }
 
 export type Band = {
@@ -34,14 +33,7 @@ export type Band = {
   playersDown: number
 }
 
-export type BotSummary = {
-  upCount: number
-  downCount: number
-  upMicros: number
-  downMicros: number
-}
-
-export type PoolCard = Band & { tray: TrayRow[]; botSummary: BotSummary }
+export type PoolCard = Band & { tray: TrayRow[] }
 
 export type Board = {
   blockStart: number
@@ -285,50 +277,29 @@ function poolSums(roundId: number) {
   return { poolUpMicros, poolDownMicros, playersUp, playersDown }
 }
 
-const BOT_SAMPLE = 4
+const POOL_TRAY = 5
+const HISTORY_TRAY = 10
 
-export function emptyBotSummary(): BotSummary {
-  return { upCount: 0, downCount: 0, upMicros: 0, downMicros: 0 }
-}
-
-function summarizeRows<T extends { side: Side; stakeMicros: number; bot: boolean }>(rows: T[]): { rows: T[]; botSummary: BotSummary } {
-  const botSummary = emptyBotSummary()
-  const humans: T[] = []
-  const bots: T[] = []
-  for (const row of rows) {
-    if (!row.bot) {
-      humans.push(row)
-      continue
-    }
-    bots.push(row)
-    if (row.side === "up") {
-      botSummary.upCount += 1
-      botSummary.upMicros += row.stakeMicros
-    } else {
-      botSummary.downCount += 1
-      botSummary.downMicros += row.stakeMicros
-    }
-  }
-  return { rows: [...humans, ...bots.slice(0, BOT_SAMPLE)], botSummary }
-}
-
-function trayFor(roundId: number): { tray: TrayRow[]; botSummary: BotSummary } {
+function recentBets(roundId: number, limit: number): { address: string; side: Side; stakeMicros: number; payoutMicros: number | null }[] {
   const rows = getDb()
     .query(
-      `SELECT b.address, b.side, b.stake_micros, COALESCE(u.is_bot, 0) AS bot
-       FROM bets b LEFT JOIN users u ON u.address = b.address
-       WHERE b.round_id = ?
-       ORDER BY b.created_at ASC, b.address ASC`,
+      `SELECT address, side, stake_micros, payout_micros
+       FROM bets
+       WHERE round_id = ?
+       ORDER BY created_at DESC, address ASC
+       LIMIT ?`,
     )
-    .all(roundId) as { address: string; side: Side; stake_micros: number; bot: number }[]
-  const mapped = rows.map((row) => ({
+    .all(roundId, limit) as { address: string; side: Side; stake_micros: number; payout_micros: number | null }[]
+  return rows.map((row) => ({
     address: row.address,
     side: row.side,
     stakeMicros: row.stake_micros,
-    bot: row.bot === 1,
+    payoutMicros: row.payout_micros,
   }))
-  const view = summarizeRows(mapped)
-  return { tray: view.rows, botSummary: view.botSummary }
+}
+
+function trayFor(roundId: number): TrayRow[] {
+  return recentBets(roundId, POOL_TRAY).map(({ address, side, stakeMicros }) => ({ address, side, stakeMicros }))
 }
 
 function toBand(row: RoundRow): Band {
@@ -358,8 +329,7 @@ function cardFor(id: number): PoolCard | null {
   ensureRound(id)
   const row = getRound(id)
   if (!row) return null
-  const view = trayFor(id)
-  return { ...toBand(row), ...poolSums(id), tray: view.tray, botSummary: view.botSummary }
+  return { ...toBand(row), ...poolSums(id), tray: trayFor(id) }
 }
 
 export function board(now = Date.now()): Board {
@@ -688,7 +658,6 @@ export type HistoryRow = {
   strike: string | null
   settle: string | null
   status: string
-  feeMicros: number
   winningSide: string | null
   resolution: string | null
   poolUpMicros: number
@@ -706,7 +675,6 @@ function mapHistory(row: RoundRow & { my_side?: Side; my_stake?: number; my_payo
     strike: row.strike,
     settle: row.settle,
     status: row.status,
-    feeMicros: row.fee_micros,
     winningSide: row.winning_side,
     resolution: row.resolution,
     poolUpMicros: row.pool_up_micros,
@@ -768,15 +736,7 @@ function roundTape(round: RoundRow): { t: number; price: string }[] {
 export function roundDetail(id: number) {
   const round = getRound(id)
   if (!round) return null
-  const mapped = loadBets(id).map((bet) => ({
-    address: bet.address,
-    side: bet.side,
-    stakeMicros: bet.stake_micros,
-    payoutMicros: bet.payout_micros,
-    bot: bet.is_bot === 1,
-  }))
-  const view = summarizeRows(mapped)
-  return { round: mapHistory(round), bets: view.rows, botSummary: view.botSummary, tape: roundTape(round) }
+  return { round: mapHistory(round), bets: recentBets(id, HISTORY_TRAY), tape: roundTape(round) }
 }
 
 export type BetOrder = { address: string; side: Side; stakeMicros: number }
@@ -937,6 +897,25 @@ export type SettledBook = {
   poolDownMicros: number
   winningSide: string | null
   resolution: string | null
+}
+
+export type RecentSettle = {
+  id: number
+  winningSide: Side
+}
+
+export function recentSettles(limit = 8): RecentSettle[] {
+  const capped = Math.min(Math.max(limit, 1), 32)
+  const rows = getDb()
+    .query(
+      `SELECT id, winning_side
+       FROM rounds
+       WHERE status = 'settled' AND winning_side IN ('up', 'down')
+       ORDER BY id DESC
+       LIMIT ?`,
+    )
+    .all(capped) as { id: number; winning_side: Side }[]
+  return rows.reverse().map((row) => ({ id: row.id, winningSide: row.winning_side }))
 }
 
 export function settledSince(sinceId: number, limit = 200): SettledBook[] {

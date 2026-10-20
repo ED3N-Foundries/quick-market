@@ -31,7 +31,7 @@ import {
   sourceLabel,
   walletDisplayLabel,
 } from "./format"
-import type { Band, Board, BotSummary, HistoryRound, OpenBet, SettledMessage, Side, TrayRow } from "./types"
+import type { Band, Board, HistoryRound, OpenBet, SettledMessage, Side, TrayRow } from "./types"
 import { useMarket } from "./useMarket"
 import { useSession } from "./wallet"
 
@@ -535,11 +535,11 @@ export function App() {
       <details className="tray">
         <summary>
           <h2>This pool</h2>
-          <span>{poolLabel(focus?.tray ?? [], focus?.botSummary)}</span>
+          <span>{poolLabel(focus)}</span>
         </summary>
-        {poolOccupied(focus?.tray ?? [], focus?.botSummary) ? (
+        {focus && focus.tray.length > 0 ? (
           <ul>
-            <PoolRows rows={focus?.tray ?? []} summary={focus?.botSummary} />
+            <PoolRows rows={focus.tray} />
           </ul>
         ) : (
           <p className="empty">No one in this pool yet.</p>
@@ -1193,7 +1193,7 @@ function SideCard(props: {
       <p className="to-win">{props.quote}</p>
       <button type="button" disabled={props.disabled} onClick={props.onBet}>
         <span className="arrow" aria-hidden="true">{up ? "▲" : "▼"}</span>
-        <span>{up ? "Bet up" : "Bet down"}</span>
+        <span>{up ? "Buy up" : "Buy down"}</span>
       </button>
     </article>
   )
@@ -1205,7 +1205,7 @@ function History({ token, version, windowMs }: { token: string | null; version: 
   const [replay, setReplay] = useState<HistoryRound | null>(null)
 
   useEffect(() => {
-    const params = new URLSearchParams({ limit: "30" })
+    const params = new URLSearchParams({ limit: "10" })
     if (mine && token) params.set("mine", "1")
     let cancel = false
     const headers: HeadersInit = mine && token ? { authorization: `Bearer ${token}` } : {}
@@ -1229,7 +1229,7 @@ function History({ token, version, windowMs }: { token: string | null; version: 
             All
           </button>
           <button type="button" className={mine ? "on" : ""} onClick={() => setMine(true)} disabled={!token}>
-            My plays
+            My trades
           </button>
         </div>
       </header>
@@ -1245,7 +1245,6 @@ function History({ token, version, windowMs }: { token: string | null; version: 
               <th>Close</th>
               <th>Up</th>
               <th>Down</th>
-              <th>Fee</th>
               {mine && (
                 <>
                   <th>Side</th>
@@ -1264,7 +1263,6 @@ function History({ token, version, windowMs }: { token: string | null; version: 
                 <td>{row.settle ? formatPrice(row.settle) : "—"}</td>
                 <td>{formatMoney(row.poolUpMicros)}</td>
                 <td>{formatMoney(row.poolDownMicros)}</td>
-                <td>{formatMoney(row.feeMicros)}</td>
                 {mine && (
                   <>
                     <td className={row.mySide ?? ""}>{sideText(row.mySide)}</td>
@@ -1286,67 +1284,33 @@ function History({ token, version, windowMs }: { token: string | null; version: 
   )
 }
 
-type RoundBet = { address: string; side: Side; stakeMicros: number; payoutMicros: number | null; bot: boolean }
+type RoundBet = TrayRow & { payoutMicros: number | null }
 
-function botCount(summary: BotSummary | undefined): number {
-  return (summary?.upCount ?? 0) + (summary?.downCount ?? 0)
+function poolLabel(pool: { playersUp: number; playersDown: number } | null): string {
+  if (!pool) return ""
+  const count = pool.playersUp + pool.playersDown
+  if (count === 0) return ""
+  return `${count} playing`
 }
 
-function poolOccupied(rows: TrayRow[], summary: BotSummary | undefined): boolean {
-  return rows.some((row) => !row.bot) || botCount(summary) > 0
-}
-
-function poolLabel(rows: TrayRow[], summary: BotSummary | undefined): string {
-  const people = rows.filter((row) => !row.bot).length
-  const bots = botCount(summary)
-  if (people + bots === 0) return ""
-  if (bots === 0) return `${people} playing`
-  const person = people === 1 ? "person" : "people"
-  return `${people} ${person} · ${bots} bots`
-}
-
-function botSummaryText(summary: BotSummary | undefined): string | null {
-  if (!summary || botCount(summary) === 0) return null
-  return `${summary.upCount} up ${formatMoney(summary.upMicros)} · ${summary.downCount} down ${formatMoney(summary.downMicros)}`
-}
-
-function PoolRows({
-  rows,
-  summary,
-  payout,
-}: {
-  rows: TrayRow[]
-  summary: BotSummary | undefined
-  payout?: (row: TrayRow) => number | null
-}) {
-  const firstBot = rows.findIndex((row) => row.bot)
-  const humans = firstBot < 0 ? rows : rows.slice(0, firstBot)
-  const samples = firstBot < 0 ? [] : rows.slice(firstBot)
-  const summaryText = botSummaryText(summary)
-  const line = (row: TrayRow) => {
-    const paid = payout?.(row)
-    return (
-      <li key={row.address}>
-        <span className={row.bot ? "bot" : "addr"}>{row.bot ? "Bot" : shortAddress(row.address)}</span>
-        <span className={row.side}>{row.side === "up" ? "▲ Up" : "▼ Down"}</span>
-        <span className="amt">{formatMoney(row.stakeMicros)}</span>
-        {payout && (
-          <span className={gainTone(row.stakeMicros, paid)}>
-            {paid == null ? "—" : formatGainLoss(row.stakeMicros, paid)}
-          </span>
-        )}
-      </li>
-    )
-  }
+function PoolRows({ rows, payout }: { rows: TrayRow[]; payout?: (row: TrayRow) => number | null }) {
   return (
     <>
-      {humans.map(line)}
-      {summaryText && (
-        <li className="bot-summary">
-          <span className="bot">Bots · {summaryText}</span>
-        </li>
-      )}
-      {samples.map(line)}
+      {rows.map((row) => {
+        const paid = payout?.(row)
+        return (
+          <li key={row.address}>
+            <span className="addr">{shortAddress(row.address)}</span>
+            <span className={row.side}>{row.side === "up" ? "▲ Up" : "▼ Down"}</span>
+            <span className="amt">{formatMoney(row.stakeMicros)}</span>
+            {payout && (
+              <span className={gainTone(row.stakeMicros, paid)}>
+                {paid == null ? "—" : formatGainLoss(row.stakeMicros, paid)}
+              </span>
+            )}
+          </li>
+        )
+      })}
     </>
   )
 }
@@ -1355,7 +1319,6 @@ function Replay({ row, windowMs, onClose }: { row: HistoryRound; windowMs: numbe
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const [chart, setChart] = useState<TapeChart | null>(null)
   const [bets, setBets] = useState<RoundBet[] | null>(null)
-  const [botSummary, setBotSummary] = useState<BotSummary | undefined>(undefined)
   const [failed, setFailed] = useState(false)
   const scrub = useScrub(chart)
   const viewRef = useRef({ follow: false, start: row.startsAt - windowMs, end: row.endsAt })
@@ -1397,7 +1360,6 @@ function Replay({ row, windowMs, onClose }: { row: HistoryRound; windowMs: numbe
         spawned.reset(tape.map((point) => ({ t: point.t, price: Number(point.price), text: point.price })))
         setChart(spawned)
         setBets(body.bets ?? [])
-        setBotSummary(body.botSummary)
       })
       .catch(() => {
         if (!cancel) setFailed(true)
@@ -1458,11 +1420,11 @@ function Replay({ row, windowMs, onClose }: { row: HistoryRound; windowMs: numbe
           {chart && <ChartOverlay chart={chart} board={board} openBets={[]} feeBps={0} hover={scrub.hover} />}
         </section>
         {failed && <p className="empty">Couldn't load this market.</p>}
-        {bets && !poolOccupied(bets, botSummary) && <p className="empty">No bets in this pool.</p>}
-        {bets && poolOccupied(bets, botSummary) && (
+        {bets && bets.length === 0 && <p className="empty">No bets in this pool.</p>}
+        {bets && bets.length > 0 && (
           <div className="detail">
             <ul>
-              <PoolRows rows={bets} summary={botSummary} payout={(row) => (row as RoundBet).payoutMicros ?? null} />
+              <PoolRows rows={bets} payout={(row) => (row as RoundBet).payoutMicros ?? null} />
             </ul>
           </div>
         )}

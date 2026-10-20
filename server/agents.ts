@@ -5,7 +5,7 @@ import { requestBurn } from "./custody"
 import { getDb } from "./db"
 import { configuredChain } from "./env"
 import { normalizeAddress } from "./money"
-import { credit, openBook, placeBets, settledSince, tapeTail, youFor, type BetOrder } from "./rounds"
+import { credit, openBook, placeBets, recentSettles, settledSince, tapeTail, youFor, type BetOrder } from "./rounds"
 
 const SIGNATURE = /^0x[0-9a-fA-F]+$/
 
@@ -136,6 +136,7 @@ export async function handleAgents(
       ...book,
       tape: tapeTail(now, Number.isFinite(tail) ? Math.min(Math.max(tail, 1_000), 120_000) : 90_000),
       settled: settledSince(Number.isFinite(since) ? since : 0),
+      recent: recentSettles(),
     })
   }
 

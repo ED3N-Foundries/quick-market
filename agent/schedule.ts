@@ -10,6 +10,7 @@ export type FireSlot = {
 export function slotSpan(mind: MindName, timing: TimingConfig): readonly [number, number] {
   if (mind === "tape") return timing.tapeSlot
   if (mind === "restless") return timing.restlessSlot
+  if (mind === "streak") return timing.streakSlot
   return timing.fadeSlot
 }
 

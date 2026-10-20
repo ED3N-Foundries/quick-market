@@ -6,7 +6,6 @@ export type TrayRow = {
   address: string
   side: Side
   stakeMicros: number
-  bot: boolean
 }
 
 export type Band = {
@@ -22,14 +21,7 @@ export type Band = {
   playersDown: number
 }
 
-export type BotSummary = {
-  upCount: number
-  downCount: number
-  upMicros: number
-  downMicros: number
-}
-
-export type PoolCard = Band & { tray: TrayRow[]; botSummary?: BotSummary }
+export type PoolCard = Band & { tray: TrayRow[] }
 
 export type Board = {
   blockStart: number
@@ -57,7 +49,6 @@ export type HistoryRound = {
   strike: string | null
   settle: string | null
   status: string
-  feeMicros: number
   winningSide: string | null
   resolution: string | null
   poolUpMicros: number

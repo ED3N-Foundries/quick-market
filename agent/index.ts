@@ -49,6 +49,10 @@ type Book = {
     winningSide: string | null
     resolution: string | null
   }[]
+  recent: {
+    id: number
+    winningSide: string | null
+  }[]
 }
 
 type LiveWallet = {
@@ -479,6 +483,7 @@ async function main() {
                 points: livePoints,
                 poolUp: upPool,
                 poolDown: downPool,
+                settles: settlesOf(source.recent),
                 config: swarmConfig.persona,
                 stake: swarmConfig.stake,
                 timing: swarmConfig.timing,
@@ -878,7 +883,16 @@ async function fetchBook(since: number): Promise<Book | null> {
   if (!response.ok || !response.body) return null
   const body = response.body as Partial<Book>
   if (typeof body.joinId !== "number" || !Array.isArray(body.tape) || !Array.isArray(body.settled)) return null
-  return body as Book
+  return { ...body, recent: Array.isArray(body.recent) ? body.recent : [] } as Book
+}
+
+function settlesOf(recent: Book["recent"] | undefined): Side[] {
+  if (!recent) return []
+  const sides: Side[] = []
+  for (const row of recent) {
+    if (row.winningSide === "up" || row.winningSide === "down") sides.push(row.winningSide)
+  }
+  return sides
 }
 
 async function api(path: string, init?: RequestInit): Promise<{ ok: boolean; body: unknown }> {

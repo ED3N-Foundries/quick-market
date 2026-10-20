@@ -172,7 +172,37 @@ export function admitWallet(input: GateInput): Admission {
   return { action: "due", gate, inBurst }
 }
 
-function belief(persona: Persona, bars: readonly WindowBar[], rng: { a: number }, timing: TimingConfig): number | null {
+const STREAK_LOOK = 5
+
+function settledRun(settles: readonly Side[]): { side: Side; length: number } | null {
+  if (settles.length === 0) return null
+  const side = settles[settles.length - 1]!
+  let length = 0
+  for (let index = settles.length - 1; index >= 0 && length < STREAK_LOOK; index--) {
+    if (settles[index] !== side) break
+    length += 1
+  }
+  return { side, length }
+}
+
+function streakBelief(persona: Persona, settles: readonly Side[], rng: { a: number }, timing: TimingConfig): number | null {
+  const run = settledRun(settles)
+  if (!run || run.length < persona.streakNeed) return null
+  const extra = run.length - persona.streakNeed
+  const lean = clamp((timing.streakLean + extra * timing.streakLeanStep) * persona.streakConviction, 0, timing.streakLeanCap)
+  const noise = (mulberry32.sample(rng) - 0.5) * persona.noise * timing.streakNoiseScale
+  const towardUp = persona.streakFade ? run.side === "down" : run.side === "up"
+  return clamp((towardUp ? 0.5 + lean : 0.5 - lean) + noise, 0.02, 0.98)
+}
+
+function belief(
+  persona: Persona,
+  bars: readonly WindowBar[],
+  settles: readonly Side[],
+  rng: { a: number },
+  timing: TimingConfig,
+): number | null {
+  if (persona.mind === "streak") return streakBelief(persona, settles, rng, timing)
   const noise = (mulberry32.sample(rng) - 0.5) * persona.noise
   if (persona.mind === "restless") return clamp(0.5 + noise, 0.02, 0.98)
   if (bars.length === 0) return null
@@ -198,6 +228,7 @@ type PriceInput = {
   points: readonly PrintPoint[]
   poolUp: number
   poolDown: number
+  settles?: readonly Side[]
   config: PersonaConfig
   stake: StakeConfig
   timing: TimingConfig
@@ -226,17 +257,18 @@ export function decideOpen(input: PriceInput): MindDecision {
   scale = clamp(scale * (1 + gate.tempoNudge), input.config.scaleMin, input.config.scaleMax)
 
   const bars = windowBars(input.points, input.now, input.windowMs, input.timing.historyWindows)
-  let pUp = belief(persona, bars, rng, input.timing)
+  const settles = input.settles ?? []
+  let pUp = belief(persona, bars, settles, rng, input.timing)
   const implied = impliedUp(input.poolUp, input.poolDown)
   let edge = input.config.memoryStep === 0 ? persona.edge : persona.edge + gate.edgeNudge
-  if (bars.length < input.timing.thinBars) edge += input.timing.thinEdge
+  if (persona.mind !== "streak" && bars.length < input.timing.thinBars) edge += input.timing.thinEdge
 
   if (pUp === null) {
     armQuiet(gate, persona, scale, rng, input.config, input.windowId)
     return finish({ action: "skip", reason: Math.abs(implied - 0.5) < edge ? "flat" : "no edge", pUp: 0.5 })
   }
   if (persona.second && persona.secondWeight > 0) {
-    const other = belief({ ...persona, mind: persona.second, noise: persona.noise * 0.4 }, bars, rng, input.timing)
+    const other = belief({ ...persona, mind: persona.second, noise: persona.noise * 0.4 }, bars, settles, rng, input.timing)
     if (other !== null) pUp = lerp(pUp, other, persona.secondWeight)
   }
   pUp = clamp(pUp + gate.bias, 0.02, 0.98)
@@ -290,6 +322,7 @@ export function decideOpen(input: PriceInput): MindDecision {
 export function decideWallet(input: GateInput & {
   poolUp: number
   poolDown: number
+  settles?: readonly Side[]
   stake: StakeConfig
   timing: TimingConfig
 }): MindDecision {
@@ -338,6 +371,7 @@ export function decideWindow(input: {
   points: readonly PrintPoint[]
   poolUp: number
   poolDown: number
+  settles?: readonly Side[]
   wallets: readonly WalletMind[]
   config: PersonaConfig
   stake: StakeConfig
@@ -371,6 +405,7 @@ export function decideWindow(input: {
       points: input.points,
       poolUp: up,
       poolDown: down,
+      settles: input.settles,
       config: input.config,
       stake: input.stake,
       timing: input.timing,

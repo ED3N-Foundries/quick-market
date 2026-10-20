@@ -773,8 +773,6 @@ h2 { margin: 0; font-size: 15px; font-weight: 600; }
 .down { color: var(--down); }
 .push { color: var(--push); }
 .void { color: var(--muted); }
-.bot { color: var(--warn); }
-.tray li.bot-summary, .detail li.bot-summary { color: var(--muted); }
 .amt { text-align: right; }
 
 .filters { display: flex; gap: 6px; }

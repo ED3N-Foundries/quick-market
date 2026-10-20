@@ -12,10 +12,16 @@ test("tape fires before fade and every fire sits inside the window", () => {
     const fade = fireAt(index, "fade", 3, open, close, timing)
     const price = fireAt(index, "price", 3, open, close, timing)
     const restless = fireAt(index, "restless", 3, open, close, timing)
-    for (const at of [tape, fade, price, restless]) {
+    const streak = fireAt(index, "streak", 3, open, close, timing)
+    for (const at of [tape, fade, price, restless, streak]) {
       expect(at).toBeGreaterThan(open + timing.marginMs)
       expect(at).toBeLessThan(close - timing.marginMs)
     }
+    const span = close - open
+    const margin = Math.min(timing.marginMs, Math.floor(span / 4))
+    const usable = span - 2 * margin
+    expect(streak).toBeGreaterThanOrEqual(open + margin + timing.streakSlot[0] * usable)
+    expect(streak).toBeLessThanOrEqual(open + margin + timing.streakSlot[1] * usable)
     expect(tape).toBeLessThan(fade)
     expect(tape).toBeLessThan(price)
     expect(fireAt(index, "tape", 3, open, close, timing)).toBe(tape)

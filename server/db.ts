@@ -45,6 +45,7 @@ CREATE TABLE IF NOT EXISTS ticks (
 );
 
 CREATE INDEX IF NOT EXISTS bets_round ON bets(round_id);
+CREATE INDEX IF NOT EXISTS bets_round_time ON bets(round_id, created_at);
 CREATE INDEX IF NOT EXISTS bets_address ON bets(address);
 
 CREATE TABLE IF NOT EXISTS sessions (
@@ -95,11 +96,21 @@ CREATE TABLE IF NOT EXISTS meta (
 
 let database: Database | null = null
 
+/** Connection settings only. Does not migrate or write schema. */
+export function tuneDatabase(db: Database, options: { readonly?: boolean; memory?: boolean } = {}) {
+  if (!options.readonly && !options.memory) db.exec("PRAGMA journal_mode = WAL;")
+  db.exec("PRAGMA foreign_keys = ON;")
+  db.exec("PRAGMA synchronous = NORMAL;")
+  db.exec("PRAGMA temp_store = MEMORY;")
+  db.exec("PRAGMA cache_size = -20000;")
+  db.exec("PRAGMA mmap_size = 268435456;")
+  if (!options.readonly && !options.memory) db.exec("PRAGMA wal_autocheckpoint = 1000;")
+}
+
 function openDatabase(path: string): Database {
   if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true })
   const db = new Database(path)
-  if (path !== ":memory:") db.exec("PRAGMA journal_mode = WAL;")
-  db.exec("PRAGMA foreign_keys = ON;")
+  tuneDatabase(db, { memory: path === ":memory:" })
   db.exec(SCHEMA)
   const columns = db.query("PRAGMA table_info(users)").all() as { name: string }[]
   if (!columns.some((column) => column.name === "is_bot")) {

@@ -258,6 +258,7 @@ const emptyLedger: LedgerSnapshot = {
   users: 1,
   deposits: 0,
   withdrawals: 0,
+  feeMicros: 0,
   entries: [],
 }
 
@@ -269,6 +270,7 @@ test("renderTreasury states coverage, gas, and funds on the other network", () =
   expect(ahead).toContain("Owed           $2.50")
   expect(ahead).toContain("On-chain USDC  $3.00 on Base Sepolia")
   expect(ahead).toContain("Ahead of owed  $0.50")
+  expect(ahead).toContain("Fees           $0.00")
   expect(ahead).not.toContain("under 0.00005")
   expect(ahead).not.toContain("no ETH")
 
@@ -289,14 +291,14 @@ test("readLedger sums spendable, open stakes, and the newest book rows", () => {
   try {
     db.exec(`
       CREATE TABLE users (address TEXT PRIMARY KEY, balance_micros INTEGER NOT NULL);
-      CREATE TABLE rounds (id INTEGER PRIMARY KEY, status TEXT NOT NULL);
+      CREATE TABLE rounds (id INTEGER PRIMARY KEY, status TEXT NOT NULL, fee_micros INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE bets (id TEXT PRIMARY KEY, round_id INTEGER NOT NULL, address TEXT NOT NULL, stake_micros INTEGER NOT NULL);
       CREATE TABLE deposits (tx_hash TEXT, log_index INTEGER, address TEXT, amount_micros INTEGER, created_at INTEGER);
       CREATE TABLE withdrawals (id TEXT, address TEXT, amount_micros INTEGER, tx_hash TEXT, status TEXT, created_at INTEGER);
     `)
     db.exec(`
       INSERT INTO users VALUES ('${payer}', 4000000), ('${payee}', 6000000);
-      INSERT INTO rounds VALUES (1, 'open'), (2, 'settled');
+      INSERT INTO rounds VALUES (1, 'open', 0), (2, 'settled', 250000);
       INSERT INTO bets VALUES ('open', 1, '${payer}', 2500000), ('done', 2, '${payer}', 9000000);
       INSERT INTO deposits VALUES ('${hash("a1")}', 0, '${payer}', 5000000, 100), ('${hash("a2")}', 0, '${payer}', 2000000, 200);
       INSERT INTO withdrawals VALUES
@@ -314,6 +316,7 @@ test("readLedger sums spendable, open stakes, and the newest book rows", () => {
       users: 2,
       deposits: 2,
       withdrawals: 2,
+      feeMicros: 250_000,
       entries: [
         { direction: "out", kind: "withdraw", address: payee, amountMicros: 1_000_000, txHash: hash("b1"), status: "pending", createdAt: 300 },
         { direction: "in", kind: "deposit", address: payer, amountMicros: 2_000_000, txHash: hash("a2"), status: "credited", createdAt: 200 },

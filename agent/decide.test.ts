@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import { USDC, swarmConfig } from "./config"
-import { decideWallet, decideWindow, drawdownScale, exhaustStake, freshGate, type PrintPoint, type WalletMind } from "./decide"
+import { decideOpen, decideWallet, decideWindow, drawdownScale, exhaustStake, freshGate, type PrintPoint, type Side, type WalletMind } from "./decide"
 import { personaFor, type Persona } from "./persona"
 
 const persona = swarmConfig.persona
@@ -306,4 +306,82 @@ test("a wallet under 1 USDC skips", () => {
     timing,
   })
   expect(decision.action).toBe("skip")
+})
+
+function streakMind(need: 2 | 3 | 4 | 5, fade: boolean): WalletMind {
+  return mind(21, {
+    mind: "streak",
+    second: null,
+    secondWeight: 0,
+    noise: 0,
+    edge: 0.02,
+    kelly: 0.4,
+    bankrollShare: 0.08,
+    streakNeed: need,
+    streakFade: fade,
+    streakConviction: 1,
+  })
+}
+
+function streakBet(wallet: WalletMind, settles: Side[]) {
+  return decideOpen({
+    wallet,
+    inBurst: false,
+    windowId: 10,
+    now: 80_000_000,
+    windowMs: WINDOW,
+    points: [],
+    poolUp: 40 * USDC,
+    poolDown: 40 * USDC,
+    settles,
+    config: persona,
+    stake,
+    timing,
+  })
+}
+
+test("a long enough up run splits streak fades and rides", () => {
+  const ups: Side[] = ["up", "up", "up", "up"]
+  const faded = streakBet(streakMind(4, true), ups)
+  const riding = streakBet(streakMind(4, false), ups)
+  expect(faded.action).toBe("bet")
+  expect(riding.action).toBe("bet")
+  if (faded.action === "bet") expect(faded.side).toBe("down")
+  if (riding.action === "bet") expect(riding.side).toBe("up")
+  expect(streakBet(streakMind(5, true), ups).action).toBe("skip")
+  expect(streakBet(streakMind(4, true), ["up", "down", "up", "down"]).action).toBe("skip")
+  expect(streakBet(streakMind(4, true), ["up", "up", "up"]).action).toBe("skip")
+})
+
+test("a longer run leans harder and stakes at least as much", () => {
+  const wallet = streakMind(3, true)
+  const three = streakBet(wallet, ["up", "up", "up"])
+  const five = streakBet(wallet, ["up", "up", "up", "up", "up"])
+  expect(three.action).toBe("bet")
+  expect(five.action).toBe("bet")
+  if (three.action !== "bet" || five.action !== "bet") return
+  expect(five.side).toBe("down")
+  expect(five.pUp).toBeLessThan(three.pUp)
+  expect(five.stakeMicros).toBeGreaterThanOrEqual(three.stakeMicros)
+})
+
+test("a flat tape still lets a formed streak bet", () => {
+  const now = 90_000_000
+  const calm = Array.from({ length: 40 }, (_, index) => ({ t: now - (39 - index) * 1_000, price: 100 }))
+  const decision = decideOpen({
+    wallet: streakMind(4, true),
+    inBurst: false,
+    windowId: 18_000,
+    now,
+    windowMs: WINDOW,
+    points: calm,
+    poolUp: 40 * USDC,
+    poolDown: 40 * USDC,
+    settles: ["down", "down", "down", "down"],
+    config: persona,
+    stake,
+    timing,
+  })
+  expect(decision.action).toBe("bet")
+  if (decision.action === "bet") expect(decision.side).toBe("up")
 })
