@@ -2,11 +2,10 @@ import { AddressType } from "@phantom/react-sdk"
 import type { IEthereumChain } from "@phantom/chain-interfaces"
 import { getAddress, type Address } from "viem"
 import { createConnector, type CreateConnectorFn } from "wagmi"
-import { isUnrecognizedChain } from "./depositFlow"
 
 // Listing "deeplink" in providers makes BrowserSDK treat it as embedded and throw
-// without a Portal appId. The browse URL does not need one, so mobile Chrome calls
-// getDeeplinkToPhantom() itself. Injected Phantom works without an appId.
+// without a Portal appId. Mobile browsers open https://phantom.com/ul/browse/ themselves.
+// Injected Phantom works without an appId. Connect does not switch networks.
 type PhantomSdk = {
   isConnected(): boolean
   connect(options: { provider: "injected" }): Promise<unknown>
@@ -35,38 +34,6 @@ function accountsOf(sdk: PhantomSdk): readonly Address[] {
     .getAddresses()
     .filter((item) => item.addressType === AddressType.ethereum)
     .map((item) => getAddress(item.address))
-}
-
-type AddableChain = {
-  id: number
-  name: string
-  nativeCurrency: { name: string; symbol: string; decimals: number }
-  rpcUrls: { default: { http: readonly string[] } }
-  blockExplorers?: { default: { url: string } }
-}
-
-async function ensureChain(sdk: PhantomSdk, chain: AddableChain) {
-  try {
-    await sdk.ethereum.switchChain(chain.id)
-    return
-  } catch (error) {
-    if (!isUnrecognizedChain(error)) throw error
-  }
-  const explorer = chain.blockExplorers?.default.url
-  await sdk.ethereum.request({
-    method: "wallet_addEthereumChain",
-    params: [
-      {
-        chainId: `0x${chain.id.toString(16)}`,
-        chainName: chain.name,
-        nativeCurrency: chain.nativeCurrency,
-        rpcUrls: [...chain.rpcUrls.default.http],
-        ...(explorer ? { blockExplorerUrls: [explorer] } : {}),
-      },
-    ],
-  })
-  const current = chainNumber(await sdk.ethereum.getChainId())
-  if (current !== chain.id) await sdk.ethereum.switchChain(chain.id)
 }
 
 export function phantomConnector() {
@@ -132,14 +99,9 @@ export function phantomConnector() {
         listenEthereum()
         const accounts = accountsOf(sdk)
         if (accounts.length === 0) throw new Error("No Ethereum account")
-        let chainId = chainNumber(await sdk.ethereum.getChainId())
-        if (parameters?.chainId && parameters.chainId !== chainId) {
-          const chain = config.chains.find((item) => item.id === parameters.chainId)
-          if (!chain) throw new Error(`Chain ${parameters.chainId} is not configured`)
-          await ensureChain(sdk, chain)
-          config.emitter.emit("change", { chainId: parameters.chainId })
-          chainId = chain.id
-        }
+        // Keep the wallet's current chain. Switching here stacks a network prompt
+        // in front of sign-in, and a new account is often on another network.
+        const chainId = chainNumber(await sdk.ethereum.getChainId())
         if (parameters?.withCapabilities) {
           return {
             accounts: accounts.map((address) => ({ address, capabilities: {} as Record<string, unknown> })),
@@ -174,7 +136,7 @@ export function phantomConnector() {
         if (!sdk?.isConnected()) throw new Error("Phantom is not connected")
         const chain = config.chains.find((item) => item.id === chainId)
         if (!chain) throw new Error(`Chain ${chainId} is not configured`)
-        await ensureChain(sdk, chain)
+        await sdk.ethereum.switchChain(chain.id)
         config.emitter.emit("change", { chainId })
         return chain
       },

@@ -175,9 +175,14 @@ export function App() {
   const fundMicros = parseAmountMicros(fundAmount)
   const testnet = market.config.tokenKind === "qm" || isTestnetChain(market.config.chainId)
   const grantWait = grantTiming(you?.grantAt ?? null, now, market.config.grantIntervalMs)
-  const wrongChain = session.address !== null && session.chainId !== market.config.chainId
-  const needsSignIn = session.address !== null && !wrongChain && !session.token
-  const walletTone = wrongChain || needsSignIn || session.signing ? "warn" : "ok"
+  const wrongChain =
+    session.address !== null && session.chainId !== undefined && session.chainId !== market.config.chainId
+  const walletTone = wrongChain || session.signing ? "warn" : "ok"
+  const loginLabel = session.signing
+    ? "Signing…"
+    : !session.address && session.connectMode === "deeplink"
+      ? "Open in Phantom"
+      : "Sign in"
 
   async function onWithdraw() {
     if (withdrawing) return
@@ -302,56 +307,54 @@ export function App() {
         <div className="stake">
           <div className="balance-label">
             <TokenBadge kind={testnet ? "qm" : "circle"} />
-            {!session.address ? (
-              <span className="who">
+            {!session.token || !session.address ? (
+              <span className="who" ref={session.address ? walletMenuRef : undefined}>
+                {session.address && (
+                  <>
+                    <button
+                      type="button"
+                      className="wallet-pill"
+                      data-open={walletMenuOpen ? "1" : "0"}
+                      title={session.address}
+                      aria-label="Wallet menu"
+                      aria-expanded={walletMenuOpen}
+                      aria-haspopup="menu"
+                      onClick={() => setWalletMenuOpen((open) => !open)}
+                    >
+                      <span className="wallet-dot" data-tone="warn" aria-hidden="true" />
+                      <span className="wallet-name">{walletDisplayLabel(session.address, session.label)}</span>
+                      <span className="wallet-caret" aria-hidden="true">▾</span>
+                    </button>
+                    {walletMenuOpen && (
+                      <div className="wallet-menu" role="menu">
+                        {session.label && <p className="wallet-menu-label">{session.label}</p>}
+                        <p className="wallet-menu-addr" title={session.address}>
+                          {session.address}
+                        </p>
+                        <div className="wallet-menu-actions">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setWalletMenuOpen(false)
+                              session.disconnect()
+                            }}
+                          >
+                            Disconnect
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </>
+                )}
                 <button
                   type="button"
                   className="primary connect-pill"
                   title={session.chainError ?? undefined}
-                  onClick={session.connect}
-                  disabled={session.chainError !== null}
+                  onClick={session.login}
+                  disabled={session.signing || session.chainError !== null}
                 >
-                  {session.connectMode === "deeplink" ? "Open in Phantom" : "Connect"}
+                  {loginLabel}
                 </button>
-              </span>
-            ) : needsSignIn ? (
-              <span className="who" ref={walletMenuRef}>
-                <button
-                  type="button"
-                  className="wallet-pill"
-                  data-open={walletMenuOpen ? "1" : "0"}
-                  title={session.address}
-                  aria-label="Wallet menu"
-                  aria-expanded={walletMenuOpen}
-                  aria-haspopup="menu"
-                  onClick={() => setWalletMenuOpen((open) => !open)}
-                >
-                  <span className="wallet-dot" data-tone="warn" aria-hidden="true" />
-                  <span className="wallet-name">{walletDisplayLabel(session.address, session.label)}</span>
-                  <span className="wallet-caret" aria-hidden="true">▾</span>
-                </button>
-                <button type="button" className="primary connect-pill" onClick={session.signIn} disabled={session.signing}>
-                  {session.signing ? "Signing…" : "Sign in"}
-                </button>
-                {walletMenuOpen && (
-                  <div className="wallet-menu" role="menu">
-                    {session.label && <p className="wallet-menu-label">{session.label}</p>}
-                    <p className="wallet-menu-addr" title={session.address}>
-                      {session.address}
-                    </p>
-                    <div className="wallet-menu-actions">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setWalletMenuOpen(false)
-                          session.disconnect()
-                        }}
-                      >
-                        Disconnect
-                      </button>
-                    </div>
-                  </div>
-                )}
               </span>
             ) : (
               <span className="who" ref={walletMenuRef}>
@@ -430,8 +433,8 @@ export function App() {
               </span>
             )}
           </div>
-          {!session.address && session.connectError && <p className="note bad connect-error">{session.connectError}</p>}
-          {needsSignIn && session.signError && session.signError !== "Sign in to trade" && (
+          {session.connectError && <p className="note bad connect-error">{session.connectError}</p>}
+          {!session.token && session.signError && session.signError !== "Sign in to trade" && (
             <p className="note bad connect-error">{session.signError}</p>
           )}
           <BalanceFigure micros={you?.balanceMicros ?? null} />

@@ -1,5 +1,17 @@
 import { expect, test } from "bun:test"
-import { authorizedAccount, connectKind, isUnauthorized, phantomInjected } from "./phantomConnect"
+import { CHAINS } from "../../shared/chain"
+import {
+  authorizedAccount,
+  connectKind,
+  isUnauthorized,
+  loginAction,
+  phantomBrowseUrl,
+  phantomInjected,
+  shouldAddChain,
+  switchFault,
+  takeLoginQuery,
+  TESTNET_MODE,
+} from "./phantomConnect"
 
 test("desktop and an injected Phantom open the modal", () => {
   expect(connectKind({ mobile: false, injected: false })).toBe("modal")
@@ -30,6 +42,53 @@ test("authorizedAccount uses the first granted account when the shown one is abs
 test("authorizedAccount is empty when Phantom granted nothing", () => {
   expect(authorizedAccount([], "0xabc")).toBe(null)
   expect(authorizedAccount([""], null)).toBe(null)
+})
+
+test("mobile without Phantom browses, and a press on an open page connects then signs", () => {
+  expect(loginAction({ mobile: true, injected: false, connected: false, sessionMatches: false })).toBe("browse")
+  expect(loginAction({ mobile: false, injected: false, connected: false, sessionMatches: false })).toBe("connect-and-sign")
+  expect(loginAction({ mobile: true, injected: true, connected: false, sessionMatches: false })).toBe("connect-and-sign")
+  expect(loginAction({ mobile: false, injected: true, connected: true, sessionMatches: false })).toBe("sign")
+})
+
+test("a matching session does not prompt again", () => {
+  expect(loginAction({ mobile: true, injected: false, connected: false, sessionMatches: true })).toBe("done")
+  expect(loginAction({ mobile: false, injected: true, connected: true, sessionMatches: true })).toBe("done")
+})
+
+test("browse url uses phantom.com and carries login", () => {
+  const url = phantomBrowseUrl("https://market.example/trade?x=1", "https://market.example")
+  expect(url.startsWith("https://phantom.com/ul/browse/")).toBe(true)
+  const encoded = url.slice("https://phantom.com/ul/browse/".length).split("?")[0] ?? ""
+  const target = new URL(decodeURIComponent(encoded))
+  expect(target.origin).toBe("https://market.example")
+  expect(target.pathname).toBe("/trade")
+  expect(target.searchParams.get("x")).toBe("1")
+  expect(target.searchParams.get("login")).toBe("1")
+  expect(url).toContain(`ref=${encodeURIComponent("https://market.example")}`)
+  expect(() => phantomBrowseUrl("file:///tmp/market", "https://market.example")).toThrow()
+})
+
+test("login query is removed once", () => {
+  const first = takeLoginQuery("https://market.example/trade?login=1&x=1")
+  expect(first.continueLogin).toBe(true)
+  expect(new URL(first.clean).searchParams.has("login")).toBe(false)
+  expect(new URL(first.clean).searchParams.get("x")).toBe("1")
+  expect(takeLoginQuery(first.clean).continueLogin).toBe(false)
+})
+
+test("a Base Sepolia switch failure tells the user to turn on Testnet Mode and does not add the chain", () => {
+  const fault = switchFault(CHAINS["base-sepolia"].id, { code: 4902, message: "Unrecognized chain ID" })
+  expect(fault).toBe(TESTNET_MODE)
+  expect(fault.toLowerCase()).not.toContain("add")
+  expect(shouldAddChain(CHAINS.base.id)).toBe(false)
+  expect(shouldAddChain(CHAINS["base-sepolia"].id)).toBe(false)
+  expect(switchFault(CHAINS.base.id, { code: 4902, message: "Unrecognized chain ID" })).toBe(
+    "This network is not available in Phantom.",
+  )
+  expect(switchFault(CHAINS["base-sepolia"].id, { code: 4001, message: "User rejected the request." })).toBe(
+    "Switch cancelled",
+  )
 })
 
 test("isUnauthorized sees Phantom 4100 and a rejection is separate", () => {

@@ -1,9 +1,10 @@
-import { getDeeplinkToPhantom, isMobileDevice } from "@phantom/browser-sdk"
-import { AddressType, PhantomProvider, useModal, usePhantom } from "@phantom/react-sdk"
+import { isMobileDevice } from "@phantom/browser-sdk"
+import type { IEthereumChain } from "@phantom/chain-interfaces"
+import { AddressType, PhantomProvider, useConnect as usePhantomConnect, usePhantom } from "@phantom/react-sdk"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react"
 import { getPublicClient } from "wagmi/actions"
-import { stringToHex } from "viem"
+import { getAddress, type Address } from "viem"
 import {
   createConfig,
   http,
@@ -11,7 +12,6 @@ import {
   useChainId,
   useConnect,
   useDisconnect,
-  useSwitchChain,
   useWriteContract,
   WagmiProvider,
 } from "wagmi"
@@ -29,11 +29,21 @@ import {
   type StoredSession,
 } from "./depositFlow"
 import { extractAccountLabel, parseAmountMicros } from "./format"
-import { authorizedAccount, connectKind, isUnauthorized, phantomInjected } from "./phantomConnect"
+import {
+  authorizedAccount,
+  connectKind,
+  isUnauthorized,
+  loginAction,
+  phantomBrowseUrl,
+  phantomInjected,
+  switchFault,
+  takeLoginQuery,
+} from "./phantomConnect"
 import { bindPhantomSdk, phantomConnector } from "./phantomConnector"
 
 const SESSION_KEY = "qm.session"
-const UNAUTHORIZED_SIGN = "Phantom has not approved this account. Connect again."
+const SIGN_PROMPT = "Sign in to trade"
+const CONNECT_MISSED = "Failed to connect to any supported wallet provider"
 
 export type WalletSession = {
   chainError: string | null
@@ -44,12 +54,11 @@ export type WalletSession = {
   token: string | null
   signing: boolean
   signError: string | null
-  connect: () => void
+  login: () => void
   connectMode: "modal" | "deeplink"
   connectError: string | null
   disconnect: () => void
   switchChain: () => void
-  signIn: () => void
   expire: () => void
   deposit: (amount: string, treasury: string, usdc: string, chainId: number) => Promise<DepositResult>
 }
@@ -63,12 +72,11 @@ const missing: WalletSession = {
   token: null,
   signing: false,
   signError: null,
-  connect: () => {},
+  login: () => {},
   connectMode: "modal",
   connectError: null,
   disconnect: () => {},
   switchChain: () => {},
-  signIn: () => {},
   expire: () => {},
   deposit: async () => ({ ok: false, message: "Chain is invalid" }),
 }
@@ -148,74 +156,115 @@ function readStandardAccounts(): unknown[] {
   }
 }
 
+function chainNumber(value: number | string): number {
+  if (typeof value === "number") return value
+  return value.startsWith("0x") ? Number.parseInt(value, 16) : Number(value)
+}
+
+function ethereumAccounts(value: readonly { addressType?: string; address?: string }[] | null | undefined): string[] {
+  if (!value) return []
+  return value.flatMap((item) => (item.addressType === AddressType.ethereum && item.address ? [item.address] : []))
+}
+
+function missedChain(): { code: number; message: string } {
+  return { code: 4902, message: "Unrecognized chain ID" }
+}
+
+function signFault(error: unknown): string {
+  const message = error instanceof Error ? error.message : "Sign-in failed"
+  const code = typeof error === "object" && error ? (error as { code?: unknown }).code : undefined
+  const lower = message.toLowerCase()
+  if (code === 4001 || lower.includes("user rejected") || lower.includes("user denied") || message === CONNECT_MISSED) {
+    return SIGN_PROMPT
+  }
+  return message || "Sign-in failed"
+}
+
 function Bridge({ children }: { children: ReactNode }) {
   const expected = read.chain!.id
-  const { address, status } = useAccount()
-  const walletChainId = useChainId()
-  const { switchChainAsync } = useSwitchChain()
+  const { status } = useAccount()
+  const wagmiChainId = useChainId()
   const { connectAsync, connectors } = useConnect()
   const { disconnectAsync } = useDisconnect()
   const { writeContractAsync } = useWriteContract()
-  const { sdk, isConnected, isLoading, addresses, user, clearError } = usePhantom()
-  const { open } = useModal()
+  const { sdk, isConnected, isLoading, addresses, user } = usePhantom()
+  const { connect: connectPhantom } = usePhantomConnect()
   const [token, setToken] = useState<string | null>(null)
   const [signing, setSigning] = useState(false)
   const [signError, setSignError] = useState<string | null>(null)
   const [connectError, setConnectError] = useState<string | null>(null)
-  const [attempt, setAttempt] = useState(0)
-  const pendingModal = useRef(false)
-  const syncAttempts = useRef(0)
-  const syncing = useRef(false)
+  const [walletChainId, setWalletChainId] = useState<number | undefined>(undefined)
+  const pendingLogin = useRef(false)
+  const busy = useRef(false)
   const hadAccount = useRef(false)
   const signEpoch = useRef(0)
-  const connectRef = useRef<() => void>(() => {})
+  const loginRef = useRef<() => void>(() => {})
   const sdkRef = useRef(sdk)
+  const listed = isConnected ? (addresses?.length ? addresses : (sdk?.getAddresses?.() ?? [])) : []
+  const address = authorizedAccount(
+    listed.filter((item) => item.addressType === AddressType.ethereum).map((item) => item.address),
+    null,
+  )
   const addressRef = useRef(address)
-  const disconnectRef = useRef(disconnectAsync)
   sdkRef.current = sdk
   addressRef.current = address
-  disconnectRef.current = disconnectAsync
 
   useEffect(() => {
     bindPhantomSdk(sdk)
   }, [sdk])
 
+  // Strip login=1 before the continuation effect runs, so a refresh does not prompt again.
   useEffect(() => {
-    if (isLoading || !pendingModal.current) return
-    pendingModal.current = false
-    connectRef.current()
+    try {
+      const { continueLogin, clean } = takeLoginQuery(window.location.href)
+      if (!continueLogin) return
+      const next = new URL(clean)
+      window.history.replaceState(window.history.state, "", `${next.pathname}${next.search}${next.hash}`)
+      pendingLogin.current = true
+    } catch {
+      // A malformed page URL cannot continue the Phantom hop.
+    }
+  }, [])
+
+  useEffect(() => {
+    if (isLoading || !sdk || !pendingLogin.current) return
+    pendingLogin.current = false
+    loginRef.current()
   }, [isLoading, sdk])
 
   useEffect(() => {
-    const connector = connectors.find((item) => item.id === "phantom")
-    if (!sdk || isLoading || !connector || syncing.current) return
-    if (!isConnected) {
-      syncAttempts.current = 0
-      if (status !== "connected") return
-      syncing.current = true
-      void disconnectAsync()
-        .catch(() => {})
-        .finally(() => {
-          syncing.current = false
-        })
+    if (!isConnected || !sdk) {
+      setWalletChainId(undefined)
       return
     }
-    if (status !== "disconnected" || syncAttempts.current >= 2) return
-    syncAttempts.current += 1
-    syncing.current = true
-    void connectAsync({ connector })
-      .catch(() => {})
-      .finally(() => {
-        syncing.current = false
-      })
-  }, [connectAsync, connectors, disconnectAsync, isConnected, isLoading, sdk, status])
+    // useEthereum() is a stub until a provider exists, and it stays stale across await connect().
+    let ethereum: IEthereumChain
+    try {
+      ethereum = sdk.ethereum
+    } catch {
+      return
+    }
+    let cancel = false
+    const apply = (value: number | string) => {
+      const id = chainNumber(value)
+      if (!cancel && Number.isInteger(id)) setWalletChainId(id)
+    }
+    // Login waits out autoConnect, then signs. Read the chain once that RPC is done.
+    if (!busy.current && !isLoading) void ethereum.getChainId().then(apply).catch(() => {})
+    ethereum.on("chainChanged", apply)
+    return () => {
+      cancel = true
+      ethereum.off("chainChanged", apply)
+    }
+  }, [isConnected, isLoading, sdk, signing])
 
+  // Address changes do not sign. A restored session only fills the token.
   useEffect(() => {
-    if (status === "connecting" || status === "reconnecting") return
-    if (status !== "connected" || !address) {
+    if (!address) {
       if (!hadAccount.current) return
       hadAccount.current = false
       signEpoch.current += 1
+      busy.current = false
       const stored = sessionStorage.getItem(SESSION_KEY)
       sessionStorage.removeItem(SESSION_KEY)
       if (stored) {
@@ -228,6 +277,7 @@ function Bridge({ children }: { children: ReactNode }) {
       }
       setToken(null)
       setSignError(null)
+      setConnectError(null)
       setSigning(false)
       return
     }
@@ -244,72 +294,7 @@ function Bridge({ children }: { children: ReactNode }) {
       sessionStorage.removeItem(SESSION_KEY)
       void fetch("/api/session", { method: "DELETE", headers: { authorization: `Bearer ${stored.token}` } })
     }
-  }, [address, expected, status])
-
-  // An address on its own does not open Phantom. Sign in starts from the button,
-  // or from expire(), which bumps `attempt` after the server rejects the session.
-  // A restored session has only called eth_accounts, so this click asks Phantom to authorize.
-  useEffect(() => {
-    if (attempt === 0) return
-    const epoch = signEpoch.current
-    let cancel = false
-    const stale = () => cancel || signEpoch.current !== epoch
-    setSigning(true)
-    setSignError(null)
-    void (async () => {
-      const current = sdkRef.current
-      if (!current) {
-        if (!stale()) {
-          setSignError("Phantom is not ready")
-          setSigning(false)
-        }
-        return
-      }
-      try {
-        const granted = await current.ethereum.connect()
-        if (stale()) return
-        const exact = authorizedAccount(Array.isArray(granted) ? granted : [], addressRef.current ?? null)
-        if (!exact) throw new Error("No Ethereum account")
-        const lower = exact.toLowerCase()
-        const issued = Date.now()
-        const signature = await current.ethereum.request<string>({
-          method: "personal_sign",
-          params: [stringToHex(loginMessage(expected, lower, issued)), exact],
-        })
-        if (stale()) return
-        const response = await fetch("/api/session", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ address: lower, signature, issued }),
-        })
-        const body = await response.json()
-        if (!response.ok) throw new Error(body.error ?? "Sign-in failed")
-        sessionStorage.setItem(SESSION_KEY, JSON.stringify({ token: body.token, address: lower, chainId: expected }))
-        if (!stale()) setToken(body.token)
-      } catch (error: unknown) {
-        if (stale()) return
-        if (isUnauthorized(error)) {
-          setConnectError(UNAUTHORIZED_SIGN)
-          setSignError(UNAUTHORIZED_SIGN)
-          try {
-            if (sdkRef.current?.isConnected()) await sdkRef.current.disconnect()
-          } catch {
-            // Wagmi still needs to drop the cached account.
-          }
-          await disconnectRef.current().catch(() => {})
-          return
-        }
-        const message = error instanceof Error ? error.message : "Sign-in failed"
-        const code = typeof error === "object" && error ? (error as { code?: unknown }).code : undefined
-        setSignError(code === 4001 || message.includes("User rejected") ? "Sign in to trade" : message)
-      } finally {
-        if (!stale()) setSigning(false)
-      }
-    })()
-    return () => {
-      cancel = true
-    }
-  }, [attempt, expected])
+  }, [address, expected])
 
   const label = extractAccountLabel(address, {
     addresses: addresses?.length ? addresses : sdk?.getAddresses?.(),
@@ -328,47 +313,112 @@ function Bridge({ children }: { children: ReactNode }) {
     injected: phantomInjected(window),
   })
 
-  const beginConnect = () => {
-    if (connectMode === "deeplink") {
-      try {
-        window.location.assign(getDeeplinkToPhantom())
-      } catch {
-        setConnectError("Phantom needs an https link to this page.")
-      }
-      return
-    }
-    setConnectError(null)
-    clearError("connect")
-    if (isLoading || !sdk) {
-      pendingModal.current = true
-      return
-    }
-    // A cached Phantom session only has Disconnect in the SDK modal. Finish the
-    // wagmi link instead of opening that modal, and allow another click after a miss.
-    if (sdk.isConnected()) {
-      const connector = connectors.find((item) => item.id === "phantom")
-      if (!connector) {
-        setConnectError("Phantom is not ready")
-        return
-      }
-      syncAttempts.current = 0
-      if (syncing.current) return
-      syncing.current = true
-      void connectAsync({ connector })
-        .catch((error: unknown) => {
-          const message = error instanceof Error ? error.message : "Connect failed"
-          const lower = message.toLowerCase()
-          if (lower.includes("rejected") || lower.includes("denied") || lower.includes("already connected")) return
-          setConnectError(message)
-        })
-        .finally(() => {
-          syncing.current = false
-        })
-      return
-    }
-    open()
+  const liveEthereum = (): IEthereumChain => {
+    const current = sdkRef.current
+    if (!current) throw new Error("Phantom is not ready")
+    return current.ethereum
   }
-  connectRef.current = beginConnect
+
+  const signInNow = (forceConnect: boolean) => {
+    if (busy.current) return
+    busy.current = true
+    const epoch = ++signEpoch.current
+    const stale = () => signEpoch.current !== epoch
+    setSigning(true)
+    setSignError(null)
+    setConnectError(null)
+    void (async () => {
+      try {
+        const current = sdkRef.current
+        if (!current) throw new Error("Phantom is not ready")
+        let exact: string | null = null
+        if (forceConnect || !current.isConnected()) {
+          const result = await connectPhantom({ provider: "injected" })
+          if (stale()) return
+          exact = authorizedAccount(ethereumAccounts(result.addresses), addressRef.current)
+        } else {
+          exact = authorizedAccount(ethereumAccounts(current.getAddresses()), addressRef.current)
+        }
+        if (stale()) return
+        let ethereum = liveEthereum()
+        if (!exact) {
+          const granted = await ethereum.connect()
+          if (stale()) return
+          exact = authorizedAccount(Array.isArray(granted) ? granted : [], addressRef.current)
+        }
+        if (!exact) throw new Error("No Ethereum account")
+        const signWith = async (account: string) => {
+          const issued = Date.now()
+          const signature = await ethereum.signPersonalMessage(loginMessage(expected, account.toLowerCase(), issued), account)
+          return { signature, issued, account }
+        }
+        let signed: { signature: string; issued: number; account: string }
+        try {
+          signed = await signWith(exact)
+        } catch (error) {
+          if (stale() || !isUnauthorized(error)) throw error
+          const granted = await ethereum.connect()
+          if (stale()) return
+          const next = authorizedAccount(Array.isArray(granted) ? granted : [], exact)
+          if (!next) throw new Error("No Ethereum account")
+          ethereum = liveEthereum()
+          signed = await signWith(next)
+        }
+        if (stale()) return
+        const lower = signed.account.toLowerCase()
+        const shown = addressRef.current
+        if (shown && shown.toLowerCase() !== lower) return
+        const response = await fetch("/api/session", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ address: lower, signature: signed.signature, issued: signed.issued }),
+        })
+        const body = (await response.json()) as { token?: string; error?: string }
+        if (!response.ok || !body.token) throw new Error(body.error ?? "Sign-in failed")
+        sessionStorage.setItem(SESSION_KEY, JSON.stringify({ token: body.token, address: lower, chainId: expected }))
+        if (!stale()) setToken(body.token)
+      } catch (error: unknown) {
+        if (!stale()) setSignError(signFault(error))
+      } finally {
+        if (!stale()) {
+          busy.current = false
+          setSigning(false)
+        }
+      }
+    })()
+  }
+
+  const beginLogin = () => {
+    if (busy.current) return
+    const action = loginAction({
+      mobile: isMobileDevice(),
+      injected: phantomInjected(window),
+      connected: Boolean(sdkRef.current?.isConnected()),
+      sessionMatches: matchingSession(readStored(expected), addressRef.current, expected) !== null,
+    })
+    if (action === "done") {
+      setSigning(false)
+      return
+    }
+    if (action === "browse") {
+      try {
+        window.location.assign(phantomBrowseUrl(window.location.href, window.location.origin))
+      } catch (error) {
+        setConnectError(error instanceof Error ? error.message : "Phantom needs an https link to this page.")
+      }
+      return
+    }
+    // autoConnect is still using eth_accounts. Wait, then run this same login once.
+    if (isLoading || !sdkRef.current) {
+      pendingLogin.current = true
+      setSigning(true)
+      setSignError(null)
+      setConnectError(null)
+      return
+    }
+    signInNow(action === "connect-and-sign")
+  }
+  loginRef.current = beginLogin
 
   const session: WalletSession = {
     chainError: null,
@@ -381,7 +431,7 @@ function Bridge({ children }: { children: ReactNode }) {
     signError,
     connectMode,
     connectError,
-    connect: () => connectRef.current(),
+    login: () => loginRef.current(),
     disconnect: () => {
       void (async () => {
         try {
@@ -392,20 +442,44 @@ function Bridge({ children }: { children: ReactNode }) {
       })()
     },
     switchChain: () => {
-      void switchChainAsync({ chainId: selected.id }).catch(() => {})
+      const current = sdkRef.current
+      if (!current?.isConnected()) {
+        setConnectError("Phantom is not ready")
+        return
+      }
+      setConnectError(null)
+      void (async () => {
+        try {
+          const ethereum = current.ethereum
+          await ethereum.switchChain(selected.id)
+          const id = chainNumber(await ethereum.getChainId())
+          if (Number.isInteger(id)) setWalletChainId(id)
+          if (id !== selected.id) setConnectError(switchFault(selected.id, missedChain()))
+        } catch (error) {
+          setConnectError(switchFault(selected.id, error))
+        }
+      })()
     },
-    signIn: () => setAttempt((value) => value + 1),
     expire: () => {
       sessionStorage.removeItem(SESSION_KEY)
       setToken(null)
-      setAttempt((value) => value + 1)
+      signEpoch.current += 1
+      busy.current = false
+      setSigning(false)
+      beginLogin()
     },
     deposit: async (amount, treasury, usdc, chainId) => {
       const micros = parseAmountMicros(amount)
-      const account = address
+      const shown = address
       if (micros === null || micros <= 0) return { ok: false, message: "Amount is invalid" }
-      if (!account || !activeToken || !matchingSession(readStored(expected), account, expected)) {
+      if (!shown || !activeToken || !matchingSession(readStored(expected), shown, expected)) {
         return { ok: false, message: "Sign in with this wallet before depositing." }
+      }
+      let account: Address
+      try {
+        account = getAddress(shown)
+      } catch {
+        return { ok: false, message: "Wallet is not ready" }
       }
       if (!treasury || !usdc || !wagmiConfig) return { ok: false, message: "Treasury is not ready" }
       if (chainId !== selected.id) return { ok: false, message: "This page and the server are on different chains." }
@@ -419,7 +493,25 @@ function Bridge({ children }: { children: ReactNode }) {
       }
       if (!serverReachable) return { ok: false, message: "Market server is not running." }
       try {
-        if (walletChainId !== selected.id) await switchChainAsync({ chainId: selected.id })
+        const ethereum = liveEthereum()
+        let chainNow = chainNumber(await ethereum.getChainId())
+        if (chainNow !== selected.id) {
+          try {
+            await ethereum.switchChain(selected.id)
+          } catch (error) {
+            return { ok: false, message: switchFault(selected.id, error) }
+          }
+          chainNow = chainNumber(await ethereum.getChainId())
+          if (Number.isInteger(chainNow)) setWalletChainId(chainNow)
+          if (chainNow !== selected.id) return { ok: false, message: switchFault(selected.id, missedChain()) }
+        }
+        const connector = connectors.find((item) => item.id === "phantom")
+        if (!connector) return { ok: false, message: "Wallet is not ready" }
+        if (!(status === "connected" && wagmiChainId === selected.id)) {
+          if (status === "connected") await disconnectAsync()
+          const linked = await connectAsync({ connector })
+          if (linked.chainId !== selected.id) return { ok: false, message: switchFault(selected.id, missedChain()) }
+        }
         const client = getPublicClient(wagmiConfig, { chainId: selected.id })
         if (!client) return { ok: false, message: "Wallet is not ready" }
         const tokenAddress = usdc as `0x${string}`
