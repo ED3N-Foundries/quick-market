@@ -32,6 +32,7 @@ import {
   walletDisplayLabel,
 } from "./format"
 import type { Band, Board, HistoryRound, OpenBet, SettledMessage, Side, TrayRow } from "./types"
+import { readCachedBalance, visibleBalance } from "./balanceCache"
 import { useMarket } from "./useMarket"
 import { useSideBook } from "./useSideBook"
 import { grantWaitStatus, loginStatus, loginSteps, loginStepState } from "./phantomConnect"
@@ -143,6 +144,8 @@ export function App() {
 
   const board = market.board
   const you = market.you
+  const cached = session.token && session.address ? readCachedBalance(session.address) : null
+  const shownMicros = visibleBalance(market.confirmed, you?.balanceMicros ?? null, cached?.balanceMicros ?? null)
   const openBets = you?.openBets ?? []
   const now = Date.now() + market.offsetRef.current
   void windowTick
@@ -156,7 +159,14 @@ export function App() {
   const heldSpan = board ? heldMarket(board, openBets, now) : null
   const focus = focusPool(board, openBets, now)
   const canBet =
-    !!you && !heldSpan && !!board && joinIsLive(board, now) && market.feed === "live" && !market.pending && !market.handoff
+    market.confirmed &&
+    !!you &&
+    !heldSpan &&
+    !!board &&
+    joinIsLive(board, now) &&
+    market.feed === "live" &&
+    !market.pending &&
+    !market.handoff
   const total = (focus?.poolUpMicros ?? 0) + (focus?.poolDownMicros ?? 0)
   const held = openBets.find((bet) => bet.roundId === focus?.id) ?? null
   const upQuote = focus ? quoteDollar("up", focus.poolUpMicros, focus.poolDownMicros, market.config.feeBps) : "—"
@@ -175,7 +185,10 @@ export function App() {
   const ticketWin = held ? payoutMicros(held.stakeMicros, held.side, focus?.poolUpMicros ?? 0, focus?.poolDownMicros ?? 0, market.config.feeBps) : 0
   const fundMicros = parseAmountMicros(fundAmount)
   const testnet = market.config.tokenKind === "qm" || isTestnetChain(market.config.chainId)
-  const grantWait = grantTiming(you?.grantAt ?? null, now, market.config.grantIntervalMs)
+  const grantKnown = market.confirmed ? you !== null : cached !== null
+  const grantAt = market.confirmed ? (you?.grantAt ?? null) : (cached?.grantAt ?? null)
+  const grantWait = grantTiming(grantAt, now, market.config.grantIntervalMs)
+  const grantReady = grantKnown && testnet && market.config.grantIntervalMs > 0 && grantWait.due && !funding
   const wrongChain =
     session.address !== null && session.chainId !== undefined && session.chainId !== market.config.chainId
   const walletTone = wrongChain || session.signing ? "warn" : "ok"
@@ -379,8 +392,9 @@ export function App() {
                 <button
                   type="button"
                   className="fund-plus"
-                  aria-label={testnet ? "Grant QM USDC" : "Deposit USDC"}
-                  title={testnet ? "Grant" : "Deposit"}
+                  data-grant={grantReady ? "due" : "wait"}
+                  aria-label={grantReady ? "Grant ready" : testnet ? "Grant QM USDC" : "Deposit USDC"}
+                  title={grantReady ? "Grant ready" : testnet ? "Grant" : "Deposit"}
                   onClick={() => {
                     setWalletMenuOpen(false)
                     setFundError(null)
@@ -441,8 +455,8 @@ export function App() {
           {!session.token && session.signError && session.signError !== "Sign in to trade" && (
             <p className="note bad connect-error">{session.signError}</p>
           )}
-          <BalanceFigure micros={you?.balanceMicros ?? null} />
-          {testnet && !session.signing && market.config.grantIntervalMs > 0 && (
+          <BalanceFigure micros={shownMicros} />
+          {testnet && !session.signing && market.config.grantIntervalMs > 0 && grantKnown && (
             <p className="grant-status">{grantStatusLabel(grantWait, market.config.grantMicros)}</p>
           )}
           {held && (
@@ -495,7 +509,7 @@ export function App() {
           chainName={market.config.chainName}
           grantMicros={market.config.grantMicros}
           grantIntervalMs={market.config.grantIntervalMs}
-          grantAt={you?.grantAt ?? null}
+          grantAt={grantAt}
           now={now}
           granting={funding}
           error={fundError}

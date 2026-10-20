@@ -15,6 +15,11 @@ export function grantDue(grantAt: number | null, now: number, intervalMs: number
   return now - grantAt >= intervalMs
 }
 
+/** Automatic credit only for an address that has never received a grant. */
+export function grantOnSignIn(grantAt: number | null): boolean {
+  return grantAt === null
+}
+
 /** Outstanding ledger to back once. Null once qm_usdc_v1 is recorded. */
 export function cutoverAmount(flag: string | null, sumMicros: number): number | null {
   if (flag !== null) return null

@@ -319,6 +319,19 @@ body {
   letter-spacing: 0;
   text-transform: none;
 }
+.app button.fund-plus[data-grant="due"] {
+  border-color: var(--up);
+  color: var(--up);
+  animation: grant-pulse 1.6s ease-out infinite;
+}
+@keyframes grant-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(47, 206, 134, 0.55); }
+  70% { box-shadow: 0 0 0 7px rgba(47, 206, 134, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(47, 206, 134, 0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .app button.fund-plus[data-grant="due"] { animation: none; }
+}
 .addr-hover {
   position: relative;
   display: inline-flex;

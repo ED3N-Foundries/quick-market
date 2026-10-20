@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react"
 import { LATE_BET_CODE } from "../../shared/bet"
 import { chainFromEnv, moneyLabel, tokenKind, tokenLabel, type ChainConfig } from "../../shared/chain"
 import { marketPreferences } from "../../shared/market"
+import { writeCachedBalance } from "./balanceCache"
 import { applyBet } from "./betIntent"
 import type { TapeChart, TapePoint } from "./chart"
 import { createClock, easeClock, noteClock } from "./clock"
@@ -60,6 +61,7 @@ export function useMarket(token: string | null) {
   const [lateNotices, setLateNotices] = useState<number[]>([])
   const [pulse, setPulse] = useState(0)
   const [unauthorized, setUnauthorized] = useState(false)
+  const [confirmed, setConfirmed] = useState(false)
 
   const offsetRef = useRef(0)
   const clockRef = useRef(createClock())
@@ -73,6 +75,8 @@ export function useMarket(token: string | null) {
   const seededRef = useRef(false)
   const betLock = useRef(false)
   const betIntent = useRef(0)
+  const confirmedRef = useRef(false)
+  const youEpoch = useRef(0)
   tokenRef.current = token
   youRef.current = you
   configRef.current = config
@@ -96,6 +100,18 @@ export function useMarket(token: string | null) {
     [applySeed],
   )
 
+  const markConfirmed = useCallback((value: boolean) => {
+    confirmedRef.current = value
+    setConfirmed(value)
+  }, [])
+
+  const acceptYou = useCallback((next: You | null) => {
+    youEpoch.current += 1
+    if (next) writeCachedBalance(next)
+    setYou(next)
+    return next
+  }, [])
+
   const noteServerNow = useCallback((serverNow: number) => {
     clockRef.current = noteClock(clockRef.current, serverNow, Date.now())
     offsetRef.current = clockRef.current.offset
@@ -116,6 +132,7 @@ export function useMarket(token: string | null) {
     if (response.status === 401) {
       setUnauthorized(true)
       setYou(null)
+      markConfirmed(false)
       return null
     }
     const body = await response.json()
@@ -125,9 +142,10 @@ export function useMarket(token: string | null) {
     if (body.ticker) setTicker(body.ticker)
     setHandoff(body.handoff ?? null)
     noteServerNow(body.serverNow)
-    setYou(body.you ?? null)
+    acceptYou(body.you ?? null)
+    markConfirmed(true)
     return body.you ?? null
-  }, [noteServerNow])
+  }, [acceptYou, markConfirmed, noteServerNow])
 
   const waitForBalance = useCallback(
     async (minMicros: number) => {
@@ -160,7 +178,9 @@ export function useMarket(token: string | null) {
 
   useEffect(() => {
     setUnauthorized(false)
+    markConfirmed(false)
     if (!token) setYou(null)
+    const seen = youEpoch.current
     let cancel = false
     fetch("/api/state", { headers: headers(token) })
       .then(async (response) => {
@@ -181,7 +201,8 @@ export function useMarket(token: string | null) {
         if (body.ticker) setTicker(body.ticker)
         setHandoff(body.handoff ?? null)
         noteServerNow(body.serverNow)
-        setYou(body.you ?? null)
+        if (youEpoch.current === seen) acceptYou(body.you ?? null)
+        if (token) markConfirmed(true)
         if (!seededRef.current) {
           seedRef.current = (body.tape as { t: number; price: string }[]).map((point) => ({
             t: point.t,
@@ -197,7 +218,7 @@ export function useMarket(token: string | null) {
     return () => {
       cancel = true
     }
-  }, [token, applySeed, noteServerNow])
+  }, [token, acceptYou, applySeed, markConfirmed, noteServerNow])
 
   useEffect(() => {
     let stopped = false
@@ -226,15 +247,17 @@ export function useMarket(token: string | null) {
           const address = youRef.current?.address ?? null
           const mine = address ? message.payouts.find((payout) => payout.address === address) : null
           const balance = address ? message.balances.find((row) => row.address === address) : null
-          setYou((current) =>
-            current
-              ? {
-                  ...current,
-                  balanceMicros: balance?.balanceMicros ?? current.balanceMicros,
-                  openBets: current.openBets.filter((bet) => bet.roundId !== message.roundId),
-                }
-              : current,
-          )
+          setYou((current) => {
+            if (!current) return current
+            const next = {
+              ...current,
+              balanceMicros: balance?.balanceMicros ?? current.balanceMicros,
+              openBets: current.openBets.filter((bet) => bet.roundId !== message.roundId),
+            }
+            youEpoch.current += 1
+            writeCachedBalance(next)
+            return next
+          })
           if (mine) {
             setNotices((current) =>
               current.some((notice) => notice.roundId === message.roundId) ? current : [...current, message],
@@ -279,7 +302,7 @@ export function useMarket(token: string | null) {
 
   const place = useCallback(
     async (side: Side, stake: string, roundId: number, blockStart: number, windowEndsAt: number) => {
-      if (!tokenRef.current || betLock.current) return
+      if (!confirmedRef.current || !tokenRef.current || betLock.current) return
       const now = Date.now() + offsetRef.current
       if (betMarket(roundId, blockStart, windowEndsAt, now) === "miss") {
         if (now >= windowEndsAt) pushLate()
@@ -303,6 +326,7 @@ export function useMarket(token: string | null) {
       betLock.current = true
       const intent = ++betIntent.current
       const snapshot = current
+      youEpoch.current += 1
       setYou(applyBet(current, { side, stakeMicros, roundId }))
       setPending(true)
       setError(null)
@@ -316,11 +340,13 @@ export function useMarket(token: string | null) {
         const body = (await response.json()) as { error?: string; code?: string; you?: You; board?: Board }
         if (stale()) return
         if (response.status === 401) {
+          youEpoch.current += 1
           setYou(snapshot)
           setUnauthorized(true)
           return
         }
         if (!response.ok) {
+          youEpoch.current += 1
           setYou(snapshot)
           if (body.code === LATE_BET_CODE) {
             pushLate()
@@ -329,10 +355,11 @@ export function useMarket(token: string | null) {
           setError(body.error ?? "Bet failed")
           return
         }
-        if (body.you) setYou(body.you)
+        if (body.you) acceptYou(body.you)
         if (body.board) setBoard(body.board)
       } catch {
         if (stale()) return
+        youEpoch.current += 1
         setYou(snapshot)
         setError("Can't reach the market server")
       } finally {
@@ -342,7 +369,7 @@ export function useMarket(token: string | null) {
         }
       }
     },
-    [pushLate],
+    [acceptYou, pushLate],
   )
 
   const claimGrant = useCallback(async (): Promise<{ ok: true; granted: boolean } | { ok: false; message: string }> => {
@@ -353,7 +380,10 @@ export function useMarket(token: string | null) {
         headers: headers(tokenRef.current),
       })
       const body = (await response.json().catch(() => null)) as { error?: string; granted?: boolean; you?: You } | null
-      if (body?.you) setYou(body.you)
+      if (body?.you) {
+        acceptYou(body.you)
+        markConfirmed(true)
+      }
       if (response.status === 401) {
         setUnauthorized(true)
         return { ok: false, message: "Sign in to receive a grant." }
@@ -363,7 +393,7 @@ export function useMarket(token: string | null) {
     } catch {
       return { ok: false, message: "Can't reach the market server" }
     }
-  }, [])
+  }, [acceptYou, markConfirmed])
 
   const withdrawWallet = useCallback(async (amount: string): Promise<string | null> => {
     if (!tokenRef.current) return "Connect a wallet first"
@@ -374,7 +404,7 @@ export function useMarket(token: string | null) {
         body: JSON.stringify({ amount }),
       })
       const body = await response.json()
-      if (body.you) setYou(body.you)
+      if (body.you) acceptYou(body.you)
       if (response.status === 401) {
         setUnauthorized(true)
         return "Connect a wallet first"
@@ -384,7 +414,7 @@ export function useMarket(token: string | null) {
     } catch {
       return "Can't reach the market server"
     }
-  }, [])
+  }, [acceptYou])
 
   const now = Date.now() + offsetRef.current
   void pulse
@@ -410,6 +440,7 @@ export function useMarket(token: string | null) {
       setLateNotices((current) => current.filter((notice) => notice !== id))
     }, []),
     unauthorized,
+    confirmed,
     now,
     offsetRef,
     priceRef,

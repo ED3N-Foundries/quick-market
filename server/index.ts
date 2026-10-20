@@ -8,7 +8,7 @@ import { configuredChain, loadEnv } from "./env"
 import { handleAgents } from "./agents"
 import { mintToTreasury, requestWithdraw, startCustody, treasuryAddress } from "./custody"
 import { getDb } from "./db"
-import { applyGrant, grantSettings } from "./grant"
+import { applyGrant, grantOnSignIn, grantSettings } from "./grant"
 import { hub } from "./hub"
 import { parseMicros } from "./money"
 import { feedsNow } from "./feeds"
@@ -187,7 +187,6 @@ async function handle(req: Request): Promise<Response> {
     const now = Date.now()
     const session = readSession(req, now)
     if (session.rejected) return json({ error: "Sign in again" }, 401)
-    await grantSignedIn(session.address, now)
     return json({
       serverNow: now,
       feed: feedStatus(now),
@@ -213,7 +212,7 @@ async function handle(req: Request): Promise<Response> {
     })
     if (!result.ok) return json({ error: result.error }, 400)
     const now = Date.now()
-    await grantSignedIn(result.you.address, now)
+    if (grantOnSignIn(result.you.grantAt)) await grantSignedIn(result.you.address, now)
     return json({ token: result.token, you: youFor(result.you.address) })
   }
 
