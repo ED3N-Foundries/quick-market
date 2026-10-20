@@ -120,7 +120,6 @@ test("the live head blends the samples that bracket render time", () => {
   expect(glideSeries(tape, 0, 300, 250, 200, true)).toEqual([
     { t: 0, price: 100, text: "100.00" },
     { t: 50, price: 105 },
-    { t: 250, price: 105 },
   ])
 })
 
@@ -130,7 +129,7 @@ test("a sample newer than render time is not the head", () => {
   expect(glideSeries(tape, 0, 300, 250, 200, true)).toEqual([])
 })
 
-test("past the last sample the live line holds", () => {
+test("past the last sample the live line holds to the delayed head", () => {
   const tape: TapePoint[] = [
     { t: 0, price: 100, text: "100.00" },
     { t: 100, price: 110, text: "110.00" },
@@ -140,6 +139,22 @@ test("past the last sample the live line holds", () => {
     [0, 100],
     [100, 110],
     [200, 110],
+  ])
+})
+
+test("a head still left of the view sits on the left edge", () => {
+  const tape: TapePoint[] = [{ t: 0, price: 100, text: "100.00" }]
+  expect(glideSeries(tape, 500, 1_000, 550, 100, true)).toEqual([{ t: 500, price: 100 }])
+})
+
+test("a head already past the view holds to the right edge", () => {
+  const tape: TapePoint[] = [
+    { t: 0, price: 100, text: "100.00" },
+    { t: 100, price: 110, text: "110.00" },
+  ]
+  expect(glideSeries(tape, 0, 300, 500, 100, true).map((point) => [point.t, point.price])).toEqual([
+    [0, 100],
+    [100, 110],
     [300, 110],
   ])
 })

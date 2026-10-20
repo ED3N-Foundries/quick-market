@@ -458,7 +458,10 @@ function holdThrough(points: TapePoint[], t: number): number | null {
 }
 
 /** Straight live path. Samples newer than `now - delay` stay buffered.
- *  From render time to the right edge the line holds. It does not run a slope past the last sample.
+ *  The line ends at that delayed head. It does not copy the head forward to the clock,
+ *  so the delay is not a flat tail behind the dot. A head still left of the view is
+ *  the left edge only. A head already past the view holds to the right edge: that span
+ *  is history. The line does not run a slope past the last sample.
  */
 export function glideSeries(
   points: TapePoint[],
@@ -500,7 +503,7 @@ export function glideSeries(
   }
   const edge = now >= viewStart && now <= viewEnd ? now : follow && now > viewEnd ? viewEnd : null
   const last = out[out.length - 1]
-  if (edge != null && last && edge > last.t) out.push({ t: edge, price: last.price })
+  if (edge != null && last && edge > last.t && edge <= renderTime) out.push({ t: edge, price: last.price })
   return out
 }
 
