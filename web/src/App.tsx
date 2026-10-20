@@ -219,7 +219,7 @@ export function App() {
         <div className="clock-cluster" data-move={heldSpan?.strike ? "1" : "0"}>
           <PriceReadout priceRef={market.priceRef} strike={heldSpan?.strike ?? null} source={market.ticker.venue} />
           <div className="clock-block">
-            <span className="clock-label">{market.handoff ? "Opens" : heldSpan ? "Settles" : "Bets"}</span>
+            <span className="clock-label">{market.handoff ? "Opens" : heldSpan ? "Settles" : "Buy-in"}</span>
             {market.handoff?.resumeAt ? (
               <Countdown endsAt={market.handoff.resumeAt} offsetRef={market.offsetRef} />
             ) : board && !market.handoff ? (
@@ -1223,7 +1223,7 @@ function History({ token, version, windowMs }: { token: string | null; version: 
   return (
     <section className="history">
       <header>
-        <h2>Previous rounds</h2>
+        <h2>Previous markets (last 10)</h2>
         <div className="filters">
           <button type="button" className={!mine ? "on" : ""} onClick={() => setMine(false)}>
             All

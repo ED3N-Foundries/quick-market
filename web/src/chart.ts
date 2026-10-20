@@ -448,20 +448,12 @@ export function glideHead(points: TapePoint[], renderTime: number): { price: num
   return { price: prev.price, text: prev.text ?? null }
 }
 
-function holdThrough(points: TapePoint[], t: number): number | null {
-  let price: number | null = null
-  for (const point of points) {
-    if (point.t > t) break
-    price = point.price
-  }
-  return price
-}
-
 /** Straight live path. Samples newer than `now - delay` stay buffered.
- *  The line ends at that delayed head. It does not copy the head forward to the clock,
- *  so the delay is not a flat tail behind the dot. A head still left of the view is
- *  the left edge only. A head already past the view holds to the right edge: that span
- *  is history. The line does not run a slope past the last sample.
+ *  Released prints stay at their real times. One live vertex sits on the clock,
+ *  at the blended price, so the dot and the time line are the same place.
+ *  There is no second vertex at the delayed instant. A head still left of the view
+ *  runs from the left edge to the clock. A head already past the view holds to the
+ *  right edge. The line does not run a slope past the last sample.
  */
 export function glideSeries(
   points: TapePoint[],
@@ -475,7 +467,7 @@ export function glideSeries(
   const renderTime = now - Math.max(0, delay)
   const out: TapePoint[] = []
   if (renderTime < viewStart) {
-    const held = holdThrough(points, renderTime)
+    const held = glideAt(points, renderTime)
     if (held == null) return []
     out.push({ t: viewStart, price: held })
   } else {
@@ -495,15 +487,13 @@ export function glideSeries(
       const left = glideAt(points, viewStart)
       if (left != null) out.push({ t: viewStart, price: left })
     }
-    const last = out[out.length - 1]
-    if (renderTime <= viewEnd && (!last || last.t < renderTime)) {
-      const head = glideAt(points, renderTime)
-      if (head != null) out.push({ t: renderTime, price: head })
-    }
   }
   const edge = now >= viewStart && now <= viewEnd ? now : follow && now > viewEnd ? viewEnd : null
   const last = out[out.length - 1]
-  if (edge != null && last && edge > last.t && edge <= renderTime) out.push({ t: edge, price: last.price })
+  if (edge != null && last && edge > last.t) {
+    const price = edge <= renderTime ? last.price : glideAt(points, renderTime)
+    if (price != null) out.push({ t: edge, price })
+  }
   return out
 }
 

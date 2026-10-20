@@ -55,11 +55,16 @@ test("source labels follow the configured feed", () => {
   expect(quotePair("other")).toBe("BTC")
 })
 
-test("formatPrice keeps the feed decimals", () => {
-  expect(formatPrice("67234.10")).toBe("67,234.10")
-  expect(formatPrice("100")).toBe("100.00")
-  expect(formatPrice("100.12345600")).toBe("100.123456")
-  expect(formatPrice("100.5")).toBe("100.50")
+test("formatPrice always shows 4 decimal places", () => {
+  expect(formatPrice("85000.9000")).toBe("85,000.9000")
+  expect(formatPrice("67234.10")).toBe("67,234.1000")
+  expect(formatPrice("100")).toBe("100.0000")
+  expect(formatPrice("100.5")).toBe("100.5000")
+  expect(formatPrice("100.12345600")).toBe("100.1235")
+  expect(formatPrice("100.12344999")).toBe("100.1234")
+  expect(formatPrice("99.99996")).toBe("100.0000")
+  expect(formatPrice("0.00004")).toBe("0.0000")
+  expect(formatPrice("0.00005")).toBe("0.0001")
 })
 
 test("formatPriceDelta subtracts without rounding away decimals", () => {

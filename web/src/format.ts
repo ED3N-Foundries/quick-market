@@ -44,14 +44,20 @@ export function formatSigned(value: number): string {
   return text
 }
 
-/** Keep the feed's fractional digits. At least two places, and no rounding. */
+const PRICE_PLACES = 4
+
+/** Four decimal places, so 85,000.9000 stays as wide as 85,000.9012. Half-up, no float. */
 export function formatPrice(price: string): string {
   const text = price.trim()
   if (!/^\d+(\.\d+)?$/.test(text)) return price
-  const [whole, frac = ""] = text.split(".")
-  const digits = frac.replace(/0+$/, "")
-  const decimals = digits.length < 2 ? digits.padEnd(2, "0") : digits
-  return `${Number(whole).toLocaleString("en-US")}.${decimals}`
+  const [wholeRaw, frac = ""] = text.split(".")
+  const whole = wholeRaw.replace(/^0+(?=\d)/, "")
+  const padded = frac.padEnd(PRICE_PLACES, "0")
+  let digits = `${whole}${padded.slice(0, PRICE_PLACES)}`.replace(/^0+(?=\d)/, "") || "0"
+  if (padded.length > PRICE_PLACES && padded.charAt(PRICE_PLACES) >= "5") digits = (BigInt(digits) + 1n).toString()
+  const raw = digits.padStart(PRICE_PLACES + 1, "0")
+  const cut = raw.length - PRICE_PLACES
+  return `${Number(raw.slice(0, cut)).toLocaleString("en-US")}.${raw.slice(cut)}`
 }
 
 /** Dollar move from a strike. Push is `=$0.00`. */
