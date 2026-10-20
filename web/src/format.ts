@@ -292,14 +292,14 @@ export function payoutMicros(stake: number, side: "up" | "down", up: number, dow
   return stake + takeMicros(stake, side, up, down, feeBps)
 }
 
-/** What one dollar added to `side` can win. A refund is stake back, not a win. */
+/** What one dollar added to `side` gets. A refund is stake back, not a priced quote. */
 export function quoteDollar(side: "up" | "down", up: number, down: number, feeBps: number): string {
   const stake = 1_000_000
   const nextUp = up + (side === "up" ? stake : 0)
   const nextDown = down + (side === "down" ? stake : 0)
   const other = side === "up" ? nextDown : nextUp
   if (other <= 0) return "$1 back"
-  return `$1 wins ${formatMoney(payoutMicros(stake, side, nextUp, nextDown, feeBps))}`
+  return `$1 gets ${formatMoney(payoutMicros(stake, side, nextUp, nextDown, feeBps))}`
 }
 
 export function moneyShare(side: number, total: number): string {

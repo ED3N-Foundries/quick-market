@@ -9,8 +9,8 @@ const full: SideBook = {
   downPlayers: 1,
   upShare: "50%",
   downShare: "50%",
-  upQuote: "$1 wins $1.95",
-  downQuote: "$1 wins $1.95",
+  upQuote: "$1 gets $1.95",
+  downQuote: "$1 gets $1.95",
 }
 
 const emptyNext: SideBook = {
@@ -33,8 +33,8 @@ const filledNext: SideBook = {
   downPlayers: 1,
   upShare: "67%",
   downShare: "33%",
-  upQuote: "$1 wins $1.40",
-  downQuote: "$1 wins $2.80",
+  upQuote: "$1 gets $1.40",
+  downQuote: "$1 gets $2.80",
 }
 
 test("same round updates immediately", () => {

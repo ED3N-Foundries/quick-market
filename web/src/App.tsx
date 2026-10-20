@@ -445,7 +445,7 @@ export function App() {
             <div className="ticket">
               <p className={held.side}>{held.side === "up" ? "▲ Up" : "▼ Down"}</p>
               <p>Amount {formatMoney(held.stakeMicros)}</p>
-              <p>To win {formatMoney(ticketWin)}</p>
+              <p>Gets {formatMoney(ticketWin)}</p>
             </div>
           )}
           <label className="stake-field">
@@ -783,7 +783,7 @@ function BetChip({
       <strong>
         {bet.side === "up" ? "▲ Up" : "▼ Down"} {formatMoney(bet.stakeMicros)}
       </strong>
-      <span>To win {formatMoney(payout)}</span>
+      <span>Gets {formatMoney(payout)}</span>
     </p>
   )
 }
