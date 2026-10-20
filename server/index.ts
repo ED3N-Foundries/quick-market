@@ -1,8 +1,9 @@
 import { existsSync } from "node:fs"
 import { join, normalize, sep } from "node:path"
 import { moneyLabel, requireSepoliaToken, tokenKind, tokenLabel } from "../shared/chain"
-import { loadMarket, type PublicConfig } from "../shared/market"
+import { loadMarket, TICK_MS, type PublicConfig } from "../shared/market"
 import { feeBps, marketMs, MIN_STAKE_MICROS, priceSource, viewMs, windowMs, type PriceSource } from "./config"
+import { takeTick } from "./tick"
 import { configuredChain, loadEnv } from "./env"
 import { handleAgents } from "./agents"
 import { mintToTreasury, requestWithdraw, startCustody, treasuryAddress } from "./custody"
@@ -42,6 +43,7 @@ getDb()
 startCustody()
 
 let pending: { price: string; exchangeTs: number; source: PriceSource } | null = null
+let lastTickAt = 0
 let lastFeed: "live" | "stale" | null = null
 
 const runtime = globalThis as unknown as {
@@ -90,9 +92,12 @@ runtime.quickMarketTimer = setInterval(() => {
     const { settled, broadcastRound } = advance(now)
     const feed = feedStatus(now)
     if (pending) {
-      const print = pending
-      pending = null
-      hub.broadcast({ type: "tick", ...print, serverNow: now, feed })
+      const due = takeTick(pending, lastTickAt, now, TICK_MS)
+      if (due.send) {
+        pending = null
+        lastTickAt = due.lastSentAt
+        hub.broadcast({ type: "tick", ...due.send, serverNow: now, feed })
+      }
     }
     for (const event of settled) hub.broadcast({ type: "settled", serverNow: now, ...event })
     if (broadcastRound || feed !== lastFeed) publishRound(now)

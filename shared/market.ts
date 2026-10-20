@@ -75,6 +75,12 @@ const hardcoded: MarketPreferences = {
 
 export const marketPreferences: MarketPreferences = marketSchema.parse(hardcoded)
 
+/** How often a browser is sent a price. The stored tape is finer than this. */
+export const TICK_MS = 100
+
+/** The live line renders this far behind the synced clock. Market ids do not. */
+export const RENDER_MS = TICK_MS * 2
+
 type PreferenceEnv = {
   CHAIN?: string
   WINDOW_SECONDS?: string

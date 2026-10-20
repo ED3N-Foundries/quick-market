@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { chartMarket, focusPool, followWindow, heldMarket, heldStrike, joinIsLive } from "./focus"
+import { betMarket, chartMarket, focusPool, followWindow, heldMarket, heldStrike, joinIsLive } from "./focus"
 import type { Band, Board, PoolCard } from "./types"
 
 function band(id: number, betsOpen: number, strike: string | null = null): Band {
@@ -100,7 +100,8 @@ test("an open bet keeps one view wide and still focuses that market", () => {
   expect(heldMarket(current, bet, 12_000)?.id).toBe(1)
   expect(followWindow(current, bet, 12_000)).toEqual({ start: 7_000, end: 12_000 })
   expect(focusPool(current, bet, 12_000)?.id).toBe(1)
-  expect(followWindow(current, bet, 15_000)).toEqual({ start: 15_000, end: 20_000 })
+  expect(followWindow(current, bet, 15_000)).toEqual({ start: 10_000, end: 15_000 })
+  expect(followWindow(current, bet, 15_250)).toEqual({ start: 15_000, end: 20_000 })
   expect(heldMarket(current, bet, 15_000)).toBeNull()
 })
 
@@ -148,6 +149,25 @@ test("two open bets stay on the one that settles first", () => {
   expect(heldMarket(current, bets, 12_000)?.id).toBe(1)
   expect(followWindow(current, bets, 12_000)).toEqual({ start: 7_000, end: 12_000 })
   expect(followWindow(current, bets, 12_000).end - followWindow(current, bets, 12_000).start).toBe(5_000)
+})
+
+test("a delay-sized miss stays on the server join id", () => {
+  const current = board()
+  const id = current.join?.id ?? -1
+  const early = followWindow(current, [], current.blockStart - 100)
+  const late = followWindow(current, [], current.windowEndsAt + 100)
+  expect(Math.floor(early.start / 5_000)).toBe(id)
+  expect(Math.floor(late.start / 5_000)).toBe(id)
+  const rolled = followWindow(current, [], current.windowEndsAt + 1_000)
+  expect(Math.floor(rolled.start / 5_000)).toBe(id + 1)
+})
+
+test("a missed window does not become another market id", () => {
+  expect(betMarket(2, 10_000, 15_000, 15_100)).toBe("miss")
+  expect(betMarket(2, 10_000, 15_000, 14_900)).toBe("open")
+  expect(betMarket(3, 10_000, 15_000, 12_000)).toBe("miss")
+  expect(betMarket(2, 15_000, 20_000, 15_100)).toBe("miss")
+  expect(betMarket(3, 15_000, 20_000, 15_100)).toBe("open")
 })
 
 test("the join card is bettable only while the synced clock is inside it", () => {

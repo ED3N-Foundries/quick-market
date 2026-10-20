@@ -124,6 +124,9 @@ export function App() {
         return openBetsRef.current.find((bet) => bet.roundId === held.id)?.side ?? null
       },
       extendLive: () => true,
+      onHead: (text) => {
+        market.priceRef.current = text
+      },
     })
     chartRef.current = next
     setChart(next)

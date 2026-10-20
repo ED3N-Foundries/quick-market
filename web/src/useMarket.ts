@@ -3,6 +3,8 @@ import { LATE_BET_CODE } from "../../shared/bet"
 import { chainFromEnv, moneyLabel, tokenKind, tokenLabel, type ChainConfig } from "../../shared/chain"
 import { marketPreferences } from "../../shared/market"
 import type { TapeChart, TapePoint } from "./chart"
+import { createClock, easeClock, noteClock } from "./clock"
+import { betMarket } from "./focus"
 import type { Handoff, Ticker } from "../../shared/source"
 import { tickerFor } from "../../shared/source"
 import type { Board, Config, SettledMessage, Side, You } from "./types"
@@ -58,6 +60,7 @@ export function useMarket(token: string | null) {
   const [unauthorized, setUnauthorized] = useState(false)
 
   const offsetRef = useRef(0)
+  const clockRef = useRef(createClock())
   const priceRef = useRef<string | null>(null)
   const chartRef = useRef<TapeChart | null>(null)
   const tokenRef = useRef(token)
@@ -87,8 +90,12 @@ export function useMarket(token: string | null) {
     [applySeed],
   )
 
+  const noteServerNow = useCallback((serverNow: number) => {
+    clockRef.current = noteClock(clockRef.current, serverNow, Date.now())
+    offsetRef.current = clockRef.current.offset
+  }, [])
+
   const pushTick = useCallback((t: number, price: string) => {
-    priceRef.current = price
     const point = { t, price: Number(price), text: price }
     const chart = chartRef.current
     if (!seededRef.current || !chart) {
@@ -111,10 +118,10 @@ export function useMarket(token: string | null) {
     setFeed(body.feed)
     if (body.ticker) setTicker(body.ticker)
     setHandoff(body.handoff ?? null)
-    offsetRef.current = body.serverNow - Date.now()
+    noteServerNow(body.serverNow)
     setYou(body.you ?? null)
     return body.you ?? null
-  }, [])
+  }, [noteServerNow])
 
   const waitForBalance = useCallback(
     async (minMicros: number) => {
@@ -132,6 +139,17 @@ export function useMarket(token: string | null) {
   useEffect(() => {
     const id = window.setInterval(() => setPulse((value) => value + 1), 200)
     return () => window.clearInterval(id)
+  }, [])
+
+  useEffect(() => {
+    let raf = 0
+    const loop = () => {
+      clockRef.current = easeClock(clockRef.current, Date.now())
+      offsetRef.current = clockRef.current.offset
+      raf = requestAnimationFrame(loop)
+    }
+    raf = requestAnimationFrame(loop)
+    return () => cancelAnimationFrame(raf)
   }, [])
 
   useEffect(() => {
@@ -156,7 +174,7 @@ export function useMarket(token: string | null) {
         setFeed(body.feed)
         if (body.ticker) setTicker(body.ticker)
         setHandoff(body.handoff ?? null)
-        offsetRef.current = body.serverNow - Date.now()
+        noteServerNow(body.serverNow)
         setYou(body.you ?? null)
         if (!seededRef.current) {
           seedRef.current = (body.tape as { t: number; price: string }[]).map((point) => ({
@@ -173,7 +191,7 @@ export function useMarket(token: string | null) {
     return () => {
       cancel = true
     }
-  }, [token, applySeed])
+  }, [token, applySeed, noteServerNow])
 
   useEffect(() => {
     let stopped = false
@@ -189,7 +207,7 @@ export function useMarket(token: string | null) {
           | { type: "tick"; price: string; exchangeTs: number; serverNow: number; feed: "live" | "stale" }
           | { type: "round"; serverNow: number; feed: "live" | "stale"; board: Board; ticker?: Ticker; handoff?: Handoff | null }
           | SettledMessage
-        if ("serverNow" in message) offsetRef.current = message.serverNow - Date.now()
+        if ("serverNow" in message) noteServerNow(message.serverNow)
         if (message.type === "tick") {
           setFeed(message.feed)
           pushTick(message.exchangeTs, message.price)
@@ -231,7 +249,7 @@ export function useMarket(token: string | null) {
       window.clearTimeout(retry)
       socket?.close()
     }
-  }, [pushTick])
+  }, [pushTick, noteServerNow])
 
   const openKey = you?.openBets.map((bet) => bet.roundId).join(",") ?? ""
   const caught = useRef("")
@@ -257,7 +275,7 @@ export function useMarket(token: string | null) {
     async (side: Side, stake: string, roundId: number, blockStart: number, windowEndsAt: number) => {
       if (!tokenRef.current) return
       const now = Date.now() + offsetRef.current
-      if (!Number.isSafeInteger(roundId) || now < blockStart || now >= windowEndsAt) {
+      if (betMarket(roundId, blockStart, windowEndsAt, now) === "miss") {
         if (now >= windowEndsAt) pushLate()
         return
       }

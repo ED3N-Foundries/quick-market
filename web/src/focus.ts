@@ -1,3 +1,4 @@
+import { RENDER_MS } from "../../shared/market"
 import { betSession, marketScroll } from "./betChart"
 import type { Band, Board, OpenBet, PoolCard } from "./types"
 
@@ -40,7 +41,35 @@ export function chartMarket(board: Board, openBets: OpenBet[], now: number): Ban
  */
 export function followWindow(board: Board, openBets: OpenBet[], now: number, viewMs = 5_000): { start: number; end: number } {
   if (chartMarket(board, openBets, now)) return marketScroll(now, viewMs)
-  return betSession(board, now)
+  return betWindow(board, now)
+}
+
+/** The betting window on screen. A clock within the render delay of the server's
+ *  join id stays on that id. It does not roll into the neighbor, and the price
+ *  delay is not applied to `now`.
+ */
+export function betWindow(board: Board, now: number): { start: number; end: number } {
+  const session = betSession(board, now)
+  const join = board.join
+  if (!join) return session
+  const start = board.blockStart
+  const end = board.windowEndsAt
+  const windowMs = end - start
+  if (!(windowMs > 0) || Math.floor(start / windowMs) !== join.id) return session
+  if (Math.floor(session.start / windowMs) === join.id) return session
+  const skew = Math.min(Math.abs(now - start), Math.abs(now - end))
+  if (skew <= RENDER_MS) return { start, end }
+  return session
+}
+
+/** `open` posts `roundId`. `miss` does not, and it is never a different id. */
+export function betMarket(roundId: number, blockStart: number, windowEndsAt: number, now: number): "open" | "miss" {
+  const windowMs = windowEndsAt - blockStart
+  if (!Number.isSafeInteger(roundId) || roundId < 0 || !(windowMs > 0) || !Number.isFinite(now)) return "miss"
+  if (Math.floor(blockStart / windowMs) !== roundId) return "miss"
+  if (now < blockStart || now >= windowEndsAt) return "miss"
+  if (Math.floor(now / windowMs) !== roundId) return "miss"
+  return "open"
 }
 
 /** Locked strike for the chart horizon. A market that has not struck yet has none. */

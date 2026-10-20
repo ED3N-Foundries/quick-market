@@ -1,3 +1,4 @@
+import { RENDER_MS } from "../../shared/market"
 import { formatPrice } from "./format"
 import { HALF_FLOOR, contentHalf, halfSpan, openPrice, shownHalf, type PricePoint } from "./scale"
 
@@ -151,6 +152,7 @@ export function mountChart(
     getStrike: () => ChartStrike | null
     getAim?: () => "up" | "down" | null
     extendLive: () => boolean
+    onHead?: (text: string | null) => void
   },
 ): TapeChart {
   let points: TapePoint[] = []
@@ -220,7 +222,14 @@ export function mountChart(
     const viewEnd = view.follow ? (clock?.blockEnd ?? now) : view.end
     const span = Math.max(1, viewEnd - viewStart)
     const xAt = (t: number) => PAD.l + ((t - viewStart) / span) * plotW
-    const series = tapeInView(points, viewStart, viewEnd, now, options.extendLive(), view.follow)
+    const live = options.extendLive()
+    const series = live
+      ? glideSeries(points, viewStart, viewEnd, now, RENDER_MS, view.follow)
+      : tapeInView(points, viewStart, viewEnd, now, false, view.follow)
+    if (live && options.onHead) {
+      const shown = glideHead(points, now - RENDER_MS)
+      options.onHead(shown ? (shown.text ?? shown.price.toFixed(4)) : null)
+    }
     const strike = options.getStrike()
     const aim = options.getAim?.() ?? null
     const timed =
@@ -401,6 +410,98 @@ export function mountChart(
       return { price: point.price, at: point.t, previous }
     },
   }
+}
+
+/** Price at `t`. A time between two samples is the straight blend. Past the last sample, hold it.
+ *  A time before the first sample has no price.
+ */
+export function glideAt(points: { t: number; price: number }[], t: number): number | null {
+  let prev: { t: number; price: number } | null = null
+  for (const point of points) {
+    if (point.t === t) return point.price
+    if (point.t > t) {
+      if (!prev || !(point.t > prev.t)) return prev ? prev.price : null
+      const span = point.t - prev.t
+      return prev.price + ((t - prev.t) / span) * (point.price - prev.price)
+    }
+    prev = point
+  }
+  return prev ? prev.price : null
+}
+
+/** The price drawn at `renderTime`. `text` is set only when that instant sits on a stored print. */
+export function glideHead(points: TapePoint[], renderTime: number): { price: number; text: string | null } | null {
+  let prev: TapePoint | null = null
+  for (const point of points) {
+    if (point.t === renderTime) return { price: point.price, text: point.text ?? null }
+    if (point.t > renderTime) {
+      if (!prev || !(point.t > prev.t)) return null
+      const span = point.t - prev.t
+      return {
+        price: prev.price + ((renderTime - prev.t) / span) * (point.price - prev.price),
+        text: null,
+      }
+    }
+    prev = point
+  }
+  if (!prev) return null
+  return { price: prev.price, text: prev.text ?? null }
+}
+
+function holdThrough(points: TapePoint[], t: number): number | null {
+  let price: number | null = null
+  for (const point of points) {
+    if (point.t > t) break
+    price = point.price
+  }
+  return price
+}
+
+/** Straight live path. Samples newer than `now - delay` stay buffered.
+ *  From render time to the right edge the line holds. It does not run a slope past the last sample.
+ */
+export function glideSeries(
+  points: TapePoint[],
+  viewStart: number,
+  viewEnd: number,
+  now: number,
+  delay: number,
+  follow: boolean,
+): TapePoint[] {
+  if (!points.length || !(viewEnd > viewStart)) return []
+  const renderTime = now - Math.max(0, delay)
+  const out: TapePoint[] = []
+  if (renderTime < viewStart) {
+    const held = holdThrough(points, renderTime)
+    if (held == null) return []
+    out.push({ t: viewStart, price: held })
+  } else {
+    const limit = Math.min(viewEnd, renderTime)
+    let started = false
+    for (const point of points) {
+      if (point.t < viewStart) continue
+      if (point.t > limit) break
+      if (!started && point.t > viewStart) {
+        const left = glideAt(points, viewStart)
+        if (left != null) out.push({ t: viewStart, price: left })
+      }
+      started = true
+      out.push(point)
+    }
+    if (!started) {
+      const left = glideAt(points, viewStart)
+      if (left != null) out.push({ t: viewStart, price: left })
+    }
+    const last = out[out.length - 1]
+    if (renderTime <= viewEnd && (!last || last.t < renderTime)) {
+      const head = glideAt(points, renderTime)
+      if (head != null) out.push({ t: renderTime, price: head })
+    }
+  }
+  const edge = now >= viewStart && now <= viewEnd ? now : follow && now > viewEnd ? viewEnd : null
+  const last = out[out.length - 1]
+  if (edge != null && last && edge > last.t) out.push({ t: edge, price: last.price })
+  return out
 }
 
 /** Step series for one view. A print from before the window is held at the left edge.

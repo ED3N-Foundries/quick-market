@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { crossTime, inTheMoney, pieceBaseline, priceInUse, priceY, ridePoints, scaleFrame, strikeCaption, tapeInView, type TapePoint } from "./chart"
+import { crossTime, glideHead, glideSeries, inTheMoney, pieceBaseline, priceInUse, priceY, ridePoints, scaleFrame, strikeCaption, tapeInView, type TapePoint } from "./chart"
 import { contentHalf } from "./scale"
 
 const points: TapePoint[] = [
@@ -109,6 +109,39 @@ test("a step that crosses the strike splits once", () => {
   )
   expect(pieceBaseline(10_000, at, at, frame.before, frame.after)).toBe(100)
   expect(pieceBaseline(at, 16_000, at, frame.before, frame.after)).toBe(90)
+})
+
+test("the live head blends the samples that bracket render time", () => {
+  const tape: TapePoint[] = [
+    { t: 0, price: 100, text: "100.00" },
+    { t: 100, price: 110, text: "110.00" },
+  ]
+  expect(glideHead(tape, 50)).toEqual({ price: 105, text: null })
+  expect(glideSeries(tape, 0, 300, 250, 200, true)).toEqual([
+    { t: 0, price: 100, text: "100.00" },
+    { t: 50, price: 105 },
+    { t: 250, price: 105 },
+  ])
+})
+
+test("a sample newer than render time is not the head", () => {
+  const tape: TapePoint[] = [{ t: 100, price: 110, text: "110.00" }]
+  expect(glideHead(tape, 50)).toBeNull()
+  expect(glideSeries(tape, 0, 300, 250, 200, true)).toEqual([])
+})
+
+test("past the last sample the live line holds", () => {
+  const tape: TapePoint[] = [
+    { t: 0, price: 100, text: "100.00" },
+    { t: 100, price: 110, text: "110.00" },
+  ]
+  expect(glideHead(tape, 200)).toEqual({ price: 110, text: "110.00" })
+  expect(glideSeries(tape, 0, 300, 400, 200, true).map((point) => [point.t, point.price])).toEqual([
+    [0, 100],
+    [100, 110],
+    [200, 110],
+    [300, 110],
+  ])
 })
 
 test("in the money is the bet side of the strike, and a push is not", () => {
