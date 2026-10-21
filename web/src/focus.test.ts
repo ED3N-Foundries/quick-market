@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { betMarket, chartMarket, focusPool, followWindow, heldMarket, heldStrike, joinIsLive } from "./focus"
+import { chartMarket, focusPool, followWindow, heldMarket, heldStrike } from "./focus"
 import type { Band, Board, PoolCard } from "./types"
 
 function band(id: number, betsOpen: number, strike: string | null = null): Band {
@@ -162,19 +162,3 @@ test("a delay-sized miss stays on the server join id", () => {
   expect(Math.floor(rolled.start / 5_000)).toBe(id + 1)
 })
 
-test("a missed window does not become another market id", () => {
-  expect(betMarket(2, 10_000, 15_000, 15_100)).toBe("miss")
-  expect(betMarket(2, 10_000, 15_000, 14_900)).toBe("open")
-  expect(betMarket(3, 10_000, 15_000, 12_000)).toBe("miss")
-  expect(betMarket(2, 15_000, 20_000, 15_100)).toBe("miss")
-  expect(betMarket(3, 15_000, 20_000, 15_100)).toBe("open")
-})
-
-test("the join card is bettable only while the synced clock is inside it", () => {
-  const current = board()
-  expect(joinIsLive(current, 10_000)).toBe(true)
-  expect(joinIsLive(current, 14_999)).toBe(true)
-  expect(joinIsLive(current, 15_000)).toBe(false)
-  expect(joinIsLive(current, 9_999)).toBe(false)
-  expect(joinIsLive({ ...current, join: null }, 12_000)).toBe(false)
-})

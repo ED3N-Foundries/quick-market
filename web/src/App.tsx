@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useSyncExternalStore, type PointerEvent as
 import { LATE_BET_ERROR } from "../../shared/bet"
 import { MINT_CONFIRMATIONS } from "../../shared/mint"
 import { mountChart, priceY, type ChartScale, type TapeChart, type TapeSample } from "./chart"
-import { chartMarket, focusPool, followWindow, heldMarket, heldStrike, joinIsLive } from "./focus"
+import { chartMarket, focusPool, followWindow, heldMarket, heldStrike } from "./focus"
 import {
   chainBadgeText,
   chainMenuLabel,
@@ -181,15 +181,6 @@ export function App() {
   }, [board, market.offsetRef])
   const heldSpan = board ? heldMarket(board, openBets, now) : null
   const focus = focusPool(board, openBets, now)
-  const canBet =
-    market.confirmed &&
-    !!you &&
-    !heldSpan &&
-    !!board &&
-    joinIsLive(board, now) &&
-    market.feed === "live" &&
-    !market.pending &&
-    !market.handoff
   const total = (focus?.poolUpMicros ?? 0) + (focus?.poolDownMicros ?? 0)
   const held = openBets.find((bet) => bet.roundId === focus?.id) ?? null
   const upQuote = focus ? quoteDollar("up", focus.poolUpMicros, focus.poolDownMicros, market.config.feeBps) : "—"
@@ -205,6 +196,15 @@ export function App() {
     upQuote,
     downQuote,
   })
+  const betRoundId = figures.book.roundId
+  const canBet =
+    market.confirmed &&
+    !!you &&
+    !heldSpan &&
+    betRoundId !== null &&
+    market.feed === "live" &&
+    !market.pending &&
+    !market.handoff
   const ticketWin = held ? payoutMicros(held.stakeMicros, held.side, focus?.poolUpMicros ?? 0, focus?.poolDownMicros ?? 0, market.config.feeBps) : 0
   const fundMicros = parseAmountMicros(fundAmount)
   const testnet = market.config.tokenKind === "qm" || isTestnetChain(market.config.chainId)
@@ -337,8 +337,8 @@ export function App() {
           fadeKey={figures.gen}
           disabled={!canBet}
           onBet={() => {
-            if (!board?.join) return
-            void market.place("up", stake, board.join.id, board.blockStart, board.windowEndsAt)
+            if (betRoundId === null) return
+            void market.place("up", stake, betRoundId)
           }}
         />
         <div className="stake">
@@ -521,8 +521,8 @@ export function App() {
           fadeKey={figures.gen}
           disabled={!canBet}
           onBet={() => {
-            if (!board?.join) return
-            void market.place("down", stake, board.join.id, board.blockStart, board.windowEndsAt)
+            if (betRoundId === null) return
+            void market.place("down", stake, betRoundId)
           }}
         />
       </section>

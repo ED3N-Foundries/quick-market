@@ -9,7 +9,6 @@ import type { TapeChart, TapePoint } from "./chart"
 import { createClock, easeClock, noteClock } from "./clock"
 import { parseAmountMicros } from "./format"
 import { grantLanded } from "./grantWatch"
-import { betMarket } from "./focus"
 import type { Handoff, Ticker } from "../../shared/source"
 import { tickerFor } from "../../shared/source"
 import type { Board, Config, SettledMessage, Side, You } from "./types"
@@ -303,13 +302,11 @@ export function useMarket(token: string | null) {
   }, [])
 
   const place = useCallback(
-    async (side: Side, stake: string, roundId: number, blockStart: number, windowEndsAt: number) => {
+    async (side: Side, stake: string, roundId: number) => {
       if (!confirmedRef.current || !tokenRef.current || betLock.current) return
-      const now = Date.now() + offsetRef.current
-      if (betMarket(roundId, blockStart, windowEndsAt, now) === "miss") {
-        if (now >= windowEndsAt) pushLate()
-        return
-      }
+      // The id is the market painted with this click. A clock that has already
+      // crossed still posts it. The server rejects a window that is not open.
+      if (!Number.isSafeInteger(roundId) || roundId < 0) return
       const current = youRef.current
       if (!current) return
       const stakeMicros = parseAmountMicros(stake)
@@ -325,14 +322,25 @@ export function useMarket(token: string | null) {
         setError("Insufficient balance")
         return
       }
+      const windowMs = configRef.current.windowSeconds * 1000
+      const openAt = roundId * windowMs
+      const now = Date.now() + offsetRef.current
+      const windowOpen = windowMs > 0 && now >= openAt && now < openAt + windowMs
       betLock.current = true
       const intent = ++betIntent.current
       const snapshot = current
-      youEpoch.current += 1
-      setYou(applyBet(current, { side, stakeMicros, roundId }))
+      if (windowOpen) {
+        youEpoch.current += 1
+        setYou(applyBet(current, { side, stakeMicros, roundId }))
+      }
       setPending(true)
       setError(null)
       const stale = () => intent !== betIntent.current
+      const restore = () => {
+        if (!windowOpen) return
+        youEpoch.current += 1
+        setYou(snapshot)
+      }
       try {
         const response = await fetch("/api/bets", {
           method: "POST",
@@ -342,14 +350,12 @@ export function useMarket(token: string | null) {
         const body = (await response.json()) as { error?: string; code?: string; you?: You; board?: Board }
         if (stale()) return
         if (response.status === 401) {
-          youEpoch.current += 1
-          setYou(snapshot)
+          restore()
           setUnauthorized(true)
           return
         }
         if (!response.ok) {
-          youEpoch.current += 1
-          setYou(snapshot)
+          restore()
           if (body.code === LATE_BET_CODE) {
             pushLate()
             return
@@ -361,8 +367,7 @@ export function useMarket(token: string | null) {
         if (body.board) setBoard(body.board)
       } catch {
         if (stale()) return
-        youEpoch.current += 1
-        setYou(snapshot)
+        restore()
         setError("Can't reach the market server")
       } finally {
         if (!stale()) {

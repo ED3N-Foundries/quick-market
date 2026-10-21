@@ -62,31 +62,12 @@ export function betWindow(board: Board, now: number): { start: number; end: numb
   return session
 }
 
-/** `open` posts `roundId`. `miss` does not, and it is never a different id. */
-export function betMarket(roundId: number, blockStart: number, windowEndsAt: number, now: number): "open" | "miss" {
-  const windowMs = windowEndsAt - blockStart
-  if (!Number.isSafeInteger(roundId) || roundId < 0 || !(windowMs > 0) || !Number.isFinite(now)) return "miss"
-  if (Math.floor(blockStart / windowMs) !== roundId) return "miss"
-  if (now < blockStart || now >= windowEndsAt) return "miss"
-  if (Math.floor(now / windowMs) !== roundId) return "miss"
-  return "open"
-}
-
 /** Locked strike for the chart horizon. A market that has not struck yet has none. */
 export function heldStrike(market: { strike: string | null } | null): { price: number; text: string } | null {
   if (!market?.strike) return null
   const price = Number(market.strike)
   if (!Number.isFinite(price)) return null
   return { price, text: market.strike }
-}
-
-/** The join card is the window the synced clock is still inside. */
-export function joinIsLive(board: Board, now: number): boolean {
-  if (!board.join) return false
-  const windowMs = board.windowEndsAt - board.blockStart
-  if (windowMs <= 0) return false
-  if (now < board.blockStart || now >= board.windowEndsAt) return false
-  return board.join.id === Math.floor(now / windowMs)
 }
 
 /** Pool shown in the trade panel. A held market wins. Otherwise the open betting window. */
