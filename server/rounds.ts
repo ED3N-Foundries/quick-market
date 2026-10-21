@@ -1,7 +1,9 @@
 import { LATE_BET_CODE, LATE_BET_ERROR } from "../shared/bet"
+import { GRANT_FOLLOW_MS, MINT_CONFIRMATIONS } from "../shared/mint"
 import { handoffBanner, tickerFor, type Handoff, type Ticker } from "../shared/source"
 import { clockAt, feeBps, LIVE_MS, marketBounds, MIN_STAKE_MICROS, priceSource, TAPE_MS, windowAccepts, windowMs, type PriceSource } from "./config"
 import { getDb } from "./db"
+import { grantWaiting } from "./grantWait"
 import { normalizeAddress } from "./money"
 import { settleRound, type Resolution, type Side } from "./settle"
 
@@ -51,10 +53,17 @@ export type OpenBet = {
   stakeMicros: number
 }
 
+export type GrantPending = {
+  startedAt: number
+  txHash: string | null
+  confirmations: number
+}
+
 export type You = {
   address: string
   balanceMicros: number
   grantAt: number | null
+  grantPending: GrantPending | null
   openBets: OpenBet[]
 }
 
@@ -373,12 +382,41 @@ function openBetsFor(address: string): OpenBet[] {
   return rows.map((row) => ({ roundId: row.round_id, side: row.side, stakeMicros: row.stake_micros }))
 }
 
+function grantPendingFrom(pendingAt: number | null, txHash: string | null): GrantPending | null {
+  if (pendingAt == null) return null
+  return { startedAt: pendingAt, txHash, confirmations: MINT_CONFIRMATIONS }
+}
+
+/** A crashed mint must not stick. A live waiter in this process keeps the slot. */
+function releaseStaleGrant(address: string, now = Date.now()) {
+  const row = getDb().query("SELECT grant_pending_at FROM users WHERE address = ?").get(address) as
+    | { grant_pending_at: number | null }
+    | null
+  const pendingAt = row?.grant_pending_at
+  if (pendingAt == null) return
+  if (now - pendingAt <= GRANT_FOLLOW_MS) return
+  const key = normalizeAddress(address) ?? address
+  if (grantWaiting(key)) return
+  getDb()
+    .query("UPDATE users SET grant_pending_at = NULL, grant_tx = NULL WHERE address = ? AND grant_pending_at = ?")
+    .run(address, pendingAt)
+}
+
 export function youFor(address: string): You | null {
-  const row = getDb().query("SELECT balance_micros, grant_at FROM users WHERE address = ?").get(address) as
-    | { balance_micros: number; grant_at: number | null }
+  releaseStaleGrant(address)
+  const row = getDb()
+    .query("SELECT balance_micros, grant_at, grant_pending_at, grant_tx FROM users WHERE address = ?")
+    .get(address) as
+    | { balance_micros: number; grant_at: number | null; grant_pending_at: number | null; grant_tx: string | null }
     | null
   if (!row) return null
-  return { address, balanceMicros: row.balance_micros, grantAt: row.grant_at, openBets: openBetsFor(address) }
+  return {
+    address,
+    balanceMicros: row.balance_micros,
+    grantAt: row.grant_at,
+    grantPending: grantPendingFrom(row.grant_pending_at, row.grant_tx),
+    openBets: openBetsFor(address),
+  }
 }
 
 export function ensureUser(address: string): You {
@@ -387,7 +425,7 @@ export function ensureUser(address: string): You {
   getDb()
     .query("INSERT INTO users (address, balance_micros, created_at, is_bot) VALUES (?, 0, ?, 0)")
     .run(address, Date.now())
-  return { address, balanceMicros: 0, grantAt: null, openBets: [] }
+  return { address, balanceMicros: 0, grantAt: null, grantPending: null, openBets: [] }
 }
 
 export function credit(
@@ -448,11 +486,21 @@ export function placeBet(input: {
       if (!round || round.status !== "open") throw new BetError("Betting is closed")
       if (feedStatus(input.now) !== "live") throw new BetError("Price feed is delayed")
 
+      releaseStaleGrant(input.address, input.now)
       const row = getDb()
-        .query("SELECT balance_micros, grant_at, is_bot FROM users WHERE address = ?")
-        .get(input.address) as { balance_micros: number; grant_at: number | null; is_bot: number } | null
+        .query("SELECT balance_micros, grant_at, is_bot, grant_pending_at, grant_tx FROM users WHERE address = ?")
+        .get(input.address) as
+        | {
+            balance_micros: number
+            grant_at: number | null
+            is_bot: number
+            grant_pending_at: number | null
+            grant_tx: string | null
+          }
+        | null
       let balance = row?.balance_micros ?? 0
       const grantAt = row?.grant_at ?? null
+      const grantPending = grantPendingFrom(row?.grant_pending_at ?? null, row?.grant_tx ?? null)
       const bot = row?.is_bot === 1
       if (!row) {
         getDb()
@@ -494,7 +542,13 @@ export function placeBet(input: {
         openBets.push({ roundId: id, side: input.side, stakeMicros: input.stakeMicros })
         openBets.sort((left, right) => left.roundId - right.roundId)
       }
-      const you: You = { address: input.address, balanceMicros: balance - input.stakeMicros, grantAt, openBets }
+      const you: You = {
+        address: input.address,
+        balanceMicros: balance - input.stakeMicros,
+        grantAt,
+        grantPending,
+        openBets,
+      }
       return you
     })
     return { ok: true, you: tx() }

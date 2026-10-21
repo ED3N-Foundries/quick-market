@@ -41,10 +41,40 @@ import {
   takeLoginQuery,
 } from "./phantomConnect"
 import { bindPhantomSdk, phantomConnector } from "./phantomConnector"
+import type { GrantPending, You } from "./types"
 
 const SESSION_KEY = "qm.session"
 const SIGN_PROMPT = "Sign in to trade"
 const CONNECT_MISSED = "Failed to connect to any supported wallet provider"
+
+function sessionYou(value: unknown): You | null {
+  if (!value || typeof value !== "object") return null
+  const row = value as Partial<You>
+  const balanceMicros = row.balanceMicros
+  if (typeof row.address !== "string" || typeof balanceMicros !== "number" || !Number.isSafeInteger(balanceMicros) || !Array.isArray(row.openBets)) {
+    return null
+  }
+  const pending = row.grantPending
+  let grantPending: GrantPending | null = null
+  if (pending && typeof pending === "object") {
+    const startedAt = pending.startedAt
+    const confirmations = pending.confirmations
+    if (typeof startedAt === "number" && Number.isSafeInteger(startedAt)) {
+      grantPending = {
+        startedAt,
+        txHash: typeof pending.txHash === "string" ? pending.txHash : null,
+        confirmations: typeof confirmations === "number" && Number.isSafeInteger(confirmations) ? confirmations : 3,
+      }
+    }
+  }
+  return {
+    address: row.address,
+    balanceMicros,
+    grantAt: typeof row.grantAt === "number" ? row.grantAt : null,
+    grantPending,
+    openBets: row.openBets,
+  }
+}
 
 export type WalletSession = {
   chainError: string | null
@@ -53,6 +83,7 @@ export type WalletSession = {
   label: string | null
   chainId: number | undefined
   token: string | null
+  signedYou: You | null
   signing: boolean
   loginPhase: LoginPhase | null
   signError: string | null
@@ -72,6 +103,7 @@ const missing: WalletSession = {
   label: null,
   chainId: undefined,
   token: null,
+  signedYou: null,
   signing: false,
   loginPhase: null,
   signError: null,
@@ -193,6 +225,7 @@ function Bridge({ children }: { children: ReactNode }) {
   const { sdk, isConnected, isLoading, addresses, user } = usePhantom()
   const { connect: connectPhantom } = usePhantomConnect()
   const [token, setToken] = useState<string | null>(null)
+  const [signedYou, setSignedYou] = useState<You | null>(null)
   const [signing, setSigning] = useState(false)
   const [loginPhase, setLoginPhase] = useState<LoginPhase | null>(null)
   const [signError, setSignError] = useState<string | null>(null)
@@ -280,6 +313,7 @@ function Bridge({ children }: { children: ReactNode }) {
         }
       }
       setToken(null)
+      setSignedYou(null)
       setSignError(null)
       setConnectError(null)
       setSigning(false)
@@ -295,6 +329,7 @@ function Bridge({ children }: { children: ReactNode }) {
       return
     }
     setToken(null)
+    setSignedYou(null)
     if (stored && stored.address !== lower) {
       sessionStorage.removeItem(SESSION_KEY)
       void fetch("/api/session", { method: "DELETE", headers: { authorization: `Bearer ${stored.token}` } })
@@ -330,6 +365,7 @@ function Bridge({ children }: { children: ReactNode }) {
     const epoch = ++signEpoch.current
     const stale = () => signEpoch.current !== epoch
     setSigning(true)
+    setSignedYou(null)
     setLoginPhase(forceConnect || !sdkRef.current?.isConnected() ? "phantom" : "sign")
     setSignError(null)
     setConnectError(null)
@@ -384,10 +420,13 @@ function Bridge({ children }: { children: ReactNode }) {
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ address: lower, signature: signed.signature, issued: signed.issued }),
         })
-        const body = (await response.json()) as { token?: string; error?: string }
+        const body = (await response.json()) as { token?: string; error?: string; you?: unknown }
         if (!response.ok || !body.token) throw new Error(body.error ?? "Sign-in failed")
         sessionStorage.setItem(SESSION_KEY, JSON.stringify({ token: body.token, address: lower, chainId: expected }))
-        if (!stale()) setToken(body.token)
+        if (!stale()) {
+          setSignedYou(sessionYou(body.you))
+          setToken(body.token)
+        }
       } catch (error: unknown) {
         if (!stale()) setSignError(signFault(error))
       } finally {
@@ -441,6 +480,7 @@ function Bridge({ children }: { children: ReactNode }) {
     label,
     chainId: walletChainId,
     token: activeToken,
+    signedYou,
     signing,
     loginPhase,
     signError,

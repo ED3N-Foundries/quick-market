@@ -1,7 +1,8 @@
 import { beforeEach, expect, test } from "bun:test"
 import { getDb, useDatabase } from "./db"
+import { GRANT_FOLLOW_MS, MINT_CONFIRMATIONS } from "../shared/mint"
 import { loadMarket } from "../shared/market"
-import { applyGrant, cutoverAmount, grantDue, grantOnSignIn, grantSettings, settleGrantRequest } from "./grant"
+import { applyGrant, cutoverAmount, grantDue, grantOnSignIn, grantSettings, noteGrantTx, settleGrantRequest } from "./grant"
 import { youFor } from "./rounds"
 
 const who = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -25,7 +26,7 @@ test("a grant is 100, skips the same hour, and does not bank missed hours", asyn
   expect(minted).toEqual([100_000_000, 100_000_000])
 })
 
-test("a failed mint does not change the balance", async () => {
+test("a failed mint does not change the balance and clears the slot", async () => {
   const mint = async () => {
     throw new Error("rpc down")
   }
@@ -39,7 +40,103 @@ test("a failed mint does not change the balance", async () => {
       mint,
     }),
   ).rejects.toThrow("rpc down")
-  expect(youFor(who)).toBeNull()
+  expect(youFor(who)?.balanceMicros).toBe(0)
+  expect(youFor(who)?.grantAt).toBeNull()
+  expect(youFor(who)?.grantPending).toBeNull()
+  const again = await applyGrant({
+    address: who,
+    now: 1,
+    chainKey: "base-sepolia",
+    amount: 100_000_000,
+    intervalMs: hour,
+    mint: async () => {},
+  })
+  expect(again).toBe(true)
+  expect(youFor(who)?.balanceMicros).toBe(100_000_000)
+})
+
+test("a second grant does not mint while one is still in flight", async () => {
+  const hash = `0x${"ab".repeat(32)}`
+  let release: () => void = () => {}
+  const gate = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  let mints = 0
+  const first = applyGrant({
+    address: who,
+    now: 0,
+    chainKey: "base-sepolia",
+    amount: 100_000_000,
+    intervalMs: hour,
+    mint: async () => {
+      mints += 1
+      noteGrantTx(who, hash)
+      await gate
+    },
+  })
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  expect(mints).toBe(1)
+  expect(youFor(who)?.grantPending).toEqual({ startedAt: 0, txHash: hash, confirmations: MINT_CONFIRMATIONS })
+  const second = await applyGrant({
+    address: who,
+    now: 0,
+    chainKey: "base-sepolia",
+    amount: 100_000_000,
+    intervalMs: hour,
+    mint: async () => {
+      mints += 1
+    },
+  })
+  expect(second).toBe(false)
+  expect(mints).toBe(1)
+  release()
+  expect(await first).toBe(true)
+  expect(youFor(who)?.grantPending).toBeNull()
+  expect(youFor(who)?.grantAt).toBe(0)
+  expect(youFor(who)?.balanceMicros).toBe(100_000_000)
+})
+
+test("a stale pending grant clears on read when this process is not minting", () => {
+  const started = Date.now() - GRANT_FOLLOW_MS - 1
+  getDb()
+    .query(
+      "INSERT INTO users (address, balance_micros, created_at, is_bot, grant_pending_at, grant_tx) VALUES (?, 0, 0, 0, ?, ?)",
+    )
+    .run(who, started, "0xabc")
+  expect(youFor(who)?.grantPending).toBeNull()
+  const row = getDb().query("SELECT grant_pending_at, grant_tx, grant_at FROM users WHERE address = ?").get(who) as {
+    grant_pending_at: number | null
+    grant_tx: string | null
+    grant_at: number | null
+  }
+  expect(row.grant_pending_at).toBeNull()
+  expect(row.grant_tx).toBeNull()
+  expect(row.grant_at).toBeNull()
+})
+
+test("a pending grant stays while this process is still minting", async () => {
+  let release: () => void = () => {}
+  const gate = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const now = Date.now()
+  const first = applyGrant({
+    address: who,
+    now,
+    chainKey: "base-sepolia",
+    amount: 100_000_000,
+    intervalMs: hour,
+    mint: async () => {
+      await gate
+    },
+  })
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  getDb()
+    .query("UPDATE users SET grant_pending_at = ? WHERE address = ?")
+    .run(Date.now() - GRANT_FOLLOW_MS - 1, who)
+  expect(youFor(who)?.grantPending?.confirmations).toBe(MINT_CONFIRMATIONS)
+  release()
+  expect(await first).toBe(true)
 })
 
 test("a bot session does not take the grant", async () => {

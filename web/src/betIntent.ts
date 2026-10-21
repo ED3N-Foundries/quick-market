@@ -14,6 +14,7 @@ export function applyBet(you: You, input: { side: Side; stakeMicros: number; rou
     address: you.address,
     balanceMicros: you.balanceMicros - input.stakeMicros,
     grantAt: you.grantAt,
+    grantPending: you.grantPending,
     openBets,
   }
 }

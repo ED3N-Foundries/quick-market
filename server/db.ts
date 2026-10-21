@@ -9,7 +9,9 @@ CREATE TABLE IF NOT EXISTS users (
   balance_micros INTEGER NOT NULL,
   created_at INTEGER NOT NULL,
   is_bot INTEGER NOT NULL DEFAULT 0,
-  grant_at INTEGER
+  grant_at INTEGER,
+  grant_pending_at INTEGER,
+  grant_tx TEXT
 );
 
 CREATE TABLE IF NOT EXISTS rounds (
@@ -118,6 +120,12 @@ function openDatabase(path: string): Database {
   }
   if (!columns.some((column) => column.name === "grant_at")) {
     db.exec("ALTER TABLE users ADD COLUMN grant_at INTEGER")
+  }
+  if (!columns.some((column) => column.name === "grant_pending_at")) {
+    db.exec("ALTER TABLE users ADD COLUMN grant_pending_at INTEGER")
+  }
+  if (!columns.some((column) => column.name === "grant_tx")) {
+    db.exec("ALTER TABLE users ADD COLUMN grant_tx TEXT")
   }
   migrateCustody(db)
   return db

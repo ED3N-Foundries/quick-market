@@ -7,6 +7,7 @@ function you(over: Partial<You> = {}): You {
     address: "0xabc",
     balanceMicros: 5_000_000,
     grantAt: null,
+    grantPending: null,
     openBets: [],
     ...over,
   }
@@ -27,6 +28,12 @@ test("a same-side add increases the open stake", () => {
   expect(next.balanceMicros).toBe(3_000_000)
   expect(next.openBets).toEqual([{ roundId: 3, side: "up", stakeMicros: 3_000_000 }])
   expect(snapshot.openBets[0]?.stakeMicros).toBe(1_000_000)
+})
+
+test("a bet keeps the in-flight grant", () => {
+  const pending = { startedAt: 5, txHash: null, confirmations: 3 }
+  const next = applyBet(you({ grantPending: pending }), { side: "up", stakeMicros: 1_000_000, roundId: 3 })
+  expect(next.grantPending).toEqual(pending)
 })
 
 test("reverting uses the snapshot the apply left untouched", () => {

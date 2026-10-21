@@ -631,6 +631,18 @@ body {
   color: var(--muted);
   font-size: 12px;
 }
+button.grant-status {
+  border: 0;
+  background: none;
+  padding: 0;
+  border-radius: 0;
+  color: var(--text);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+  text-align: left;
+}
+button.grant-status:disabled { cursor: default; }
 .grant-copy { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.4; }
 .grant-submit { width: 100%; }
 .grant-progress {
@@ -923,23 +935,45 @@ a.grant-tx:hover { color: var(--text); }
 .fee { margin-bottom: 0; }
 
 .tray, .history { margin-top: 12px; padding: 14px 16px 8px; }
-.tray summary, .history header {
+.tray summary, .history summary {
   display: flex;
-  justify-content: space-between;
   align-items: center;
   gap: 12px;
-}
-.tray summary {
   cursor: pointer;
   list-style: none;
 }
-.tray summary::-webkit-details-marker { display: none; }
-.tray summary::before {
+.tray summary { justify-content: space-between; }
+.history summary { justify-content: flex-start; }
+.tray summary::-webkit-details-marker,
+.history summary::-webkit-details-marker { display: none; }
+.tray summary::marker,
+.history summary::marker { content: ""; }
+.tray summary::before,
+.history summary::before {
   content: "▸";
   color: var(--muted);
 }
-.tray[open] summary::before { content: "▾"; }
+.tray[open] summary::before,
+.history[open] summary::before { content: "▾"; }
 .tray summary span { margin-left: auto; }
+.history summary h2 {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+.history-count {
+  color: var(--muted);
+  font-weight: 500;
+}
+.history-marks {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 8px;
+  font-size: 14px;
+}
+.history .filters { justify-content: flex-end; margin-top: 10px; }
 h2 { margin: 0; font-size: 15px; font-weight: 600; }
 .tray header span, .empty { color: var(--muted); }
 .tray ul, .detail ul { list-style: none; margin: 8px 0 10px; padding: 0; }
@@ -1135,6 +1169,7 @@ tr.open td { color: var(--text); }
   .connect-error { margin: 8px 0 0; }
   .footer { grid-template-columns: 1fr; }
   .share { font-size: 38px; margin-top: 6px; }
+  .history-count { display: none; }
   table { display: block; overflow-x: auto; }
 }
 

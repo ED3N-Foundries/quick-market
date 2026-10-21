@@ -9,7 +9,7 @@ import { handleAgents } from "./agents"
 import { mintToTreasury, requestWithdraw, startCustody, treasuryAddress } from "./custody"
 import { getDb } from "./db"
 import { MINT_CONFIRMATIONS } from "../shared/mint"
-import { applyGrant, grantOnSignIn, grantSettings, settleGrantRequest } from "./grant"
+import { grantOnSignIn, grantSettings, noteGrantTx, settleGrantRequest, startGrant } from "./grant"
 import { hub } from "./hub"
 import { parseMicros } from "./money"
 import { feedsNow } from "./feeds"
@@ -150,23 +150,6 @@ function publicConfig(): PublicConfig {
   }
 }
 
-async function grantSignedIn(address: string | null, now: number) {
-  if (!address) return
-  const settings = grantSettings()
-  try {
-    await applyGrant({
-      address,
-      now,
-      chainKey: chain.key,
-      amount: settings.amount,
-      intervalMs: settings.intervalMs,
-      mint: mintToTreasury,
-    })
-  } catch (error) {
-    console.error(error instanceof Error ? error.message : error)
-  }
-}
-
 async function handle(req: Request): Promise<Response> {
   const url = new URL(req.url)
 
@@ -212,8 +195,22 @@ async function handle(req: Request): Promise<Response> {
       botSecret: body?.botSecret,
     })
     if (!result.ok) return json({ error: result.error }, 400)
-    const now = Date.now()
-    if (grantOnSignIn(result.you.grantAt)) await grantSignedIn(result.you.address, now)
+    if (chain.key === "base-sepolia" && grantOnSignIn(result.you.grantAt)) {
+      const settings = grantSettings()
+      const started = startGrant({
+        address: result.you.address,
+        now: Date.now(),
+        chainKey: chain.key,
+        amount: settings.amount,
+        intervalMs: settings.intervalMs,
+        mint: (amount) => mintToTreasury(amount, (hash) => noteGrantTx(result.you.address, hash)),
+      })
+      if (started.claimed) {
+        void started.done.catch((error) => {
+          console.error(error instanceof Error ? error.message : error)
+        })
+      }
+    }
     return json({ token: result.token, you: youFor(result.you.address) })
   }
 
@@ -226,6 +223,7 @@ async function handle(req: Request): Promise<Response> {
     if (chain.key !== "base-sepolia") return json({ error: "Grants are only on testnet." }, 400)
     const session = readSession(req)
     if (!session.address) return json({ error: "Sign in to receive a grant." }, 401)
+    const address = session.address
     const now = Date.now()
     const settings = grantSettings()
     let seenHash: string | null = null
@@ -237,14 +235,29 @@ async function handle(req: Request): Promise<Response> {
         resolve(hash)
       }
     })
-    const done = applyGrant({
-      address: session.address,
+    const started = startGrant({
+      address,
       now,
       chainKey: chain.key,
       amount: settings.amount,
       intervalMs: settings.intervalMs,
-      mint: (amount) => mintToTreasury(amount, (hash) => reportHash(hash)),
+      mint: (amount) =>
+        mintToTreasury(amount, (hash) => {
+          noteGrantTx(address, hash)
+          reportHash(hash)
+        }),
     })
+    if (!started.claimed) {
+      const you = youFor(address)
+      return json({
+        granted: false,
+        pending: Boolean(you?.grantPending),
+        txHash: you?.grantPending?.txHash ?? null,
+        confirmations: MINT_CONFIRMATIONS,
+        you,
+      })
+    }
+    const done = started.done
     try {
       const settled = await settleGrantRequest({ done, hash: hashPromise })
       if (settled.kind === "pending") {
@@ -257,7 +270,7 @@ async function handle(req: Request): Promise<Response> {
           pending: true,
           txHash: settled.txHash,
           confirmations: MINT_CONFIRMATIONS,
-          you: youFor(session.address),
+          you: youFor(address),
         })
       }
       return json({
@@ -265,11 +278,11 @@ async function handle(req: Request): Promise<Response> {
         pending: false,
         txHash: seenHash,
         confirmations: MINT_CONFIRMATIONS,
-        you: youFor(session.address),
+        you: youFor(address),
       })
     } catch (error) {
       console.error(error instanceof Error ? error.message : error)
-      return json({ error: "The grant did not land. Try again.", txHash: seenHash, you: youFor(session.address) }, 502)
+      return json({ error: "The grant did not land. Try again.", txHash: seenHash, you: youFor(address) }, 502)
     }
   }
 

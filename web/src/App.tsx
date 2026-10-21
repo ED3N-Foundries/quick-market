@@ -36,7 +36,7 @@ import {
 import type { Band, Board, HistoryRound, OpenBet, SettledMessage, Side, TrayRow } from "./types"
 import { readCachedBalance, visibleBalance } from "./balanceCache"
 import { readGrantConfirmations } from "./grantChain"
-import { grantTxUrl } from "./grantWatch"
+import { grantLanded, grantTxUrl } from "./grantWatch"
 import { useMarket } from "./useMarket"
 import { useSideBook } from "./useSideBook"
 import { grantWaitStatus, loginStatus, loginSteps, loginStepState } from "./phantomConnect"
@@ -44,7 +44,7 @@ import { useSession } from "./wallet"
 
 export function App() {
   const session = useSession()
-  const market = useMarket(session.token)
+  const market = useMarket(session.token, session.signedYou)
   const expireRef = useRef(session.expire)
   expireRef.current = session.expire
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -85,11 +85,13 @@ export function App() {
     if (!session.address) setWalletMenuOpen(false)
   }, [session.address])
 
+  const followHash = market.you?.grantPending?.txHash || (funding ? grantTx : null)
   useEffect(() => {
-    if (!funding || !grantTx) return
+    if (!followHash) return
     let cancel = false
+    setGrantSeen(0)
     const tick = () => {
-      void readGrantConfirmations(grantTx, market.config.chainId).then((seen) => {
+      void readGrantConfirmations(followHash, market.config.chainId).then((seen) => {
         if (!cancel) setGrantSeen((current) => Math.max(current, seen))
       })
     }
@@ -99,7 +101,32 @@ export function App() {
       cancel = true
       window.clearInterval(id)
     }
-  }, [funding, grantTx, market.config.chainId])
+  }, [followHash, market.config.chainId])
+
+  const grantWatch = useRef<{ grantAt: number | null } | null>(null)
+  useEffect(() => {
+    const current = market.you
+    if (!current) {
+      grantWatch.current = null
+      return
+    }
+    if (current.grantPending) {
+      grantWatch.current = { grantAt: current.grantAt }
+      return
+    }
+    const watched = grantWatch.current
+    if (!watched) return
+    grantWatch.current = null
+    setFunding(false)
+    if (grantLanded(watched.grantAt, current.grantAt)) {
+      setGrantTx(null)
+      setFundError(null)
+      setFundOpen(false)
+      return
+    }
+    setGrantTx(null)
+    setFundError("The grant did not land. Try again.")
+  }, [market.you])
 
   useEffect(() => {
     if (!walletMenuOpen) return
@@ -211,7 +238,10 @@ export function App() {
   const grantKnown = market.confirmed ? you !== null : cached !== null
   const grantAt = market.confirmed ? (you?.grantAt ?? null) : (cached?.grantAt ?? null)
   const grantWait = grantTiming(grantAt, now, market.config.grantIntervalMs)
-  const grantReady = grantKnown && testnet && market.config.grantIntervalMs > 0 && grantWait.due && !funding
+  const grantPending = you?.grantPending ?? null
+  const grantInFlight = funding || grantPending !== null
+  const holdStake = session.signing || grantPending !== null
+  const grantReady = grantKnown && testnet && market.config.grantIntervalMs > 0 && grantWait.due && !grantInFlight
   const wrongChain =
     session.address !== null && session.chainId !== undefined && session.chainId !== market.config.chainId
   const walletTone = wrongChain || session.signing ? "warn" : "ok"
@@ -239,6 +269,12 @@ export function App() {
   function chip(percent: number) {
     if (!you) return
     setStake(microsToInput(Math.max(market.config.minStakeMicros, Math.floor((you.balanceMicros * percent) / 100))))
+  }
+
+  function openGrant() {
+    setWalletMenuOpen(false)
+    setFundError(null)
+    setFundOpen(true)
   }
 
   function onPointerDown(event: ReactPointerEvent<HTMLElement>) {
@@ -418,12 +454,8 @@ export function App() {
                   data-grant={grantReady ? "due" : "wait"}
                   aria-label={grantReady ? "Grant ready" : testnet ? "Grant QM USDC" : "Deposit USDC"}
                   title={grantReady ? "Grant ready" : testnet ? "Grant" : "Deposit"}
-                  onClick={() => {
-                    setWalletMenuOpen(false)
-                    setFundError(null)
-                    setFundOpen(true)
-                  }}
-                  disabled={!session.token || funding}
+                  onClick={openGrant}
+                  disabled={!session.token || grantInFlight}
                 >
                   {"+"}
                 </button>
@@ -471,17 +503,32 @@ export function App() {
               </span>
             )}
           </div>
-          {session.signing && session.loginPhase && (
+          {session.signing && session.loginPhase && !grantPending && (
             <WaitNote text={loginStatus(session.loginPhase, testnet)} steps={loginSteps(testnet)} phase={session.loginPhase} />
+          )}
+          {grantPending && (
+            <GrantFollow
+              startedAt={grantPending.startedAt}
+              txHash={grantPending.txHash}
+              seen={grantSeen}
+              needed={grantPending.confirmations}
+              chainId={market.config.chainId}
+              now={now}
+            />
           )}
           {session.connectError && <p className="note bad connect-error">{session.connectError}</p>}
           {!session.token && session.signError && session.signError !== "Sign in to trade" && (
             <p className="note bad connect-error">{session.signError}</p>
           )}
-          <BalanceFigure micros={shownMicros} />
-          {testnet && !session.signing && market.config.grantIntervalMs > 0 && grantKnown && (
-            <p className="grant-status">{grantStatusLabel(grantWait, market.config.grantMicros)}</p>
-          )}
+          {!holdStake && <BalanceFigure micros={shownMicros} />}
+          {!holdStake && testnet && market.config.grantIntervalMs > 0 && grantKnown &&
+            (grantWait.due ? (
+              <button type="button" className="grant-status" onClick={openGrant} disabled={!session.token || grantInFlight}>
+                {grantStatusLabel(grantWait, market.config.grantMicros)}
+              </button>
+            ) : (
+              <p className="grant-status">{grantStatusLabel(grantWait, market.config.grantMicros)}</p>
+            ))}
           {held && (
             <div className="ticket">
               <p className={held.side}>{held.side === "up" ? "▲ Up" : "▼ Down"}</p>
@@ -489,26 +536,31 @@ export function App() {
               <p>Gets {formatMoney(ticketWin)}</p>
             </div>
           )}
-          <label className="stake-field">
-            <span>Amount</span>
-            <input
-              inputMode="decimal"
-              value={stake}
-              onChange={(event) => setStake(event.target.value)}
-              disabled={!you}
-            />
-          </label>
-          <div className="chips">
-            <button type="button" onClick={() => chip(25)} disabled={!you}>
-              25%
-            </button>
-            <button type="button" onClick={() => chip(50)} disabled={!you}>
-              50%
-            </button>
-            <button type="button" onClick={() => chip(100)} disabled={!you}>
-              100%
-            </button>
-          </div>
+          {!holdStake && (
+            <>
+              <label className="stake-field">
+                <span>Amount</span>
+                <input
+                  inputMode="decimal"
+                  value={stake}
+                  onChange={(event) => setStake(event.target.value)}
+                  disabled={!you}
+                />
+              </label>
+              <div className="chips">
+                <button type="button" onClick={() => chip(25)} disabled={!you}>
+                  25%
+                </button>
+                <button type="button" onClick={() => chip(50)} disabled={!you}>
+                  50%
+                </button>
+                <button type="button" onClick={() => chip(100)} disabled={!you}>
+                  100%
+                </button>
+              </div>
+            </>
+          )}
+          {fundError && !fundOpen && <p className="note bad">{fundError}</p>}
           {market.error && <p className="note bad">{market.error}</p>}
         </div>
         <SideCard
@@ -1381,6 +1433,41 @@ function SideCard(props: {
   )
 }
 
+function GrantFollow({
+  startedAt,
+  txHash,
+  seen,
+  needed,
+  chainId,
+  now,
+}: {
+  startedAt: number
+  txHash: string | null
+  seen: number
+  needed: number
+  chainId: number
+  now: number
+}) {
+  if (!txHash) return <WaitNote text={grantWaitStatus()} />
+  const elapsed = Math.max(0, now - startedAt)
+  const txUrl = grantTxUrl(chainId, txHash)
+  return (
+    <div className="grant-progress">
+      <WaitNote text={grantWaitStatus({ seen, needed })} />
+      <p className="grant-timer" aria-label={`Elapsed time ${formatGrantTimer(elapsed)}`}>
+        {formatGrantTimer(elapsed)}
+      </p>
+      {txUrl ? (
+        <a className="grant-tx" href={txUrl} target="_blank" rel="noreferrer">
+          {txHash}
+        </a>
+      ) : (
+        <p className="grant-tx">{txHash}</p>
+      )}
+    </div>
+  )
+}
+
 function WaitNote({
   text,
   steps,
@@ -1417,18 +1504,31 @@ function WaitNote({
 
 function History({ token, version, windowMs }: { token: string | null; version: number; windowMs: number }) {
   const [mine, setMine] = useState(false)
-  const [rows, setRows] = useState<HistoryRound[]>([])
+  const [publicRows, setPublicRows] = useState<HistoryRound[]>([])
+  const [mineRows, setMineRows] = useState<HistoryRound[]>([])
   const [replay, setReplay] = useState<HistoryRound | null>(null)
+  const rows = mine ? mineRows : publicRows
 
   useEffect(() => {
-    const params = new URLSearchParams({ limit: "10" })
-    if (mine && token) params.set("mine", "1")
     let cancel = false
-    const headers: HeadersInit = mine && token ? { authorization: `Bearer ${token}` } : {}
-    fetch(`/api/rounds?${params}`, { headers })
+    fetch("/api/rounds?limit=10")
       .then((response) => response.json())
       .then((body) => {
-        if (!cancel) setRows(body.rounds ?? [])
+        if (!cancel) setPublicRows(body.rounds ?? [])
+      })
+      .catch(() => {})
+    return () => {
+      cancel = true
+    }
+  }, [version])
+
+  useEffect(() => {
+    if (!mine || !token) return
+    let cancel = false
+    fetch("/api/rounds?limit=10&mine=1", { headers: { authorization: `Bearer ${token}` } })
+      .then((response) => response.json())
+      .then((body) => {
+        if (!cancel) setMineRows(body.rounds ?? [])
       })
       .catch(() => {})
     return () => {
@@ -1436,19 +1536,36 @@ function History({ token, version, windowMs }: { token: string | null; version: 
     }
   }, [token, mine, version])
 
+  const marks = publicRows.slice(0, 3).flatMap((row) => {
+    const mark = historyMark(row)
+    return mark ? [{ id: row.id, ...mark }] : []
+  })
+
   return (
-    <section className="history">
-      <header>
-        <h2>Previous markets (last 10)</h2>
-        <div className="filters">
-          <button type="button" className={!mine ? "on" : ""} onClick={() => setMine(false)}>
-            All
-          </button>
-          <button type="button" className={mine ? "on" : ""} onClick={() => setMine(true)} disabled={!token}>
-            My trades
-          </button>
-        </div>
-      </header>
+    <details className="history">
+      <summary>
+        <h2>
+          Previous markets
+          <span className="history-count">(last 10)</span>
+        </h2>
+        {marks.length > 0 && (
+          <span className="history-marks">
+            {marks.map((mark) => (
+              <span key={mark.id} className={mark.tone} role="img" aria-label={mark.name}>
+                {mark.glyph}
+              </span>
+            ))}
+          </span>
+        )}
+      </summary>
+      <div className="filters" onClick={(event) => event.stopPropagation()}>
+        <button type="button" className={!mine ? "on" : ""} onClick={() => setMine(false)}>
+          All
+        </button>
+        <button type="button" className={mine ? "on" : ""} onClick={() => setMine(true)} disabled={!token}>
+          My trades
+        </button>
+      </div>
       {rows.length === 0 ? (
         <p className="empty">No settled rounds yet.</p>
       ) : (
@@ -1496,7 +1613,7 @@ function History({ token, version, windowMs }: { token: string | null; version: 
         </table>
       )}
       {replay && <Replay row={replay} windowMs={windowMs} onClose={() => setReplay(null)} />}
-    </section>
+    </details>
   )
 }
 
@@ -1706,6 +1823,14 @@ function useScrub(chart: TapeChart | null) {
     setHover(null)
   }
   return { hover, move, clear }
+}
+
+function historyMark(row: HistoryRound): { glyph: string; tone: string; name: string } | null {
+  if (row.status === "void" || row.resolution === "void") return { glyph: "∅", tone: "void", name: "Void" }
+  if (row.winningSide === "push") return { glyph: "=", tone: "push", name: "Push" }
+  if (row.winningSide === "up") return { glyph: "▲", tone: "up", name: "Up" }
+  if (row.winningSide === "down") return { glyph: "▼", tone: "down", name: "Down" }
+  return null
 }
 
 function resultTone(row: HistoryRound): string {

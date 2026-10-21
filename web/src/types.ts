@@ -35,10 +35,17 @@ export type Board = {
 
 export type OpenBet = { roundId: number; side: Side; stakeMicros: number }
 
+export type GrantPending = {
+  startedAt: number
+  txHash: string | null
+  confirmations: number
+}
+
 export type You = {
   address: string
   balanceMicros: number
   grantAt: number | null
+  grantPending: GrantPending | null
   openBets: OpenBet[]
 }
 

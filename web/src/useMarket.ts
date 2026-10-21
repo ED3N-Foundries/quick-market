@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react"
 import { LATE_BET_CODE } from "../../shared/bet"
 import { chainFromEnv, moneyLabel, tokenKind, tokenLabel, type ChainConfig } from "../../shared/chain"
 import { GRANT_FOLLOW_MS, MINT_CONFIRMATIONS } from "../../shared/mint"
@@ -48,7 +48,7 @@ function headers(token: string | null, json = false): HeadersInit {
   return result
 }
 
-export function useMarket(token: string | null) {
+export function useMarket(token: string | null, seed: You | null = null) {
   const [board, setBoard] = useState<Board | null>(null)
   const [you, setYou] = useState<You | null>(null)
   const [config, setConfig] = useState<Config>(defaultConfig)
@@ -176,6 +176,20 @@ export function useMarket(token: string | null) {
     raf = requestAnimationFrame(loop)
     return () => cancelAnimationFrame(raf)
   }, [])
+
+  useLayoutEffect(() => {
+    if (!token || !seed) return
+    acceptYou(seed)
+  }, [token, seed, acceptYou])
+
+  const grantPendingAt = you?.grantPending?.startedAt ?? null
+  useEffect(() => {
+    if (!token || grantPendingAt == null) return
+    const id = window.setInterval(() => {
+      void reload().catch(() => {})
+    }, 1_000)
+    return () => window.clearInterval(id)
+  }, [token, grantPendingAt, reload])
 
   useEffect(() => {
     setUnauthorized(false)
