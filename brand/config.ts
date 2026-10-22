@@ -6,7 +6,7 @@ export const brand = {
   backdrop: "#123524",
   text: "#ffffff",
   /** Social description and the line on both banners. */
-  tagline: "we're tired of winning!",
+  tagline: "we're tired of winning 😭",
   font: {
     family: "Iowan Old Style",
     weight: 400,
