@@ -27,7 +27,7 @@ export const brand = {
     file: "/System/Library/Fonts/Supplemental/Iowan Old Style.ttc",
   },
   favicon: {
-    text: "qm",
+    text: "😭",
     /** Share of the square the word may occupy. Small sizes use more of it so the strokes survive. */
     safeWidth: 0.7,
   },
