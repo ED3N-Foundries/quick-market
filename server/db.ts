@@ -47,10 +47,6 @@ CREATE TABLE IF NOT EXISTS ticks (
   exchange_ts INTEGER NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS buy_ins_round ON buy_ins(round_id);
-CREATE INDEX IF NOT EXISTS buy_ins_round_time ON buy_ins(round_id, created_at);
-CREATE INDEX IF NOT EXISTS buy_ins_address ON buy_ins(address);
-
 CREATE TABLE IF NOT EXISTS sessions (
   token TEXT PRIMARY KEY,
   address TEXT NOT NULL,
@@ -116,6 +112,7 @@ function openDatabase(path: string): Database {
   tuneDatabase(db, { memory: path === ":memory:" })
   migrateBuyIns(db)
   db.exec(SCHEMA)
+  ensureBuyInIndexes(db)
   const columns = db.query("PRAGMA table_info(users)").all() as { name: string }[]
   if (!columns.some((column) => column.name === "is_bot")) {
     db.exec("ALTER TABLE users ADD COLUMN is_bot INTEGER NOT NULL DEFAULT 0")
@@ -139,13 +136,38 @@ function tableNames(db: Database): Set<string> {
   return new Set(rows.map((row) => row.name))
 }
 
-/** The ledger table was `bets`. Rename it before the schema creates `buy_ins`. */
+/** The ledger table was `bets`. Rename it before the schema creates `buy_ins`.
+ * Indexes follow the table. Dropping them rebuilds the live ledger before listen.
+ */
 function migrateBuyIns(db: Database) {
   const tables = tableNames(db)
   if (tables.has("bets") && !tables.has("buy_ins")) db.exec("ALTER TABLE bets RENAME TO buy_ins")
-  db.exec("DROP INDEX IF EXISTS bets_round")
-  db.exec("DROP INDEX IF EXISTS bets_round_time")
-  db.exec("DROP INDEX IF EXISTS bets_address")
+}
+
+function indexColumns(db: Database, indexName: string): string[] {
+  const rows = db.query(`PRAGMA index_info(${indexName})`).all() as { seqno: number; name: string }[]
+  return [...rows].sort((a, b) => a.seqno - b.seqno).map((row) => row.name)
+}
+
+function hasIndexPrefix(db: Database, table: string, columns: string[]): boolean {
+  const indexes = db.query(`PRAGMA index_list(${table})`).all() as { name: string }[]
+  return indexes.some((index) => {
+    const have = indexColumns(db, index.name)
+    return columns.every((column, i) => have[i] === column)
+  })
+}
+
+/** Create a missing buy-in index. Skip it when a renamed ledger index already covers those columns. */
+function ensureBuyInIndexes(db: Database) {
+  const wanted: { name: string; columns: string[] }[] = [
+    { name: "buy_ins_round", columns: ["round_id"] },
+    { name: "buy_ins_round_time", columns: ["round_id", "created_at"] },
+    { name: "buy_ins_address", columns: ["address"] },
+  ]
+  for (const index of wanted) {
+    if (hasIndexPrefix(db, "buy_ins", index.columns)) continue
+    db.exec(`CREATE INDEX IF NOT EXISTS ${index.name} ON buy_ins(${index.columns.join(", ")})`)
+  }
 }
 
 function migrateRoundSource(db: Database) {
