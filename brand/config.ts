@@ -41,9 +41,13 @@ export const brand = {
     height: 1260,
     safeWidth: 0.8,
   },
+  /**
+   * X header. Smaller profile views crop the top and bottom, and the profile
+   * photo covers the lower left, so the line stays in the middle of the frame.
+   */
   banner: {
     width: 3000,
     height: 1000,
-    safeWidth: 0.8,
+    safeWidth: 0.34,
   },
 } as const

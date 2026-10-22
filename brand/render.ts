@@ -254,7 +254,17 @@ async function shoot(page: Page, shot: Shot) {
   return png
 }
 
+function onlyAsset() {
+  const only = process.argv[2]
+  if (only === undefined) return null
+  if (only !== "favicon" && only !== "avatar" && only !== "og" && only !== "banner") {
+    throw new Error(`unknown brand asset ${only}`)
+  }
+  return only
+}
+
 async function renderAll(fontSrc: string) {
+  const only = onlyAsset()
   const browser = await chromium.launch({ args: ["--force-color-profile=srgb"] })
   try {
     const page = await browser.newPage({
@@ -262,88 +272,96 @@ async function renderAll(fontSrc: string) {
       deviceScaleFactor: 1,
     })
     await page.setContent(documentHtml(fontSrc), { waitUntil: "domcontentloaded" })
-    const icon180 = await centerInk(
-      await shoot(page, {
-        label: "apple-touch-icon",
-        width: 180,
-        height: 180,
-        text: brand.favicon.text,
-        safeWidth: brand.favicon.safeWidth,
-        minWhite: 200,
-        rendering: "optimizeLegibility",
-      }),
-      "apple-touch-icon",
-    )
-    const icon32 = await centerInk(
-      await shoot(page, {
-        label: "favicon-32",
-        width: 32,
-        height: 32,
-        text: brand.favicon.text,
-        safeWidth: 0.84,
-        minWhite: 200,
-        rendering: "optimizeLegibility",
-      }),
-      "favicon-32",
-    )
-    // Regular stems disappear at 16px. This one cut uses the bold of the same family.
-    const icon16 = await centerInk(
-      await snapIcon(
-        await shoot(page, {
-          label: "favicon-16",
-          width: 16,
-          height: 16,
-          text: brand.favicon.text,
-          safeWidth: 0.88,
-          minWhite: 160,
-          rendering: "optimizeLegibility",
-          weight: 700,
-        }),
-        120,
-      ),
-      "favicon-16",
-    )
-    await assertArt(icon16, "favicon-16", 200)
-    await assertArt(icon32, "favicon-32", 200)
-    await assertArt(icon180, "apple-touch-icon", 200)
-    const avatar = await shoot(page, {
-      label: "avatar",
-      width: brand.avatar.size,
-      height: brand.avatar.size,
-      text: brand.avatar.text,
-      safeWidth: brand.avatar.safeWidth,
-      minWhite: 200,
-      rendering: "geometricPrecision",
-    })
-    const og = await shoot(page, {
-      label: "og",
-      width: brand.og.width,
-      height: brand.og.height,
-      text: brand.tagline,
-      safeWidth: brand.og.safeWidth,
-      minWhite: 200,
-      rendering: "geometricPrecision",
-    })
-    const banner = await shoot(page, {
-      label: "banner",
-      width: brand.banner.width,
-      height: brand.banner.height,
-      text: brand.tagline,
-      safeWidth: brand.banner.safeWidth,
-      minWhite: 200,
-      rendering: "geometricPrecision",
-    })
     await mkdir(publicDir, { recursive: true })
-    const ico = pngsToIco([
-      { size: 16, png: icon16 },
-      { size: 32, png: icon32 },
-    ])
-    await writeFile(join(publicDir, "favicon.ico"), ico)
-    await writeFile(join(publicDir, "favicon-32.png"), icon32)
-    await writeFile(join(publicDir, "apple-touch-icon.png"), icon180)
-    await writeFile(join(publicDir, "avatar.png"), avatar)
-    await writeFile(join(publicDir, "og.png"), og)
-    await writeFile(join(publicDir, "banner.png"), banner)
+    if (only === null || only === "favicon") {
+      const icon180 = await centerInk(
+        await shoot(page, {
+          label: "apple-touch-icon",
+          width: 180,
+          height: 180,
+          text: brand.favicon.text,
+          safeWidth: brand.favicon.safeWidth,
+          minWhite: 200,
+          rendering: "optimizeLegibility",
+        }),
+        "apple-touch-icon",
+      )
+      const icon32 = await centerInk(
+        await shoot(page, {
+          label: "favicon-32",
+          width: 32,
+          height: 32,
+          text: brand.favicon.text,
+          safeWidth: 0.84,
+          minWhite: 200,
+          rendering: "optimizeLegibility",
+        }),
+        "favicon-32",
+      )
+      // Regular stems disappear at 16px. This one cut uses the bold of the same family.
+      const icon16 = await centerInk(
+        await snapIcon(
+          await shoot(page, {
+            label: "favicon-16",
+            width: 16,
+            height: 16,
+            text: brand.favicon.text,
+            safeWidth: 0.88,
+            minWhite: 160,
+            rendering: "optimizeLegibility",
+            weight: 700,
+          }),
+          120,
+        ),
+        "favicon-16",
+      )
+      await assertArt(icon16, "favicon-16", 200)
+      await assertArt(icon32, "favicon-32", 200)
+      await assertArt(icon180, "apple-touch-icon", 200)
+      const ico = pngsToIco([
+        { size: 16, png: icon16 },
+        { size: 32, png: icon32 },
+      ])
+      await writeFile(join(publicDir, "favicon.ico"), ico)
+      await writeFile(join(publicDir, "favicon-32.png"), icon32)
+      await writeFile(join(publicDir, "apple-touch-icon.png"), icon180)
+    }
+    if (only === null || only === "avatar") {
+      const avatar = await shoot(page, {
+        label: "avatar",
+        width: brand.avatar.size,
+        height: brand.avatar.size,
+        text: brand.avatar.text,
+        safeWidth: brand.avatar.safeWidth,
+        minWhite: 200,
+        rendering: "geometricPrecision",
+      })
+      await writeFile(join(publicDir, "avatar.png"), avatar)
+    }
+    if (only === null || only === "og") {
+      const og = await shoot(page, {
+        label: "og",
+        width: brand.og.width,
+        height: brand.og.height,
+        text: brand.tagline,
+        safeWidth: brand.og.safeWidth,
+        minWhite: 200,
+        rendering: "geometricPrecision",
+      })
+      await writeFile(join(publicDir, "og.png"), og)
+    }
+    if (only === null || only === "banner") {
+      const banner = await shoot(page, {
+        label: "banner",
+        width: brand.banner.width,
+        height: brand.banner.height,
+        text: brand.tagline,
+        safeWidth: brand.banner.safeWidth,
+        minWhite: 200,
+        rendering: "geometricPrecision",
+      })
+      await writeFile(join(publicDir, "banner.png"), banner)
+    }
     console.log(`wrote ${publicDir}`)
   } finally {
     await browser.close()
