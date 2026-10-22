@@ -14,7 +14,8 @@
     "agents": "bun run agent/dashboard.ts",
     "feeds": "bun run server/dashboard.ts",
     "treasury": "bun run scripts/treasury.ts",
-    "token": "bun run scripts/token.ts"
+    "token": "bun run scripts/token.ts",
+    "brand": "bun run brand/render.ts"
   },
   "dependencies": {
     "@coinbase/cdp-sdk": "^1.58.0",
@@ -34,6 +35,8 @@
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.2",
+    "playwright": "^1.64.1",
+    "sharp": "^0.35.5",
     "vite": "^8.3.4"
   },
   "packageManager": "yarn@1.22.22+sha512.a6b2f7906b721bba3d67d4aff083df04dad64c399707841b7acf00f6b133b7ac24255f2652fa22ae3534329dc6180534e98d17432037ff6fd140556e2bb3137e"

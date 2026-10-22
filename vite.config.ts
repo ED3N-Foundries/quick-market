@@ -1,11 +1,22 @@
 import { defineConfig } from "vite"
 import react from "@vitejs/plugin-react"
+import { brandHead } from "./brand/meta.ts"
 
 export default defineConfig({
   root: "web",
   envPrefix: ["VITE_", "CHAIN", "USDC_ADDRESS"],
   plugins: [
     react(),
+    {
+      name: "qm-brand",
+      transformIndexHtml: {
+        order: "pre",
+        handler(html: string) {
+          if (html.includes('property="og:image"')) return html
+          return html.replace("</head>", `${brandHead()}\n  </head>`)
+        },
+      },
+    },
     {
       name: "qm-tunnel",
       transformIndexHtml: {

@@ -8,7 +8,8 @@
     "strict": true,
     "noEmit": true,
     "skipLibCheck": true,
-    "verbatimModuleSyntax": false
+    "verbatimModuleSyntax": false,
+    "allowImportingTsExtensions": true
   },
-  "include": ["server", "shared", "agent", "scripts", "vite.config.ts"]
+  "include": ["server", "shared", "agent", "scripts", "brand", "vite.config.ts"]
 }
