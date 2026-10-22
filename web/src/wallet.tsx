@@ -51,7 +51,7 @@ function sessionYou(value: unknown): You | null {
   if (!value || typeof value !== "object") return null
   const row = value as Partial<You>
   const balanceMicros = row.balanceMicros
-  if (typeof row.address !== "string" || typeof balanceMicros !== "number" || !Number.isSafeInteger(balanceMicros) || !Array.isArray(row.openBets)) {
+  if (typeof row.address !== "string" || typeof balanceMicros !== "number" || !Number.isSafeInteger(balanceMicros) || !Array.isArray(row.openBuyIns)) {
     return null
   }
   const pending = row.grantPending
@@ -72,7 +72,7 @@ function sessionYou(value: unknown): You | null {
     balanceMicros,
     grantAt: typeof row.grantAt === "number" ? row.grantAt : null,
     grantPending,
-    openBets: row.openBets,
+    openBuyIns: row.openBuyIns,
   }
 }
 

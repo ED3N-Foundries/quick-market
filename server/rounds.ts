@@ -1,4 +1,4 @@
-import { LATE_BET_CODE, LATE_BET_ERROR } from "../shared/bet"
+import { LATE_BUY_IN_CODE, LATE_BUY_IN_ERROR } from "../shared/buyIn"
 import { GRANT_FOLLOW_MS, MINT_CONFIRMATIONS } from "../shared/mint"
 import { handoffBanner, tickerFor, type Handoff, type Ticker } from "../shared/source"
 import { clockAt, feeBps, LIVE_MS, marketBounds, MIN_STAKE_MICROS, priceSource, TAPE_MS, windowAccepts, windowMs, type PriceSource } from "./config"
@@ -24,7 +24,7 @@ export type TrayRow = {
 
 export type Band = {
   id: number
-  betsOpen: number
+  buyInOpen: number
   strikeAt: number
   settlesAt: number
   strike: string | null
@@ -41,13 +41,13 @@ export type Board = {
   blockStart: number
   blockEnd: number
   windowEndsAt: number
-  phase: "bets" | "market"
+  phase: "buy-in" | "market"
   join: PoolCard | null
   live: PoolCard | null
   bands: Band[]
 }
 
-export type OpenBet = {
+export type OpenBuyIn = {
   roundId: number
   side: Side
   stakeMicros: number
@@ -64,7 +64,7 @@ export type You = {
   balanceMicros: number
   grantAt: number | null
   grantPending: GrantPending | null
-  openBets: OpenBet[]
+  openBuyIns: OpenBuyIn[]
 }
 
 export type SettledEvent = {
@@ -96,6 +96,7 @@ type RoundRow = {
   resolution: string | null
   pool_up_micros: number
   pool_down_micros: number
+  source: string | null
 }
 
 type BetRow = {
@@ -109,9 +110,9 @@ type BetRow = {
   is_bot?: number
 }
 
-class BetError extends Error {
-  code?: typeof LATE_BET_CODE
-  constructor(message: string, code?: typeof LATE_BET_CODE) {
+class BuyInError extends Error {
+  code?: typeof LATE_BUY_IN_CODE
+  constructor(message: string, code?: typeof LATE_BUY_IN_CODE) {
     super(message)
     this.code = code
   }
@@ -256,18 +257,18 @@ function ensureRound(id: number): void {
   const bounds = marketBounds(id)
   getDb()
     .query(
-      `INSERT INTO rounds (id, starts_at, ends_at, status, fee_micros, pool_up_micros, pool_down_micros)
-       VALUES (?, ?, ?, 'open', 0, 0, 0)
+      `INSERT INTO rounds (id, starts_at, ends_at, status, fee_micros, pool_up_micros, pool_down_micros, source)
+       VALUES (?, ?, ?, 'open', 0, 0, 0, ?)
        ON CONFLICT(id) DO NOTHING`,
     )
-    .run(id, bounds.strikeAt, bounds.settlesAt)
+    .run(id, bounds.strikeAt, bounds.settlesAt, ticker.venue)
 }
 
 function poolSums(roundId: number) {
   const rows = getDb()
     .query(
       `SELECT side, COALESCE(SUM(stake_micros), 0) AS pool, COUNT(*) AS players
-       FROM bets WHERE round_id = ? GROUP BY side`,
+       FROM buy_ins WHERE round_id = ? GROUP BY side`,
     )
     .all(roundId) as { side: Side; pool: number; players: number }[]
   let poolUpMicros = 0
@@ -289,11 +290,11 @@ function poolSums(roundId: number) {
 const POOL_TRAY = 5
 const HISTORY_TRAY = 10
 
-function recentBets(roundId: number, limit: number): { address: string; side: Side; stakeMicros: number; payoutMicros: number | null }[] {
+function recentBuyIns(roundId: number, limit: number): { address: string; side: Side; stakeMicros: number; payoutMicros: number | null }[] {
   const rows = getDb()
     .query(
       `SELECT address, side, stake_micros, payout_micros
-       FROM bets
+       FROM buy_ins
        WHERE round_id = ?
        ORDER BY created_at DESC, address ASC
        LIMIT ?`,
@@ -308,7 +309,7 @@ function recentBets(roundId: number, limit: number): { address: string; side: Si
 }
 
 function trayFor(roundId: number): TrayRow[] {
-  return recentBets(roundId, POOL_TRAY).map(({ address, side, stakeMicros }) => ({ address, side, stakeMicros }))
+  return recentBuyIns(roundId, POOL_TRAY).map(({ address, side, stakeMicros }) => ({ address, side, stakeMicros }))
 }
 
 function toBand(row: RoundRow): Band {
@@ -324,7 +325,7 @@ function toBand(row: RoundRow): Band {
         }
   return {
     id: row.id,
-    betsOpen: bounds.betsOpen,
+    buyInOpen: bounds.buyInOpen,
     strikeAt: row.starts_at,
     settlesAt: row.ends_at,
     strike: row.strike,
@@ -348,7 +349,7 @@ export function board(now = Date.now()): Board {
       blockStart: clock.blockStart,
       blockEnd: clock.blockEnd,
       windowEndsAt: handoff?.resumeAt ?? clock.windowEndsAt,
-      phase: "bets",
+      phase: "buy-in",
       join: null,
       live: null,
       bands: [],
@@ -363,18 +364,18 @@ export function board(now = Date.now()): Board {
     blockStart: clock.blockStart,
     blockEnd: clock.blockEnd,
     windowEndsAt: clock.windowEndsAt,
-    phase: "bets",
+    phase: "buy-in",
     join: clock.joinId < 0 ? null : cardFor(clock.joinId),
     live: cardFor(clock.liveId),
     bands: rows.map(toBand),
   }
 }
 
-function openBetsFor(address: string): OpenBet[] {
+function openBuyInsFor(address: string): OpenBuyIn[] {
   const rows = getDb()
     .query(
       `SELECT b.round_id, b.side, b.stake_micros
-       FROM bets b JOIN rounds r ON r.id = b.round_id
+       FROM buy_ins b JOIN rounds r ON r.id = b.round_id
        WHERE b.address = ? AND r.status = 'open'
        ORDER BY b.round_id ASC`,
     )
@@ -415,7 +416,7 @@ export function youFor(address: string): You | null {
     balanceMicros: row.balance_micros,
     grantAt: row.grant_at,
     grantPending: grantPendingFrom(row.grant_pending_at, row.grant_tx),
-    openBets: openBetsFor(address),
+    openBuyIns: openBuyInsFor(address),
   }
 }
 
@@ -425,7 +426,7 @@ export function ensureUser(address: string): You {
   getDb()
     .query("INSERT INTO users (address, balance_micros, created_at, is_bot) VALUES (?, 0, ?, 0)")
     .run(address, Date.now())
-  return { address, balanceMicros: 0, grantAt: null, grantPending: null, openBets: [] }
+  return { address, balanceMicros: 0, grantAt: null, grantPending: null, openBuyIns: [] }
 }
 
 export function credit(
@@ -450,41 +451,41 @@ export function withdraw(
   try {
     const tx = getDb().transaction(() => {
       const you = youFor(address)
-      if (!you) throw new BetError("Unknown wallet")
-      if (!Number.isSafeInteger(amountMicros) || amountMicros <= 0) throw new BetError("Amount is invalid")
-      if (amountMicros > you.balanceMicros) throw new BetError("Insufficient balance")
+      if (!you) throw new BuyInError("Unknown wallet")
+      if (!Number.isSafeInteger(amountMicros) || amountMicros <= 0) throw new BuyInError("Amount is invalid")
+      if (amountMicros > you.balanceMicros) throw new BuyInError("Insufficient balance")
       getDb()
         .query("UPDATE users SET balance_micros = balance_micros - ? WHERE address = ?")
         .run(amountMicros, address)
     })
     tx()
   } catch (error) {
-    if (error instanceof BetError) return { ok: false, error: error.message }
+    if (error instanceof BuyInError) return { ok: false, error: error.message }
     throw error
   }
   return { ok: true, you: youFor(address)! }
 }
 
-export function placeBet(input: {
+export function placeBuyIn(input: {
   address: string
   side: Side
   stakeMicros: number
   roundId: number
   now: number
-}): { ok: true; you: You } | { ok: false; error: string; code?: typeof LATE_BET_CODE } {
+}): { ok: true; you: You } | { ok: false; error: string; code?: typeof LATE_BUY_IN_CODE } {
   try {
     const tx = getDb().transaction(() => {
-      if (input.side !== "up" && input.side !== "down") throw new BetError("Side is invalid")
+      if (input.side !== "up" && input.side !== "down") throw new BuyInError("Side is invalid")
       if (!Number.isSafeInteger(input.stakeMicros) || input.stakeMicros < MIN_STAKE_MICROS) {
-        throw new BetError("Minimum stake is 1 USDC")
+        throw new BuyInError("Minimum stake is 1 USDC")
       }
 
-      if (handoff && feedHeld(input.now)) throw new BetError(handoffBanner(handoff.from, handoff.to))
+      if (handoff && feedHeld(input.now)) throw new BuyInError(handoffBanner(handoff.from, handoff.to))
       const id = namedRound(input.roundId, input.now)
       ensureRound(id)
       const round = getRound(id)
-      if (!round || round.status !== "open") throw new BetError("Betting is closed")
-      if (feedStatus(input.now) !== "live") throw new BetError("Price feed is delayed")
+      if (!round || round.status !== "open") throw new BuyInError("Buy-in is closed")
+      if (feedStatus(input.now) !== "live") throw new BuyInError("Price feed is delayed")
 
       releaseStaleGrant(input.address, input.now)
       const row = getDb()
@@ -509,25 +510,25 @@ export function placeBet(input: {
         balance = 0
       }
 
-      const opens = openBetsFor(input.address)
+      const opens = openBuyInsFor(input.address)
       const onThis = opens.find((bet) => bet.roundId === id)
       for (const bet of opens) {
         if (bet.roundId === id) continue
         // Bots keep filling every window while earlier markets are still resolving.
         if (bot) continue
-        throw new BetError("Your last bet is still open")
+        throw new BuyInError("Your last buy-in is still open")
       }
-      if (onThis && onThis.side !== input.side) throw new BetError("You are already on the other side")
-      if (input.stakeMicros > balance) throw new BetError("Insufficient balance")
+      if (onThis && onThis.side !== input.side) throw new BuyInError("You are already on the other side")
+      if (input.stakeMicros > balance) throw new BuyInError("Insufficient balance")
 
       if (onThis) {
         getDb()
-          .query("UPDATE bets SET stake_micros = stake_micros + ? WHERE round_id = ? AND address = ?")
+          .query("UPDATE buy_ins SET stake_micros = stake_micros + ? WHERE round_id = ? AND address = ?")
           .run(input.stakeMicros, id, input.address)
       } else {
         getDb()
           .query(
-            `INSERT INTO bets (id, round_id, address, side, stake_micros, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+            `INSERT INTO buy_ins (id, round_id, address, side, stake_micros, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
           )
           .run(crypto.randomUUID(), id, input.address, input.side, input.stakeMicros, input.now)
       }
@@ -535,25 +536,25 @@ export function placeBet(input: {
         .query("UPDATE users SET balance_micros = balance_micros - ? WHERE address = ?")
         .run(input.stakeMicros, input.address)
 
-      const openBets = opens.map((bet) =>
+      const openBuyIns = opens.map((bet) =>
         bet.roundId === id ? { ...bet, stakeMicros: bet.stakeMicros + input.stakeMicros } : bet,
       )
       if (!onThis) {
-        openBets.push({ roundId: id, side: input.side, stakeMicros: input.stakeMicros })
-        openBets.sort((left, right) => left.roundId - right.roundId)
+        openBuyIns.push({ roundId: id, side: input.side, stakeMicros: input.stakeMicros })
+        openBuyIns.sort((left, right) => left.roundId - right.roundId)
       }
       const you: You = {
         address: input.address,
         balanceMicros: balance - input.stakeMicros,
         grantAt,
         grantPending,
-        openBets,
+        openBuyIns,
       }
       return you
     })
     return { ok: true, you: tx() }
   } catch (error) {
-    if (error instanceof BetError) {
+    if (error instanceof BuyInError) {
       return error.code ? { ok: false, error: error.message, code: error.code } : { ok: false, error: error.message }
     }
     throw error
@@ -562,18 +563,18 @@ export function placeBet(input: {
 
 /** The round a bet named, or a rejection when the receipt time is outside that window. */
 function namedRound(roundId: number, now: number): number {
-  if (!Number.isSafeInteger(roundId) || roundId < 0) throw new BetError("Market is invalid")
+  if (!Number.isSafeInteger(roundId) || roundId < 0) throw new BuyInError("Market is invalid")
   if (windowAccepts(roundId, now)) return roundId
   const { strikeAt } = marketBounds(roundId)
-  if (now >= strikeAt) throw new BetError(LATE_BET_ERROR, LATE_BET_CODE)
-  throw new BetError("That market is not open")
+  if (now >= strikeAt) throw new BuyInError(LATE_BUY_IN_ERROR, LATE_BUY_IN_CODE)
+  throw new BuyInError("That market is not open")
 }
 
 function loadBets(roundId: number): BetRow[] {
   return getDb()
     .query(
       `SELECT b.*, COALESCE(u.is_bot, 0) AS is_bot
-       FROM bets b LEFT JOIN users u ON u.address = b.address
+       FROM buy_ins b LEFT JOIN users u ON u.address = b.address
        WHERE b.round_id = ? ORDER BY b.created_at ASC`,
     )
     .all(roundId) as BetRow[]
@@ -607,7 +608,7 @@ function closeRound(round: RoundRow, forceVoid = false): SettledEvent {
     const current = getRound(round.id)
     if (!current || current.status !== "open") return
     for (const payout of outcome.payouts) {
-      getDb().query("UPDATE bets SET payout_micros = ? WHERE id = ?").run(payout.payoutMicros, payout.id)
+      getDb().query("UPDATE buy_ins SET payout_micros = ? WHERE id = ?").run(payout.payoutMicros, payout.id)
       if (payout.payoutMicros > 0) {
         getDb()
           .query("UPDATE users SET balance_micros = balance_micros + ? WHERE address = ?")
@@ -716,6 +717,7 @@ export type HistoryRow = {
   resolution: string | null
   poolUpMicros: number
   poolDownMicros: number
+  source: string | null
   mySide?: Side
   myStakeMicros?: number
   myPayoutMicros?: number | null
@@ -733,6 +735,7 @@ function mapHistory(row: RoundRow & { my_side?: Side; my_stake?: number; my_payo
     resolution: row.resolution,
     poolUpMicros: row.pool_up_micros,
     poolDownMicros: row.pool_down_micros,
+    source: row.source,
   }
   if (row.my_side) {
     base.mySide = row.my_side
@@ -749,7 +752,7 @@ export function listRounds(limit: number, address?: string | null, mine = false)
       .query(
         `SELECT r.*, b.side AS my_side, b.stake_micros AS my_stake, b.payout_micros AS my_payout
          FROM rounds r
-         JOIN bets b ON b.round_id = r.id AND b.address = ?
+         JOIN buy_ins b ON b.round_id = r.id AND b.address = ?
          WHERE r.status != 'open'
          ORDER BY r.id DESC
          LIMIT ?`,
@@ -765,7 +768,7 @@ export function listRounds(limit: number, address?: string | null, mine = false)
 
 function roundTape(round: RoundRow): { t: number; price: string }[] {
   const bounds = marketBounds(round.id)
-  const from = bounds.betsOpen
+  const from = bounds.buyInOpen
   const to = round.ends_at
   const byTime = new Map<number, string>()
   const rows = getDb()
@@ -781,7 +784,7 @@ function roundTape(round: RoundRow): { t: number; price: string }[] {
     byTime.set(print.exchangeTs, print.price)
   }
   const life = Math.max(1_000, round.ends_at - round.starts_at)
-  const windowSpan = Math.max(0, round.starts_at - bounds.betsOpen)
+  const windowSpan = Math.max(0, round.starts_at - bounds.buyInOpen)
   const held = priceAt(round.starts_at, Math.max(life, windowSpan + 1_000))
   if (held) byTime.set(held.exchangeTs, held.price)
   return [...byTime.entries()].sort((left, right) => left[0] - right[0]).map(([t, price]) => ({ t, price }))
@@ -790,18 +793,18 @@ function roundTape(round: RoundRow): { t: number; price: string }[] {
 export function roundDetail(id: number) {
   const round = getRound(id)
   if (!round) return null
-  return { round: mapHistory(round), bets: recentBets(id, HISTORY_TRAY), tape: roundTape(round) }
+  return { round: mapHistory(round), buyIns: recentBuyIns(id, HISTORY_TRAY), tape: roundTape(round) }
 }
 
-export type BetOrder = { address: string; side: Side; stakeMicros: number }
+export type BuyInOrder = { address: string; side: Side; stakeMicros: number }
 
-export type BetRowResult = { address: string; ok: true } | { address: string; ok: false; error: string }
+export type BuyInRowResult = { address: string; ok: true } | { address: string; ok: false; error: string }
 
-export function placeBets(input: {
-  orders: BetOrder[]
+export function placeBuyIns(input: {
+  orders: BuyInOrder[]
   roundId: number
   now: number
-}): { ok: true; results: BetRowResult[]; accepted: number } | { ok: false; error: string; code?: typeof LATE_BET_CODE } {
+}): { ok: true; results: BuyInRowResult[]; accepted: number } | { ok: false; error: string; code?: typeof LATE_BUY_IN_CODE } {
   if (handoff && feedHeld(input.now)) return { ok: false, error: handoffBanner(handoff.from, handoff.to) }
   if (input.orders.length > 200) return { ok: false, error: "Chunk is too large" }
   if (input.orders.length === 0) return { ok: true, results: [], accepted: 0 }
@@ -809,7 +812,7 @@ export function placeBets(input: {
   try {
     id = namedRound(input.roundId, input.now)
   } catch (error) {
-    if (error instanceof BetError) {
+    if (error instanceof BuyInError) {
       return error.code ? { ok: false, error: error.message, code: error.code } : { ok: false, error: error.message }
     }
     throw error
@@ -817,7 +820,7 @@ export function placeBets(input: {
   if (feedStatus(input.now) !== "live") return { ok: false, error: "Price feed is delayed" }
   ensureRound(id)
   const round = getRound(id)
-  if (!round || round.status !== "open") return { ok: false, error: "Betting is closed" }
+  if (!round || round.status !== "open") return { ok: false, error: "Buy-in is closed" }
 
   const prepared = input.orders.map((order) => {
     const address = normalizeAddress(order.address)
@@ -834,12 +837,12 @@ export function placeBets(input: {
         .all(...lookup) as { address: string; balance_micros: number; is_bot: number }[]
       for (const row of userRows) users.set(row.address, { balance: row.balance_micros, bot: row.is_bot === 1 })
       const betRows = getDb()
-        .query(`SELECT address FROM bets WHERE round_id = ? AND address IN (${marks})`)
+        .query(`SELECT address FROM buy_ins WHERE round_id = ? AND address IN (${marks})`)
         .all(id, ...lookup) as { address: string }[]
       for (const row of betRows) taken.add(row.address)
     }
     const spent = new Map<string, number>()
-    const results: BetRowResult[] = []
+    const results: BuyInRowResult[] = []
     const accepted: { address: string; side: Side; stakeMicros: number }[] = []
     for (const order of prepared) {
       if (!order.address) {
@@ -860,7 +863,7 @@ export function placeBets(input: {
         continue
       }
       if (taken.has(order.address)) {
-        results.push({ address: order.address, ok: false, error: "Already bet this window" })
+        results.push({ address: order.address, ok: false, error: "Already in this window" })
         continue
       }
       const left = user.balance - (spent.get(order.address) ?? 0)
@@ -874,12 +877,12 @@ export function placeBets(input: {
       results.push({ address: order.address, ok: true })
     }
     const insert = getDb().query(
-      `INSERT OR IGNORE INTO bets (id, round_id, address, side, stake_micros, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+      `INSERT OR IGNORE INTO buy_ins (id, round_id, address, side, stake_micros, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
     )
     const debit = getDb().query(
       `UPDATE users SET balance_micros = balance_micros - ? WHERE address = ? AND is_bot = 1 AND balance_micros >= ?`,
     )
-    const undo = getDb().query(`DELETE FROM bets WHERE round_id = ? AND address = ?`)
+    const undo = getDb().query(`DELETE FROM buy_ins WHERE round_id = ? AND address = ?`)
     const missed = new Set<string>()
     for (const order of accepted) {
       const inserted = insert.run(crypto.randomUUID(), id, order.address, order.side, order.stakeMicros, input.now)
@@ -896,7 +899,7 @@ export function placeBets(input: {
     if (missed.size > 0) {
       for (let i = 0; i < results.length; i++) {
         const result = results[i]!
-        if (result.ok && missed.has(result.address)) results[i] = { address: result.address, ok: false, error: "Already bet this window" }
+        if (result.ok && missed.has(result.address)) results[i] = { address: result.address, ok: false, error: "Already in this window" }
       }
     }
     return { results, accepted: accepted.length - missed.size }

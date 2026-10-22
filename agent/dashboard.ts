@@ -20,7 +20,7 @@ const FILTERS: readonly RosterFilter[] = ["all", "stuck", "richest"]
 
 export const HELP_LINES = [
   "c clock   o off-peak   e peak   [ ] pin ±1   - = pin ±10",
-  "b bets   m bleed   p wallet   P clear   j/k move   f filter   s start   R restart   q quit",
+  "b buy-ins   m bleed   p wallet   P clear   j/k move   f filter   s start   R restart   q quit",
 ] as const
 
 export type RunnerPrompt = "start" | "restart"
@@ -93,7 +93,7 @@ export function handleKey(
     control.mode = "pin"
     control.pin = Math.min(6_000, (control.pin ?? 30) + 10)
   }
-  if (key === "b") control.bettingPaused = !control.bettingPaused
+  if (key === "b") control.buyInPaused = !control.buyInPaused
   if (key === "m") control.bleed = !control.bleed
   if (key === "f") {
     filter = FILTERS[(FILTERS.indexOf(filter) + 1) % FILTERS.length] ?? "all"
@@ -173,7 +173,7 @@ export function bookLine(snapshot: SwarmSnapshot, wide: boolean): string {
   const pool = book.upMicros + book.downMicros
   const bot = book.botUpMicros + book.botDownMicros
   const share = pool === 0 ? "—" : `${Math.round((bot / pool) * 100)}%`
-  const head = `book  r${book.roundId ?? "—"}  up ${formatMicros(book.upMicros)}  down ${formatMicros(book.downMicros)}  bots ${share}  bets ${book.bets}  skips ${book.skips}`
+  const head = `book  r${book.roundId ?? "—"}  up ${formatMicros(book.upMicros)}  down ${formatMicros(book.downMicros)}  bots ${share}  buy-ins ${book.buyIns}  skips ${book.skips}`
   if (!wide) return head
   const lag = snapshot.bookLagMs === null ? "—" : `${snapshot.bookLagMs}ms`
   return `${head}  p50 ${formatMicros(book.p50)}  p90 ${formatMicros(book.p90)}  lag ${lag}`
@@ -194,9 +194,9 @@ export function histogramLine(snapshot: SwarmSnapshot): string {
 
 export function statusLine(control: ControlFile): string {
   const mode = control.mode === "pin" ? `pin ${control.pin ?? 1}` : control.mode
-  const bets = control.bettingPaused ? "bets paused" : "bets on"
+  const buyIns = control.buyInPaused ? "buy-ins paused" : "buy-ins on"
   const bleed = control.bleed ? "bleed on" : "bleed off"
-  return `${mode}  ·  ${bets}  ·  ${bleed}  ·  paused ${control.paused.length}`
+  return `${mode}  ·  ${buyIns}  ·  ${bleed}  ·  paused ${control.paused.length}`
 }
 
 export type RowTone = "text" | "muted" | "gold" | "up" | "down"
@@ -463,7 +463,7 @@ function controlFromSnapshot(snapshot: SwarmSnapshot): ControlFile {
         ? snapshot.mode
         : "clock",
     pin: snapshot.pin,
-    bettingPaused: snapshot.bettingPaused,
+    buyInPaused: snapshot.buyInPaused,
     paused: [],
     bleed: snapshot.bleed,
   }

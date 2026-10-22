@@ -216,7 +216,7 @@ function belief(
 }
 
 export type MindDecision =
-  | { action: "bet"; side: Side; stakeMicros: number; pUp: number; gate: GateState }
+  | { action: "buy-in"; side: Side; stakeMicros: number; pUp: number; gate: GateState }
   | { action: "skip"; reason: SkipReason; pUp: number; gate: GateState }
 
 type PriceInput = {
@@ -234,7 +234,7 @@ type PriceInput = {
   timing: TimingConfig
 }
 
-type Ungated = Omit<Extract<MindDecision, { action: "bet" }>, "gate"> | Omit<Extract<MindDecision, { action: "skip" }>, "gate">
+type Ungated = Omit<Extract<MindDecision, { action: "buy-in" }>, "gate"> | Omit<Extract<MindDecision, { action: "skip" }>, "gate">
 
 export function decideOpen(input: PriceInput): MindDecision {
   const persona = input.wallet.persona
@@ -316,7 +316,7 @@ export function decideOpen(input: PriceInput): MindDecision {
   gate.refractory = false
   gate.readyWindow = input.windowId + 1
   if (gate.burstLeft === 0) armRefractory(gate, persona, scale, rng, input.config, input.windowId)
-  return finish({ action: "bet", side, stakeMicros, pUp })
+  return finish({ action: "buy-in", side, stakeMicros, pUp })
 }
 
 export function decideWallet(input: GateInput & {

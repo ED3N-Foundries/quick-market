@@ -2,12 +2,12 @@ import { expect, test } from "bun:test"
 import { chartMarket, focusPool, followWindow, heldMarket, heldStrike } from "./focus"
 import type { Band, Board, PoolCard } from "./types"
 
-function band(id: number, betsOpen: number, strike: string | null = null): Band {
+function band(id: number, buyInOpen: number, strike: string | null = null): Band {
   return {
     id,
-    betsOpen,
-    strikeAt: betsOpen + 5_000,
-    settlesAt: betsOpen + 15_000,
+    buyInOpen,
+    strikeAt: buyInOpen + 5_000,
+    settlesAt: buyInOpen + 15_000,
     strike,
     status: "open",
     poolUpMicros: id * 10,
@@ -28,7 +28,7 @@ function board(over: Partial<Board> = {}): Board {
     blockStart: 10_000,
     blockEnd: 20_000,
     windowEndsAt: 15_000,
-    phase: "bets",
+    phase: "buy-in",
     join,
     live,
     bands: [live, join],
@@ -66,7 +66,7 @@ test("a held market scrolls two viewports and the bet window does not", () => {
     blockStart: 20_000,
     blockEnd: 30_000,
     windowEndsAt: 25_000,
-    phase: "bets",
+    phase: "buy-in",
     join: card(band(3, 20_000)),
     live: market,
     bands: [market],

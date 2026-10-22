@@ -10,7 +10,7 @@ export type TrayRow = {
 
 export type Band = {
   id: number
-  betsOpen: number
+  buyInOpen: number
   strikeAt: number
   settlesAt: number
   strike: string | null
@@ -27,13 +27,13 @@ export type Board = {
   blockStart: number
   blockEnd: number
   windowEndsAt: number
-  phase: "bets" | "market"
+  phase: "buy-in" | "market"
   join: PoolCard | null
   live: PoolCard | null
   bands: Band[]
 }
 
-export type OpenBet = { roundId: number; side: Side; stakeMicros: number }
+export type OpenBuyIn = { roundId: number; side: Side; stakeMicros: number }
 
 export type GrantPending = {
   startedAt: number
@@ -46,7 +46,7 @@ export type You = {
   balanceMicros: number
   grantAt: number | null
   grantPending: GrantPending | null
-  openBets: OpenBet[]
+  openBuyIns: OpenBuyIn[]
 }
 
 export type HistoryRound = {
@@ -60,6 +60,7 @@ export type HistoryRound = {
   resolution: string | null
   poolUpMicros: number
   poolDownMicros: number
+  source: string | null
   mySide?: Side
   myStakeMicros?: number
   myPayoutMicros?: number | null

@@ -299,7 +299,7 @@ function Book({ snapshot }: { snapshot: SwarmSnapshot }) {
       <Text fg={up}>up {formatMicros(book.upMicros)}</Text>
       <Text>  </Text>
       <Text fg={down}>down {formatMicros(book.downMicros)}</Text>
-      <Text>  bots {share}  bets {book.bets}  skips {book.skips}</Text>
+      <Text>  bots {share}  buy-ins {book.buyIns}  skips {book.skips}</Text>
     </box>
   )
 }
@@ -372,7 +372,7 @@ function Status({ control }: { control: ControlFile }) {
     <box style={{ height: 1, flexDirection: "row", flexShrink: 1 }}>
       <Text fg={control.mode === "clock" ? text : gold}>{mode}</Text>
       <Text fg={muted}>  ·  </Text>
-      <Text fg={control.bettingPaused ? gold : text}>{control.bettingPaused ? "bets paused" : "bets on"}</Text>
+      <Text fg={control.buyInPaused ? gold : text}>{control.buyInPaused ? "buy-ins paused" : "buy-ins on"}</Text>
       <Text fg={muted}>  ·  </Text>
       <Text fg={control.bleed ? text : gold}>{control.bleed ? "bleed on" : "bleed off"}</Text>
       <Text>  ·  paused {control.paused.length}</Text>

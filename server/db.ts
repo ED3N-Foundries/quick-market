@@ -25,10 +25,11 @@ CREATE TABLE IF NOT EXISTS rounds (
   winning_side TEXT,
   resolution TEXT,
   pool_up_micros INTEGER NOT NULL DEFAULT 0,
-  pool_down_micros INTEGER NOT NULL DEFAULT 0
+  pool_down_micros INTEGER NOT NULL DEFAULT 0,
+  source TEXT
 );
 
-CREATE TABLE IF NOT EXISTS bets (
+CREATE TABLE IF NOT EXISTS buy_ins (
   id TEXT PRIMARY KEY,
   round_id INTEGER NOT NULL,
   address TEXT NOT NULL,
@@ -46,9 +47,9 @@ CREATE TABLE IF NOT EXISTS ticks (
   exchange_ts INTEGER NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS bets_round ON bets(round_id);
-CREATE INDEX IF NOT EXISTS bets_round_time ON bets(round_id, created_at);
-CREATE INDEX IF NOT EXISTS bets_address ON bets(address);
+CREATE INDEX IF NOT EXISTS buy_ins_round ON buy_ins(round_id);
+CREATE INDEX IF NOT EXISTS buy_ins_round_time ON buy_ins(round_id, created_at);
+CREATE INDEX IF NOT EXISTS buy_ins_address ON buy_ins(address);
 
 CREATE TABLE IF NOT EXISTS sessions (
   token TEXT PRIMARY KEY,
@@ -113,6 +114,7 @@ function openDatabase(path: string): Database {
   if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true })
   const db = new Database(path)
   tuneDatabase(db, { memory: path === ":memory:" })
+  migrateBuyIns(db)
   db.exec(SCHEMA)
   const columns = db.query("PRAGMA table_info(users)").all() as { name: string }[]
   if (!columns.some((column) => column.name === "is_bot")) {
@@ -127,8 +129,52 @@ function openDatabase(path: string): Database {
   if (!columns.some((column) => column.name === "grant_tx")) {
     db.exec("ALTER TABLE users ADD COLUMN grant_tx TEXT")
   }
+  migrateRoundSource(db)
   migrateCustody(db)
   return db
+}
+
+function tableNames(db: Database): Set<string> {
+  const rows = db.query("SELECT name FROM sqlite_master WHERE type = 'table'").all() as { name: string }[]
+  return new Set(rows.map((row) => row.name))
+}
+
+/** The ledger table was `bets`. Rename it before the schema creates `buy_ins`. */
+function migrateBuyIns(db: Database) {
+  const tables = tableNames(db)
+  if (tables.has("bets") && !tables.has("buy_ins")) db.exec("ALTER TABLE bets RENAME TO buy_ins")
+  db.exec("DROP INDEX IF EXISTS bets_round")
+  db.exec("DROP INDEX IF EXISTS bets_round_time")
+  db.exec("DROP INDEX IF EXISTS bets_address")
+}
+
+function migrateRoundSource(db: Database) {
+  const columns = db.query("PRAGMA table_info(rounds)").all() as { name: string }[]
+  if (!columns.some((column) => column.name === "source")) {
+    db.exec("ALTER TABLE rounds ADD COLUMN source TEXT")
+  }
+  const missing = db.query("SELECT id, starts_at, ends_at FROM rounds WHERE source IS NULL").all() as {
+    id: number
+    starts_at: number
+    ends_at: number
+  }[]
+  if (missing.length === 0) return
+  const pick = db.query(
+    `SELECT source FROM ticks
+     WHERE second_ts BETWEEN ? AND ?
+     ORDER BY ABS(second_ts - ?)
+     LIMIT 1`,
+  )
+  const write = db.query("UPDATE rounds SET source = ? WHERE id = ? AND source IS NULL")
+  const fill = db.transaction(() => {
+    for (const row of missing) {
+      const start = Math.floor(row.starts_at / 1000)
+      const end = Math.floor(row.ends_at / 1000)
+      const tick = pick.get(start - 60, end, start) as { source: string } | null
+      if (tick) write.run(tick.source, row.id)
+    }
+  })
+  fill()
 }
 
 /** Demo balances were minted. Drop them once so they cannot be withdrawn as USDC. */
@@ -137,7 +183,7 @@ export function migrateCustody(db: Database) {
   if (row) return
   const tx = db.transaction(() => {
     db.exec("UPDATE users SET balance_micros = 0")
-    db.exec("DELETE FROM bets WHERE round_id IN (SELECT id FROM rounds WHERE status = 'open')")
+    db.exec("DELETE FROM buy_ins WHERE round_id IN (SELECT id FROM rounds WHERE status = 'open')")
     db.query("INSERT INTO meta (key, value) VALUES ('custody_v1', '1')").run()
   })
   tx()

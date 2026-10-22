@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react"
-import { LATE_BET_CODE } from "../../shared/bet"
+import { LATE_BUY_IN_CODE } from "../../shared/buyIn"
 import { chainFromEnv, moneyLabel, tokenKind, tokenLabel, type ChainConfig } from "../../shared/chain"
 import { GRANT_FOLLOW_MS, MINT_CONFIRMATIONS } from "../../shared/mint"
 import { marketPreferences } from "../../shared/market"
 import { writeCachedBalance } from "./balanceCache"
-import { applyBet } from "./betIntent"
+import { applyBuyIn } from "./buyInIntent"
 import type { TapeChart, TapePoint } from "./chart"
 import { createClock, easeClock, noteClock } from "./clock"
 import { parseAmountMicros } from "./format"
@@ -267,7 +267,7 @@ export function useMarket(token: string | null, seed: You | null = null) {
             const next = {
               ...current,
               balanceMicros: balance?.balanceMicros ?? current.balanceMicros,
-              openBets: current.openBets.filter((bet) => bet.roundId !== message.roundId),
+              openBuyIns: current.openBuyIns.filter((bet) => bet.roundId !== message.roundId),
             }
             youEpoch.current += 1
             writeCachedBalance(next)
@@ -295,21 +295,21 @@ export function useMarket(token: string | null, seed: You | null = null) {
     }
   }, [pushTick, noteServerNow])
 
-  const openKey = you?.openBets.map((bet) => bet.roundId).join(",") ?? ""
+  const openKey = you?.openBuyIns.map((bet) => bet.roundId).join(",") ?? ""
   const caught = useRef("")
   useEffect(() => {
-    if (!token || !board || !you?.openBets.length) return
+    if (!token || !board || !you?.openBuyIns.length) return
     const live = new Set<number>()
     if (board.live) live.add(board.live.id)
     if (board.join) live.add(board.join.id)
-    const stuck = you.openBets
+    const stuck = you.openBuyIns
       .filter((bet) => !live.has(bet.roundId))
       .map((bet) => bet.roundId)
       .join(",")
     if (!stuck || caught.current === stuck) return
     caught.current = stuck
     reload().catch(() => {})
-  }, [token, board, openKey, you?.openBets, reload])
+  }, [token, board, openKey, you?.openBuyIns, reload])
 
   const pushLate = useCallback(() => {
     setLateNotices((current) => (current.length > 0 ? current : [1]))
@@ -345,7 +345,7 @@ export function useMarket(token: string | null, seed: You | null = null) {
       const snapshot = current
       if (windowOpen) {
         youEpoch.current += 1
-        setYou(applyBet(current, { side, stakeMicros, roundId }))
+        setYou(applyBuyIn(current, { side, stakeMicros, roundId }))
       }
       setPending(true)
       setError(null)
@@ -356,7 +356,7 @@ export function useMarket(token: string | null, seed: You | null = null) {
         setYou(snapshot)
       }
       try {
-        const response = await fetch("/api/bets", {
+        const response = await fetch("/api/buy-ins", {
           method: "POST",
           headers: headers(tokenRef.current, true),
           body: JSON.stringify({ side, stake, roundId }),
@@ -370,11 +370,11 @@ export function useMarket(token: string | null, seed: You | null = null) {
         }
         if (!response.ok) {
           restore()
-          if (body.code === LATE_BET_CODE) {
+          if (body.code === LATE_BUY_IN_CODE) {
             pushLate()
             return
           }
-          setError(body.error ?? "Bet failed")
+          setError(body.error ?? "Buy-in failed")
           return
         }
         if (body.you) acceptYou(body.you)

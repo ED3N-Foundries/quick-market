@@ -292,14 +292,14 @@ test("readLedger sums spendable, open stakes, and the newest book rows", () => {
     db.exec(`
       CREATE TABLE users (address TEXT PRIMARY KEY, balance_micros INTEGER NOT NULL);
       CREATE TABLE rounds (id INTEGER PRIMARY KEY, status TEXT NOT NULL, fee_micros INTEGER NOT NULL DEFAULT 0);
-      CREATE TABLE bets (id TEXT PRIMARY KEY, round_id INTEGER NOT NULL, address TEXT NOT NULL, stake_micros INTEGER NOT NULL);
+      CREATE TABLE buy_ins (id TEXT PRIMARY KEY, round_id INTEGER NOT NULL, address TEXT NOT NULL, stake_micros INTEGER NOT NULL);
       CREATE TABLE deposits (tx_hash TEXT, log_index INTEGER, address TEXT, amount_micros INTEGER, created_at INTEGER);
       CREATE TABLE withdrawals (id TEXT, address TEXT, amount_micros INTEGER, tx_hash TEXT, status TEXT, created_at INTEGER);
     `)
     db.exec(`
       INSERT INTO users VALUES ('${payer}', 4000000), ('${payee}', 6000000);
       INSERT INTO rounds VALUES (1, 'open', 0), (2, 'settled', 250000);
-      INSERT INTO bets VALUES ('open', 1, '${payer}', 2500000), ('done', 2, '${payer}', 9000000);
+      INSERT INTO buy_ins VALUES ('open', 1, '${payer}', 2500000), ('done', 2, '${payer}', 9000000);
       INSERT INTO deposits VALUES ('${hash("a1")}', 0, '${payer}', 5000000, 100), ('${hash("a2")}', 0, '${payer}', 2000000, 200);
       INSERT INTO withdrawals VALUES
         ('w1', '${payee}', 1000000, '${hash("b1")}', 'pending', 300),

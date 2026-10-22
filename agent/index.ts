@@ -183,7 +183,7 @@ async function main() {
   const recent: Arrival[] = []
   let flow = parseFlow(readJson(FLOW_PATH))
   let lastError: string | null = null
-  let windowStats = { roundId: null as number | null, bets: 0, skips: 0, up: 0, down: 0, stakes: [] as number[] }
+  let windowStats = { roundId: null as number | null, buyIns: 0, skips: 0, up: 0, down: 0, stakes: [] as number[] }
   let lastView: DirectorView | null = null
   let stopping = false
 
@@ -238,7 +238,7 @@ async function main() {
     }
     noteWindow(db, {
       id: closing.roundId,
-      bets: windowStats.bets,
+      buyIns: windowStats.buyIns,
       skips: windowStats.skips,
       upMicros: windowStats.up,
       downMicros: windowStats.down,
@@ -373,10 +373,10 @@ async function main() {
         wave = null
       }
 
-      const bettingPaused = steered.control.bettingPaused
+      const buyInPaused = steered.control.buyInPaused
       const marginMs = swarmConfig.timing.marginMs
       if (
-        !bettingPaused &&
+        !buyInPaused &&
         wave === null &&
         builtJoin !== joinId &&
         book &&
@@ -419,10 +419,10 @@ async function main() {
             fireAt: fireAt(wallet.index, wallet.persona.mind, book.joinId, openAt, book.windowEndsAt, swarmConfig.timing),
           })
         }
-        windowStats = { roundId: book.joinId, bets: 0, skips, up: 0, down: 0, stakes: [] }
+        windowStats = { roundId: book.joinId, buyIns: 0, skips, up: 0, down: 0, stakes: [] }
         builtJoin = joinId
         if (queue.length === 0) {
-          noteWindow(db, { id: book.joinId, bets: 0, skips, upMicros: 0, downMicros: 0, at: now })
+          noteWindow(db, { id: book.joinId, buyIns: 0, skips, upMicros: 0, downMicros: 0, at: now })
         } else {
           wave = { roundId: book.joinId, openAt, endsAt: book.windowEndsAt, queue, taken: 0 }
         }
@@ -430,7 +430,7 @@ async function main() {
         builtJoin = joinId
       }
 
-      if (wave && !bettingPaused && now < wave.endsAt - 150) {
+      if (wave && !buyInPaused && now < wave.endsAt - 150) {
         const open = wave
         const loaded = await takeBook()
         if (loaded) {
@@ -515,7 +515,7 @@ async function main() {
               const posted = await postOrders(db, pending, wallets, flow, (message) => {
                 lastError = message
               })
-              windowStats.bets += posted.count
+              windowStats.buyIns += posted.count
               windowStats.up += posted.up
               windowStats.down += posted.down
               windowStats.stakes.push(...posted.stakes)
@@ -523,7 +523,7 @@ async function main() {
             if (wave.queue.length === 0) {
               noteWindow(db, {
                 id: wave.roundId,
-                bets: windowStats.bets,
+                buyIns: windowStats.buyIns,
                 skips: windowStats.skips,
                 upMicros: windowStats.up,
                 downMicros: windowStats.down,
@@ -770,7 +770,7 @@ async function postOrders(
   while (pending.sent < pending.orders.length) {
     if (Date.now() >= pending.endsAt - 150) return { done: false, count, up, down, stakes }
     const part = pending.orders.slice(pending.sent, pending.sent + swarmConfig.runner.betChunk)
-    const response = await api("/api/agents/bets", {
+    const response = await api("/api/agents/buy-ins", {
       method: "POST",
       body: JSON.stringify({ orders: part, roundId: pending.roundId }),
     })
@@ -778,8 +778,8 @@ async function postOrders(
       | { error?: string; code?: string; results?: { address: string; ok: boolean; error?: string }[] }
       | null
     if (!response.ok || !body?.results) {
-      fail(body?.error ?? "Bet chunk failed")
-      if (body?.code === "late" || body?.error === "Betting is closed" || body?.error === "Price feed is delayed") {
+      fail(body?.error ?? "Buy-in chunk failed")
+      if (body?.code === "late" || body?.error === "Buy-in is closed" || body?.error === "Price feed is delayed") {
         return { done: true, count, up, down, stakes }
       }
       return { done: false, count, up, down, stakes }
@@ -955,7 +955,7 @@ function buildSnapshot(input: {
   arrivedMinute: number
   leftMinute: number
   trace: number[]
-  windowStats: { roundId: number | null; bets: number; skips: number; up: number; down: number; stakes: number[] }
+  windowStats: { roundId: number | null; buyIns: number; skips: number; up: number; down: number; stakes: number[] }
   running: boolean
 }): SwarmSnapshot {
   const steered = steering()
@@ -984,7 +984,7 @@ function buildSnapshot(input: {
       downMicros: input.book?.poolDownMicros ?? 0,
       botUpMicros: input.windowStats.up,
       botDownMicros: input.windowStats.down,
-      bets: input.windowStats.bets,
+      buyIns: input.windowStats.buyIns,
       skips: input.windowStats.skips,
       p50: stakes.p50,
       p90: stakes.p90,
@@ -992,7 +992,7 @@ function buildSnapshot(input: {
     money: { ...input.flow, histogram: histogram(balances) },
     lastError: input.lastError,
     bookLagMs: input.bookAt === null ? null : input.now - input.bookAt,
-    bettingPaused: steered.control.bettingPaused,
+    buyInPaused: steered.control.buyInPaused,
     bleed: steered.control.bleed,
     mode: steered.pin !== null ? "pin" : steered.control.mode,
     pin: steered.pin,

@@ -5,7 +5,7 @@ import { requestBurn } from "./custody"
 import { getDb } from "./db"
 import { configuredChain } from "./env"
 import { normalizeAddress } from "./money"
-import { credit, openBook, placeBets, recentSettles, settledSince, tapeTail, youFor, type BetOrder } from "./rounds"
+import { credit, openBook, placeBuyIns, recentSettles, settledSince, tapeTail, youFor, type BuyInOrder } from "./rounds"
 
 const SIGNATURE = /^0x[0-9a-fA-F]+$/
 
@@ -162,14 +162,14 @@ export async function handleAgents(
     return json(result)
   }
 
-  if (req.method === "POST" && url.pathname === "/api/agents/bets") {
+  if (req.method === "POST" && url.pathname === "/api/agents/buy-ins") {
     const now = Date.now()
     const body = await readJson(req)
-    const orders = Array.isArray(body?.orders) ? (body.orders as BetOrder[]) : null
+    const orders = Array.isArray(body?.orders) ? (body.orders as BuyInOrder[]) : null
     const roundId = body?.roundId
     if (!orders) return json({ error: "Orders are invalid" }, 400)
     if (typeof roundId !== "number") return json({ error: "Market is invalid" }, 400)
-    const result = placeBets({ orders, roundId, now })
+    const result = placeBuyIns({ orders, roundId, now })
     if (!result.ok) return json(result.code ? { error: result.error, code: result.code } : { error: result.error }, 400)
     if (result.accepted > 0) deps.publish()
     return json({ results: result.results, accepted: result.accepted })

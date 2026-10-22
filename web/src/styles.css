@@ -110,6 +110,42 @@ body {
   text-transform: uppercase;
   white-space: nowrap;
 }
+.pair-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.feed-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 8px 0 5px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: #0c0d11;
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  line-height: 1;
+  text-transform: none;
+  white-space: nowrap;
+}
+.feed-empty { color: var(--muted); }
+.venue-icon {
+  height: 14px;
+  width: auto;
+  display: block;
+  flex: none;
+}
+.replay-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
 
 .price-block,
 .move,
@@ -985,12 +1021,13 @@ h2 { margin: 0; font-size: 15px; font-weight: 600; }
   border-top: 1px solid var(--line);
   font-variant-numeric: tabular-nums;
 }
-.detail li { grid-template-columns: 1.4fr 0.6fr 1fr 1fr; }
+.detail li { grid-template-columns: 1.2fr 1fr 1.4fr; }
 .up { color: var(--up); }
 .down { color: var(--down); }
 .push { color: var(--push); }
 .void { color: var(--muted); }
 .gain { color: #ffffff; font-weight: 650; }
+.profit { font-weight: 750; }
 .loss { color: var(--muted); }
 .flat { color: var(--muted); }
 .amt { text-align: right; }
@@ -1055,7 +1092,8 @@ tr.open td { color: var(--text); }
 .toast span { display: flex; flex-direction: column; gap: 2px; }
 .toast strong { font-size: 18px; letter-spacing: 0.02em; }
 .toast small { font-size: 12px; opacity: 0.8; font-variant-numeric: tabular-nums; }
-.toast b { font-size: 26px; font-variant-numeric: tabular-nums; letter-spacing: -0.03em; }
+.toast b { font-size: 26px; font-variant-numeric: tabular-nums; letter-spacing: -0.03em; white-space: nowrap; }
+.toast b .profit { font-size: 15px; margin-left: 2px; }
 .toast.win { background: var(--win); color: var(--win-ink); }
 .toast.loss {
   background: var(--loss);
@@ -1170,6 +1208,8 @@ tr.open td { color: var(--text); }
   .footer { grid-template-columns: 1fr; }
   .share { font-size: 38px; margin-top: 6px; }
   .history-count { display: none; }
+  .history { overflow-x: auto; }
+  .history table { min-width: 780px; }
   table { display: block; overflow-x: auto; }
 }
 

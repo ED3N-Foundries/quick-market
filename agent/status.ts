@@ -3,7 +3,7 @@ export type ControlMode = "clock" | "off-peak" | "peak" | "pin"
 export type ControlFile = {
   mode: ControlMode
   pin: number | null
-  bettingPaused: boolean
+  buyInPaused: boolean
   paused: string[]
   bleed: boolean
 }
@@ -21,7 +21,7 @@ export type BookSnap = {
   downMicros: number
   botUpMicros: number
   botDownMicros: number
-  bets: number
+  buyIns: number
   skips: number
   p50: number
   p90: number
@@ -54,7 +54,7 @@ export type SwarmSnapshot = {
   money: MoneySnap
   lastError: string | null
   bookLagMs: number | null
-  bettingPaused: boolean
+  buyInPaused: boolean
   bleed: boolean
   mode: string
   pin: number | null
@@ -65,7 +65,7 @@ export type SwarmSnapshot = {
 }
 
 export function emptyControl(): ControlFile {
-  return { mode: "clock", pin: null, bettingPaused: false, paused: [], bleed: true }
+  return { mode: "clock", pin: null, buyInPaused: false, paused: [], bleed: true }
 }
 
 export function parseControl(value: unknown): ControlFile {
@@ -80,7 +80,7 @@ export function parseControl(value: unknown): ControlFile {
   return {
     mode,
     pin,
-    bettingPaused: row.bettingPaused === true,
+    buyInPaused: typeof row.buyInPaused === "boolean" ? row.buyInPaused : row.bettingPaused === true,
     paused,
     bleed: row.bleed !== false,
   }
@@ -161,10 +161,16 @@ export function spark(values: number[]): string {
 
 export function parseSnapshot(value: unknown): SwarmSnapshot | null {
   if (!value || typeof value !== "object") return null
-  const row = value as Partial<SwarmSnapshot>
+  const row = value as Partial<SwarmSnapshot> & { bettingPaused?: unknown }
   if (typeof row.at !== "number" || typeof row.manila !== "string" || typeof row.phase !== "string") return null
   if (!row.book || !row.money || !Array.isArray(row.window) || !Array.isArray(row.trace)) return null
-  return row as SwarmSnapshot
+  const book = row.book as BookSnap & { bets?: unknown }
+  const buyIns = typeof book.buyIns === "number" ? book.buyIns : typeof book.bets === "number" ? book.bets : 0
+  return {
+    ...(row as SwarmSnapshot),
+    buyInPaused: typeof row.buyInPaused === "boolean" ? row.buyInPaused : row.bettingPaused === true,
+    book: { ...book, buyIns },
+  }
 }
 
 function numberOr(value: unknown, fallback: number): number {

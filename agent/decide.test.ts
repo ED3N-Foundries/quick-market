@@ -47,8 +47,8 @@ test("a rising tape and a cheap up pool splits tape and fade", () => {
     stake,
     timing,
   })
-  expect(up.action).toBe("bet")
-  if (up.action === "bet") expect(up.side).toBe("up")
+  expect(up.action).toBe("buy-in")
+  if (up.action === "buy-in") expect(up.side).toBe("up")
   const down = decideWallet({
     wallet: fade,
     windowId: 10,
@@ -61,7 +61,7 @@ test("a rising tape and a cheap up pool splits tape and fade", () => {
     stake,
     timing,
   })
-  expect(down.action === "skip" || (down.action === "bet" && down.side === "down")).toBe(true)
+  expect(down.action === "skip" || (down.action === "buy-in" && down.side === "down")).toBe(true)
 })
 
 test("a price mind skips a twitch and bets a pool that is off its number", () => {
@@ -100,8 +100,8 @@ test("a price mind skips a twitch and bets a pool that is off its number", () =>
     stake,
     timing,
   })
-  expect(cheap.action).toBe("bet")
-  if (cheap.action === "bet") expect(cheap.side).toBe("up")
+  expect(cheap.action).toBe("buy-in")
+  if (cheap.action === "buy-in") expect(cheap.side).toBe("up")
 })
 
 test("a fair pool on a calm tape is a skip, and two minds can take opposite sides", () => {
@@ -199,7 +199,7 @@ test("one wallet bets in flurries and a moving tape still leaves most wallets ou
       timing,
     })
     gate = decision.gate
-    if (decision.action === "bet") bets.push(windowId)
+    if (decision.action === "buy-in") bets.push(windowId)
   }
   expect(bets.length).toBeGreaterThan(5)
   expect(bets.length).toBeLessThan(720 * 0.45)
@@ -265,8 +265,8 @@ test("a quiet tape fades a lopsided pool", () => {
     stake,
     timing,
   })
-  expect(faded.action).toBe("bet")
-  if (faded.action === "bet") {
+  expect(faded.action).toBe("buy-in")
+  if (faded.action === "buy-in") {
     expect(faded.side).toBe("down")
     expect(faded.stakeMicros).toBeGreaterThanOrEqual(USDC)
     expect(faded.stakeMicros).toBeLessThanOrEqual(wallet.bankroll)
@@ -344,10 +344,10 @@ test("a long enough up run splits streak fades and rides", () => {
   const ups: Side[] = ["up", "up", "up", "up"]
   const faded = streakBet(streakMind(4, true), ups)
   const riding = streakBet(streakMind(4, false), ups)
-  expect(faded.action).toBe("bet")
-  expect(riding.action).toBe("bet")
-  if (faded.action === "bet") expect(faded.side).toBe("down")
-  if (riding.action === "bet") expect(riding.side).toBe("up")
+  expect(faded.action).toBe("buy-in")
+  expect(riding.action).toBe("buy-in")
+  if (faded.action === "buy-in") expect(faded.side).toBe("down")
+  if (riding.action === "buy-in") expect(riding.side).toBe("up")
   expect(streakBet(streakMind(5, true), ups).action).toBe("skip")
   expect(streakBet(streakMind(4, true), ["up", "down", "up", "down"]).action).toBe("skip")
   expect(streakBet(streakMind(4, true), ["up", "up", "up"]).action).toBe("skip")
@@ -357,9 +357,9 @@ test("a longer run leans harder and stakes at least as much", () => {
   const wallet = streakMind(3, true)
   const three = streakBet(wallet, ["up", "up", "up"])
   const five = streakBet(wallet, ["up", "up", "up", "up", "up"])
-  expect(three.action).toBe("bet")
-  expect(five.action).toBe("bet")
-  if (three.action !== "bet" || five.action !== "bet") return
+  expect(three.action).toBe("buy-in")
+  expect(five.action).toBe("buy-in")
+  if (three.action !== "buy-in" || five.action !== "buy-in") return
   expect(five.side).toBe("down")
   expect(five.pUp).toBeLessThan(three.pUp)
   expect(five.stakeMicros).toBeGreaterThanOrEqual(three.stakeMicros)
@@ -382,6 +382,6 @@ test("a flat tape still lets a formed streak bet", () => {
     stake,
     timing,
   })
-  expect(decision.action).toBe("bet")
-  if (decision.action === "bet") expect(decision.side).toBe("up")
+  expect(decision.action).toBe("buy-in")
+  if (decision.action === "buy-in") expect(decision.side).toBe("up")
 })

@@ -18,7 +18,7 @@ export function marketMs(): number {
   return marketPreferences.marketSeconds * 1000
 }
 
-/** Width of the scrolling chart while a bet is riding. */
+/** Width of the scrolling chart while a buy-in is riding. */
 export function viewMs(): number {
   return marketPreferences.viewSeconds * 1000
 }
@@ -27,24 +27,24 @@ export function feeBps(): number {
   return marketPreferences.feeBps
 }
 
-export function marketBounds(id: number): { betsOpen: number; strikeAt: number; settlesAt: number } {
+export function marketBounds(id: number): { buyInOpen: number; strikeAt: number; settlesAt: number } {
   const open = windowMs()
   const ride = marketMs()
-  const betsOpen = id * open
-  const strikeAt = betsOpen + open
+  const buyInOpen = id * open
+  const strikeAt = buyInOpen + open
   const settlesAt = strikeAt + ride
-  return { betsOpen, strikeAt, settlesAt }
+  return { buyInOpen, strikeAt, settlesAt }
 }
 
-/** True when `now` is inside that window. The window is `[betsOpen, strikeAt)`. */
+/** True when `now` is inside that window. The window is `[buyInOpen, strikeAt)`. */
 export function windowAccepts(roundId: number, now: number): boolean {
   if (!Number.isSafeInteger(roundId) || roundId < 0) return false
   if (!Number.isFinite(now)) return false
-  const { betsOpen, strikeAt } = marketBounds(roundId)
-  return now >= betsOpen && now < strikeAt
+  const { buyInOpen, strikeAt } = marketBounds(roundId)
+  return now >= buyInOpen && now < strikeAt
 }
 
-/** Betting windows tile the clock. The next one opens as the previous closes. */
+/** Buy-in windows tile the clock. The next one opens as the previous closes. */
 export function clockAt(now: number) {
   const open = windowMs()
   const joinId = Math.floor(now / open)

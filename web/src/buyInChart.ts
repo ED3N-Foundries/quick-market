@@ -3,7 +3,7 @@ import type { Board } from "./types"
 /** Fixed betting window that contains `now`. The next window starts when this one ends.
  *  The market chart uses `marketScroll` instead.
  */
-export function betSession(board: Board, now: number): { start: number; end: number } {
+export function buyInSession(board: Board, now: number): { start: number; end: number } {
   const windowMs = Math.max(1, board.windowEndsAt - board.blockStart)
   let origin = board.blockStart
   if (now >= origin + windowMs) origin += Math.floor((now - origin) / windowMs) * windowMs

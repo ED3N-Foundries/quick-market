@@ -34,10 +34,10 @@ test("the page names the live source, a ready backup, and a far backup", () => {
   expect(sourceLine(frame(), now)).toContain("80ms")
 })
 
-test("a handoff names the drop and when bets resume", () => {
+test("a handoff names the drop and when buy-in resumes", () => {
   const body = frame()
   body.handoff = { from: "binance", to: "bybit", resumeAt: now + 4_200 }
-  expect(holdLine(body, now)).toBe("configured binance   handoff binance → bybit   bets resume in 4.2s")
+  expect(holdLine(body, now)).toBe("configured binance   handoff binance → bybit   buy-in resumes in 4.2s")
   body.handoff = { from: "binance", to: null, resumeAt: null }
   expect(holdLine(body, now)).toBe("configured binance   handoff binance dropped, waiting")
 })

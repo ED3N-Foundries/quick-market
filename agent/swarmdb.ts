@@ -30,7 +30,7 @@ CREATE TABLE IF NOT EXISTS wallets (
 );
 CREATE TABLE IF NOT EXISTS windows (
   id INTEGER PRIMARY KEY,
-  bets INTEGER,
+  buy_ins INTEGER,
   skips INTEGER,
   up_micros INTEGER,
   down_micros INTEGER,
@@ -82,7 +82,15 @@ export function openSwarm(path: string): Database {
   const db = new Database(path)
   if (path !== ":memory:") db.exec("PRAGMA journal_mode = WAL;")
   db.exec(SCHEMA)
+  migrateWindows(db)
   return db
+}
+
+/** Older swarm files stored the window count in `windows.bets`. */
+function migrateWindows(db: Database) {
+  const columns = db.query("PRAGMA table_info(windows)").all() as { name: string }[]
+  const names = new Set(columns.map((column) => column.name))
+  if (names.has("bets") && !names.has("buy_ins")) db.exec("ALTER TABLE windows RENAME COLUMN bets TO buy_ins")
 }
 
 export function metaGet(db: Database, key: string): string | null {
@@ -156,12 +164,12 @@ export function saveWallets(db: Database, rows: WalletRow[]) {
   tx()
 }
 
-export function noteWindow(db: Database, row: { id: number; bets: number; skips: number; upMicros: number; downMicros: number; at: number }) {
+export function noteWindow(db: Database, row: { id: number; buyIns: number; skips: number; upMicros: number; downMicros: number; at: number }) {
   db.query(
-    `INSERT INTO windows (id, bets, skips, up_micros, down_micros, at) VALUES (?, ?, ?, ?, ?, ?)
-     ON CONFLICT(id) DO UPDATE SET bets = excluded.bets, skips = excluded.skips, up_micros = excluded.up_micros,
+    `INSERT INTO windows (id, buy_ins, skips, up_micros, down_micros, at) VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET buy_ins = excluded.buy_ins, skips = excluded.skips, up_micros = excluded.up_micros,
        down_micros = excluded.down_micros, at = excluded.at`,
-  ).run(row.id, row.bets, row.skips, row.upMicros, row.downMicros, row.at)
+  ).run(row.id, row.buyIns, row.skips, row.upMicros, row.downMicros, row.at)
   db.query(
     `DELETE FROM windows WHERE id NOT IN (SELECT id FROM windows ORDER BY id DESC LIMIT 200)`,
   ).run()

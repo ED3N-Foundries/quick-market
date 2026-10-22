@@ -1,10 +1,10 @@
 import { expect, test } from "bun:test"
 import { comparePrice } from "./money"
-import { settleRound, type BetInput } from "./settle"
+import { settleRound, type BuyInInput } from "./settle"
 
 const USDC = 1_000_000
 
-function bet(id: string, side: "up" | "down", stake: number, address = id): BetInput {
+function bet(id: string, side: "up" | "down", stake: number, address = id): BuyInInput {
   return { id, address, side, stakeMicros: stake }
 }
 

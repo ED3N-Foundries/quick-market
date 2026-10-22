@@ -13,7 +13,7 @@ import {
   takeRunnerKey,
   type DashState,
 } from "./dashboard"
-import { histogram, parseControl, type SwarmSnapshot } from "./status"
+import { histogram, parseControl, parseSnapshot, type SwarmSnapshot } from "./status"
 
 function snapshot(): SwarmSnapshot {
   return {
@@ -34,7 +34,7 @@ function snapshot(): SwarmSnapshot {
       downMicros: 8_760_000,
       botUpMicros: 3_000_000,
       botDownMicros: 2_000_000,
-      bets: 4,
+      buyIns: 4,
       skips: 26,
       p50: 1_230_000,
       p90: 4_560_000,
@@ -48,7 +48,7 @@ function snapshot(): SwarmSnapshot {
     },
     lastError: null,
     bookLagMs: 40,
-    bettingPaused: false,
+    buyInPaused: false,
     bleed: true,
     mode: "pin",
     pin: 30,
@@ -96,7 +96,12 @@ test("an old control file still means follow the clock", () => {
   expect(control.mode).toBe("clock")
   expect(control.paused).toEqual(["0xabc"])
   expect(control.bleed).toBe(true)
-  expect(control.bettingPaused).toBe(false)
+  expect(control.buyInPaused).toBe(false)
+  expect(parseControl({ bettingPaused: true }).buyInPaused).toBe(true)
+  expect(parseControl({ buyInPaused: false, bettingPaused: true }).buyInPaused).toBe(false)
+  const legacy = parseSnapshot({ ...snapshot(), buyInPaused: undefined, bettingPaused: true, book: { ...snapshot().book, buyIns: undefined, bets: 9 } })
+  expect(legacy?.buyInPaused).toBe(true)
+  expect(legacy?.book.buyIns).toBe(9)
 })
 
 test("dashboard keys steer the swarm without listing every wallet", () => {
@@ -104,13 +109,13 @@ test("dashboard keys steer the swarm without listing every wallet", () => {
   expect(pinned.state.control.mode).toBe("pin")
   expect(pinned.state.control.pin).toBe(31)
   const paused = handleKey(pinned.state, "b", null, 0)
-  expect(paused.state.control.bettingPaused).toBe(true)
+  expect(paused.state.control.buyInPaused).toBe(true)
   const one = handleKey(paused.state, "p", "0xabc", 3)
   expect(one.state.control.paused).toEqual(["0xabc"])
   const screen = renderSnapshot(snapshot(), { control: one.state.control }, 2_000)
   expect(screen.split("\n").length).toBeLessThan(12)
   expect(screen).toContain("pin 31")
-  expect(screen).toContain("bets paused")
+  expect(screen).toContain("buy-ins paused")
   expect(screen).toContain("paused 1")
   const cleared = handleKey(one.state, "P", "0xabc", 3)
   expect(cleared.state.control.paused).toEqual([])

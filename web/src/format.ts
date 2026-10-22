@@ -11,11 +11,19 @@ export function formatMoney(micros: number, signed = false): string {
   return `$${text}`
 }
 
-/** Loss is the stake. A win is the stake plus the winnings, which is the payout. */
-export function formatGainLoss(stakeMicros: number, payoutMicros: number): string {
-  if (payoutMicros <= 0) return formatMoney(-Math.abs(Math.trunc(stakeMicros)))
-  if (payoutMicros > stakeMicros) return formatMoney(payoutMicros, true)
-  return formatMoney(0)
+export type ReturnFigures = {
+  back: string
+  profit: string | null
+  tone: "gain" | "loss" | "flat"
+}
+
+/** What came back. The profit is set only when the payout is larger than the stake. A wipe is $0.00. */
+export function formatReturn(stakeMicros: number, payoutMicros: number): ReturnFigures {
+  if (payoutMicros <= 0) return { back: formatMoney(0), profit: null, tone: "loss" }
+  if (payoutMicros > stakeMicros) {
+    return { back: formatMoney(payoutMicros), profit: formatMoney(payoutMicros - stakeMicros, true), tone: "gain" }
+  }
+  return { back: formatMoney(payoutMicros), profit: null, tone: "flat" }
 }
 
 export function parseAmountMicros(input: string): number | null {

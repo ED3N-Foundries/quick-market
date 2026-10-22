@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type PointerEvent as ReactPointerEvent, type RefObject } from "react"
-import { LATE_BET_ERROR } from "../../shared/bet"
+import { LATE_BUY_IN_ERROR } from "../../shared/buyIn"
 import { MINT_CONFIRMATIONS } from "../../shared/mint"
 import { mountChart, priceY, type ChartScale, type TapeChart, type TapeSample } from "./chart"
 import { chartMarket, focusPool, followWindow, heldMarket, heldStrike } from "./focus"
@@ -9,8 +9,8 @@ import {
   chainNetworkLabel,
   formatClock,
   formatDollarMove,
-  formatGainLoss,
   formatMoney,
+  formatReturn,
   formatPrice,
   formatPriceDelta,
   formatSigned,
@@ -33,11 +33,12 @@ import {
   sourceLabel,
   walletDisplayLabel,
 } from "./format"
-import type { Band, Board, HistoryRound, OpenBet, SettledMessage, Side, TrayRow } from "./types"
+import type { Band, Board, HistoryRound, OpenBuyIn, SettledMessage, Side, TrayRow } from "./types"
 import { readCachedBalance, visibleBalance } from "./balanceCache"
 import { readGrantConfirmations } from "./grantChain"
 import { grantLanded, grantTxUrl } from "./grantWatch"
 import { useMarket } from "./useMarket"
+import { FeedBadge } from "./venues"
 import { useSideBook } from "./useSideBook"
 import { grantWaitStatus, loginStatus, loginSteps, loginStepState } from "./phantomConnect"
 import { useSession } from "./wallet"
@@ -53,7 +54,7 @@ export function App() {
   const viewRef = useRef({ follow: true, start: 0, end: 0 })
   const viewSecondsRef = useRef(market.config.viewSeconds)
   const boardRef = useRef(market.board)
-  const openBetsRef = useRef<OpenBet[]>([])
+  const openBuyInsRef = useRef<OpenBuyIn[]>([])
   const [chart, setChart] = useState<TapeChart | null>(null)
   const [stake, setStake] = useState("10")
   const [windowTick, setWindowTick] = useState(0)
@@ -74,7 +75,7 @@ export function App() {
   const [following, setFollowing] = useState(true)
   const scrub = useScrub(chart)
   boardRef.current = market.board
-  openBetsRef.current = market.you?.openBets ?? []
+  openBuyInsRef.current = market.you?.openBuyIns ?? []
   viewSecondsRef.current = market.config.viewSeconds
 
   useEffect(() => {
@@ -156,25 +157,25 @@ export function App() {
         const board = boardRef.current
         if (!board) return null
         const now = Date.now() + market.offsetRef.current
-        const frame = followWindow(board, openBetsRef.current, now, (viewSecondsRef.current || 5) * 1000)
+        const frame = followWindow(board, openBuyInsRef.current, now, (viewSecondsRef.current || 5) * 1000)
         return { blockStart: frame.start, blockEnd: frame.end }
       },
       getStrike: () => {
         const board = boardRef.current
         if (!board) return null
         const now = Date.now() + market.offsetRef.current
-        const riding = chartMarket(board, openBetsRef.current, now)
+        const riding = chartMarket(board, openBuyInsRef.current, now)
         const strike = heldStrike(riding)
         if (!strike || !riding) return null
-        return { ...strike, peg: true, at: riding.strikeAt, openAt: riding.betsOpen }
+        return { ...strike, peg: true, at: riding.strikeAt, openAt: riding.buyInOpen }
       },
       getAim: () => {
         const board = boardRef.current
         if (!board) return null
         const now = Date.now() + market.offsetRef.current
-        const held = heldMarket(board, openBetsRef.current, now)
+        const held = heldMarket(board, openBuyInsRef.current, now)
         if (!held) return null
-        return openBetsRef.current.find((bet) => bet.roundId === held.id)?.side ?? null
+        return openBuyInsRef.current.find((bet) => bet.roundId === held.id)?.side ?? null
       },
       extendLive: () => true,
       onHead: (text) => {
@@ -196,7 +197,7 @@ export function App() {
   const you = market.you
   const cached = session.token && session.address ? readCachedBalance(session.address) : null
   const shownMicros = visibleBalance(market.confirmed, you?.balanceMicros ?? null, cached?.balanceMicros ?? null)
-  const openBets = you?.openBets ?? []
+  const openBuyIns = you?.openBuyIns ?? []
   const now = Date.now() + market.offsetRef.current
   void windowTick
   useEffect(() => {
@@ -206,10 +207,10 @@ export function App() {
     const id = window.setTimeout(() => setWindowTick(board.windowEndsAt), left)
     return () => window.clearTimeout(id)
   }, [board, market.offsetRef])
-  const heldSpan = board ? heldMarket(board, openBets, now) : null
-  const focus = focusPool(board, openBets, now)
+  const heldSpan = board ? heldMarket(board, openBuyIns, now) : null
+  const focus = focusPool(board, openBuyIns, now)
   const total = (focus?.poolUpMicros ?? 0) + (focus?.poolDownMicros ?? 0)
-  const held = openBets.find((bet) => bet.roundId === focus?.id) ?? null
+  const held = openBuyIns.find((bet) => bet.roundId === focus?.id) ?? null
   const upQuote = focus ? quoteDollar("up", focus.poolUpMicros, focus.poolDownMicros, market.config.feeBps) : "—"
   const downQuote = focus ? quoteDollar("down", focus.poolUpMicros, focus.poolDownMicros, market.config.feeBps) : "—"
   const figures = useSideBook({
@@ -311,6 +312,7 @@ export function App() {
             strike={heldSpan?.strike ?? null}
             pair={quotePair(market.ticker.venue)}
             pairTitle={market.ticker.label || sourceLabel(market.ticker.venue)}
+            venue={market.ticker.venue}
           />
           <div className="clock-block">
             <span className="clock-label">{market.handoff ? "Opens" : heldSpan ? "Settles" : "Buy-in"}</span>
@@ -339,7 +341,7 @@ export function App() {
           <ChartOverlay
             chart={chart}
             board={board}
-            openBets={openBets}
+            openBuyIns={openBuyIns}
             feeBps={market.config.feeBps}
             hover={scrub.hover}
             offsetRef={market.offsetRef}
@@ -760,11 +762,11 @@ export function App() {
       <footer className="footer">
         <div className="rules">
           <p className="periods">
-            Bets {market.config.windowSeconds}s · Market {market.config.marketSeconds}s
+            Buy-in {market.config.windowSeconds}s · Market {market.config.marketSeconds}s
           </p>
           <p>Up finishes above the open. Down finishes below. Push is a tie, and stakes return.</p>
           <p>If a market never gets a price, it is void and stakes return.</p>
-          <p>If the price feed drops during a market, that market is void and stakes return. The next feed is shown before betting starts.</p>
+          <p>If the price feed drops during a market, that market is void and stakes return. The next feed is shown before buy-in opens.</p>
           <p>
             {(market.config.feeBps / 100).toFixed(2)}% fee on a paid pool. Price from {market.ticker.label || sourceLabel(market.ticker.venue)}.
           </p>
@@ -777,14 +779,14 @@ export function App() {
 function ChartOverlay({
   chart,
   board,
-  openBets,
+  openBuyIns,
   feeBps,
   hover,
   offsetRef,
 }: {
   chart: TapeChart
   board: Board | null
-  openBets: OpenBet[]
+  openBuyIns: OpenBuyIn[]
   feeBps: number
   hover: { t: number } | null
   offsetRef?: RefObject<number>
@@ -794,7 +796,7 @@ function ChartOverlay({
   const span = Math.max(1, current.viewEnd - current.viewStart)
   const xAt = (t: number) => current.plotLeft + ((t - current.viewStart) / span) * current.plotWidth
   const now = Date.now() + (offsetRef?.current ?? 0)
-  const riding = chartMarket(board, openBets, now)
+  const riding = chartMarket(board, openBuyIns, now)
   const peg = heldStrike(riding)
   const gutter = current.width - current.plotLeft - current.plotWidth
 
@@ -807,7 +809,7 @@ function ChartOverlay({
           right={gutter + 16}
         />
       )}
-      {openBets.map((bet) => {
+      {openBuyIns.map((bet) => {
         const band = board.bands.find((row) => row.id === bet.roundId) ?? (board.join?.id === bet.roundId ? board.join : null)
         if (!band) return null
         const pinsRight = riding?.id === bet.roundId
@@ -904,7 +906,7 @@ function BetChip({
   top,
   feeBps,
 }: {
-  bet: OpenBet
+  bet: OpenBuyIn
   band: Band
   left?: number
   right?: number
@@ -977,11 +979,13 @@ function PriceReadout({
   strike,
   pair,
   pairTitle,
+  venue,
 }: {
   priceRef: RefObject<string | null>
   strike: string | null
   pair: string
   pairTitle: string
+  venue: string
 }) {
   const priceEl = useRef<HTMLSpanElement>(null)
   const deltaEl = useRef<HTMLSpanElement>(null)
@@ -1006,8 +1010,11 @@ function PriceReadout({
   return (
     <>
       <div className="price-block">
-        <span className="pair-badge" title={pairTitle}>
-          {pair}
+        <span className="pair-row">
+          <span className="pair-badge" title={pairTitle}>
+            {pair}
+          </span>
+          <FeedBadge source={venue} />
         </span>
         <span className="price-line">
           <LockMark locked={!!strike} />
@@ -1578,11 +1585,11 @@ function History({ token, version, windowMs }: { token: string | null; version: 
               <th>Close</th>
               <th>Up</th>
               <th>Down</th>
+              <th>Feed</th>
               {mine && (
                 <>
-                  <th>Side</th>
-                  <th>Amount</th>
-                  <th>Gain/loss</th>
+                  <th>Bought</th>
+                  <th>Back</th>
                 </>
               )}
             </tr>
@@ -1596,14 +1603,18 @@ function History({ token, version, windowMs }: { token: string | null; version: 
                 <td>{row.settle ? formatPrice(row.settle) : "—"}</td>
                 <td>{formatMoney(row.poolUpMicros)}</td>
                 <td>{formatMoney(row.poolDownMicros)}</td>
+                <td>
+                  <FeedBadge source={row.source} />
+                </td>
                 {mine && (
                   <>
-                    <td className={row.mySide ?? ""}>{sideText(row.mySide)}</td>
-                    <td>{row.myStakeMicros !== undefined ? formatMoney(row.myStakeMicros) : "—"}</td>
-                    <td className={gainTone(row.myStakeMicros, row.myPayoutMicros)}>
-                      {row.myStakeMicros !== undefined && row.myPayoutMicros != null
-                        ? formatGainLoss(row.myStakeMicros, row.myPayoutMicros)
-                        : "—"}
+                    <td className={row.mySide ?? ""}>{boughtText(row.mySide, row.myStakeMicros)}</td>
+                    <td>
+                      {row.myStakeMicros !== undefined && row.myPayoutMicros != null ? (
+                        <BackAmount stake={row.myStakeMicros} payout={row.myPayoutMicros} />
+                      ) : (
+                        "—"
+                      )}
                     </td>
                   </>
                 )}
@@ -1631,16 +1642,20 @@ function PoolRows({ rows, payout }: { rows: TrayRow[]; payout?: (row: TrayRow) =
     <>
       {rows.map((row) => {
         const paid = payout?.(row)
+        if (!payout) {
+          return (
+            <li key={row.address}>
+              <span className="addr">{shortAddress(row.address)}</span>
+              <span className={row.side}>{row.side === "up" ? "▲ Up" : "▼ Down"}</span>
+              <span className="amt">{formatMoney(row.stakeMicros)}</span>
+            </li>
+          )
+        }
         return (
           <li key={row.address}>
             <span className="addr">{shortAddress(row.address)}</span>
-            <span className={row.side}>{row.side === "up" ? "▲ Up" : "▼ Down"}</span>
-            <span className="amt">{formatMoney(row.stakeMicros)}</span>
-            {payout && (
-              <span className={gainTone(row.stakeMicros, paid)}>
-                {paid == null ? "—" : formatGainLoss(row.stakeMicros, paid)}
-              </span>
-            )}
+            <span className={row.side}>{boughtText(row.side, row.stakeMicros)}</span>
+            <span className="amt">{paid == null ? "—" : <BackAmount stake={row.stakeMicros} payout={paid} />}</span>
           </li>
         )
       })}
@@ -1651,7 +1666,7 @@ function PoolRows({ rows, payout }: { rows: TrayRow[]; payout?: (row: TrayRow) =
 function Replay({ row, windowMs, onClose }: { row: HistoryRound; windowMs: number; onClose: () => void }) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const [chart, setChart] = useState<TapeChart | null>(null)
-  const [bets, setBets] = useState<RoundBet[] | null>(null)
+  const [buyIns, setBuyIns] = useState<RoundBet[] | null>(null)
   const [failed, setFailed] = useState(false)
   const scrub = useScrub(chart)
   const viewRef = useRef({ follow: false, start: row.startsAt - windowMs, end: row.endsAt })
@@ -1677,8 +1692,8 @@ function Replay({ row, windowMs, onClose }: { row: HistoryRound; windowMs: numbe
         const tape = (body.tape ?? []) as { t: number; price: string }[]
         const canvas = canvasRef.current
         if (!canvas) return
-        const betsOpen = row.startsAt - windowMs
-        viewRef.current = { follow: false, start: betsOpen, end: row.endsAt }
+        const buyInOpen = row.startsAt - windowMs
+        viewRef.current = { follow: false, start: buyInOpen, end: row.endsAt }
         spawned = mountChart(canvas, {
           getNow: () => row.endsAt + 1,
           getView: () => viewRef.current,
@@ -1692,7 +1707,7 @@ function Replay({ row, windowMs, onClose }: { row: HistoryRound; windowMs: numbe
         })
         spawned.reset(tape.map((point) => ({ t: point.t, price: Number(point.price), text: point.price })))
         setChart(spawned)
-        setBets(body.bets ?? [])
+        setBuyIns(body.buyIns ?? [])
       })
       .catch(() => {
         if (!cancel) setFailed(true)
@@ -1713,7 +1728,7 @@ function Replay({ row, windowMs, onClose }: { row: HistoryRound; windowMs: numbe
     bands: [
       {
         id: row.id,
-        betsOpen: row.startsAt - windowMs,
+        buyInOpen: row.startsAt - windowMs,
         strikeAt: row.startsAt,
         settlesAt: row.endsAt,
         strike: row.strike,
@@ -1737,7 +1752,10 @@ function Replay({ row, windowMs, onClose }: { row: HistoryRound; windowMs: numbe
       >
         <header>
           <div>
-            <h2>{formatClock(row.startsAt)}</h2>
+            <div className="replay-title">
+              <h2>{formatClock(row.startsAt)}</h2>
+              <FeedBadge source={row.source} />
+            </div>
             <p>
               {resultText(row)}
               {row.strike && row.settle ? ` · ${formatPrice(row.strike)} → ${formatPrice(row.settle)}` : ""}
@@ -1750,14 +1768,14 @@ function Replay({ row, windowMs, onClose }: { row: HistoryRound; windowMs: numbe
         </header>
         <section className="chart-wrap still" onPointerMove={scrub.move} onPointerLeave={scrub.clear}>
           <canvas ref={canvasRef} />
-          {chart && <ChartOverlay chart={chart} board={board} openBets={[]} feeBps={0} hover={scrub.hover} />}
+          {chart && <ChartOverlay chart={chart} board={board} openBuyIns={[]} feeBps={0} hover={scrub.hover} />}
         </section>
         {failed && <p className="empty">Couldn't load this market.</p>}
-        {bets && bets.length === 0 && <p className="empty">No bets in this pool.</p>}
-        {bets && bets.length > 0 && (
+        {buyIns && buyIns.length === 0 && <p className="empty">No one in this pool.</p>}
+        {buyIns && buyIns.length > 0 && (
           <div className="detail">
             <ul>
-              <PoolRows rows={bets} payout={(row) => (row as RoundBet).payoutMicros ?? null} />
+              <PoolRows rows={buyIns} payout={(entry) => (entry as RoundBet).payoutMicros ?? null} />
             </ul>
           </div>
         )}
@@ -1775,7 +1793,7 @@ function LateToast({ onDone }: { onDone: () => void }) {
   }, [])
   return (
     <button type="button" className="toast late" onClick={onDone}>
-      <span>{LATE_BET_ERROR}</span>
+      <span>{LATE_BUY_IN_ERROR}</span>
     </button>
   )
 }
@@ -1793,13 +1811,21 @@ function ResultToast({ event, address, onDone }: { event: SettledMessage; addres
   const tone = toastTone(event, mine.stakeMicros, mine.payoutMicros)
   const title = event.resolution === "void" ? "Void" : tone === "win" ? "You win" : tone === "loss" ? "Lost" : "= Push"
   const move = event.strike && event.settle ? moveText(event.strike, event.settle) : null
+  const figures = formatReturn(mine.stakeMicros, mine.payoutMicros)
+  const glyph = mine.side === "up" ? "▲" : "▼"
   return (
     <button type="button" className={`toast ${tone}`} onClick={onDone}>
       <span>
         <strong>{title}</strong>
         {move && <small>{move}</small>}
+        <small>
+          {glyph} Bought {formatMoney(mine.stakeMicros)}
+        </small>
       </span>
-      <b>{formatGainLoss(mine.stakeMicros, mine.payoutMicros)}</b>
+      <b>
+        {figures.back}
+        {figures.profit && <span className="profit"> ({figures.profit})</span>}
+      </b>
     </button>
   )
 }
@@ -1848,17 +1874,20 @@ function resultText(row: HistoryRound): string {
   return "—"
 }
 
-function sideText(side: Side | undefined): string {
-  if (side === "up") return "▲ Up"
-  if (side === "down") return "▼ Down"
-  return "—"
+function boughtText(side: Side | undefined, stake: number | undefined): string {
+  if (side !== "up" && side !== "down") return "—"
+  if (stake === undefined) return side === "up" ? "▲" : "▼"
+  return `${side === "up" ? "▲" : "▼"} ${formatMoney(stake)}`
 }
 
-function gainTone(stake: number | undefined, payout: number | null | undefined): string {
-  if (stake === undefined || payout == null) return ""
-  if (payout > stake) return "gain"
-  if (payout === 0) return "loss"
-  return "flat"
+function BackAmount({ stake, payout }: { stake: number; payout: number }) {
+  const figures = formatReturn(stake, payout)
+  return (
+    <span className={figures.tone}>
+      {figures.back}
+      {figures.profit && <span className="profit"> ({figures.profit})</span>}
+    </span>
+  )
 }
 
 function toastTone(event: SettledMessage, stake: number, payout: number): string {

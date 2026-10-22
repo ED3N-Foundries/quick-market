@@ -1,6 +1,6 @@
 import { RENDER_MS } from "../../shared/market"
-import { betSession, marketScroll } from "./betChart"
-import type { Band, Board, OpenBet, PoolCard } from "./types"
+import { buyInSession, marketScroll } from "./buyInChart"
+import type { Band, Board, OpenBuyIn, PoolCard } from "./types"
 
 function findMarket(board: Board, id: number): Band | null {
   if (board.live?.id === id) return board.live
@@ -9,9 +9,9 @@ function findMarket(board: Board, id: number): Band | null {
 }
 
 /** The open bet that settles first and is still running. */
-export function heldMarket(board: Board, openBets: OpenBet[], now: number): Band | null {
+export function heldMarket(board: Board, openBuyIns: OpenBuyIn[], now: number): Band | null {
   let best: Band | null = null
-  for (const bet of openBets) {
+  for (const bet of openBuyIns) {
     const market = findMarket(board, bet.roundId)
     if (!market || market.settlesAt <= now) continue
     if (!best || market.settlesAt < best.settlesAt || (market.settlesAt === best.settlesAt && market.id < best.id)) {
@@ -29,8 +29,8 @@ function isResolving(market: Band | null, now: number): market is Band {
  *  Only a bet you are riding, after its strike and before it settles.
  *  An unbetted user stays on the betting window, and an unstruck bet does not roll it.
  */
-export function chartMarket(board: Board, openBets: OpenBet[], now: number): Band | null {
-  const held = heldMarket(board, openBets, now)
+export function chartMarket(board: Board, openBuyIns: OpenBuyIn[], now: number): Band | null {
+  const held = heldMarket(board, openBuyIns, now)
   if (isResolving(held, now)) return held
   return null
 }
@@ -39,17 +39,17 @@ export function chartMarket(board: Board, openBets: OpenBet[], now: number): Ban
  *  on the right edge. The bet chart stays the fixed slice that contains now.
  *  A held bet does not change the width.
  */
-export function followWindow(board: Board, openBets: OpenBet[], now: number, viewMs = 5_000): { start: number; end: number } {
-  if (chartMarket(board, openBets, now)) return marketScroll(now, viewMs)
-  return betWindow(board, now)
+export function followWindow(board: Board, openBuyIns: OpenBuyIn[], now: number, viewMs = 5_000): { start: number; end: number } {
+  if (chartMarket(board, openBuyIns, now)) return marketScroll(now, viewMs)
+  return buyInWindow(board, now)
 }
 
 /** The betting window on screen. A clock within the render delay of the server's
  *  join id stays on that id. It does not roll into the neighbor, and the price
  *  delay is not applied to `now`.
  */
-export function betWindow(board: Board, now: number): { start: number; end: number } {
-  const session = betSession(board, now)
+export function buyInWindow(board: Board, now: number): { start: number; end: number } {
+  const session = buyInSession(board, now)
   const join = board.join
   if (!join) return session
   const start = board.blockStart
@@ -71,9 +71,9 @@ export function heldStrike(market: { strike: string | null } | null): { price: n
 }
 
 /** Pool shown in the trade panel. A held market wins. Otherwise the open betting window. */
-export function focusPool(board: Board | null, openBets: OpenBet[], now: number): PoolCard | null {
+export function focusPool(board: Board | null, openBuyIns: OpenBuyIn[], now: number): PoolCard | null {
   if (!board) return null
-  const held = heldMarket(board, openBets, now)
+  const held = heldMarket(board, openBuyIns, now)
   if (!held) return board.join
   if (board.live?.id === held.id) return board.live
   if (board.join?.id === held.id) return board.join

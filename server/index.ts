@@ -14,7 +14,7 @@ import { hub } from "./hub"
 import { parseMicros } from "./money"
 import { feedsNow } from "./feeds"
 import { oracleView, startOracle } from "./oracle"
-import { adoptFeed, advance, board, failFeed, feedStatus, handoffNow, listRounds, noteAlive, notePrint, placeBet, roundDetail, tapePoints, tickerNow, youFor } from "./rounds"
+import { adoptFeed, advance, board, failFeed, feedStatus, handoffNow, listRounds, noteAlive, notePrint, placeBuyIn, roundDetail, tapePoints, tickerNow, youFor } from "./rounds"
 import { agentAuthorized, endSession, openSession, readSession } from "./session"
 
 let chain: ReturnType<typeof configuredChain>
@@ -302,7 +302,7 @@ async function handle(req: Request): Promise<Response> {
     return handleAgents(req, url, { mint: mintToTreasury, publish: markRoundDirty })
   }
 
-  if (req.method === "POST" && url.pathname === "/api/bets") {
+  if (req.method === "POST" && url.pathname === "/api/buy-ins") {
     const now = Date.now()
     const session = readSession(req, now)
     if (!session.address) return json({ error: "Connect a wallet first" }, 401)
@@ -313,7 +313,7 @@ async function handle(req: Request): Promise<Response> {
     if (!side) return json({ error: "Side is invalid" }, 400)
     if (stake === null) return json({ error: "Stake is invalid" }, 400)
     if (typeof roundId !== "number") return json({ error: "Market is invalid" }, 400)
-    const result = placeBet({ address: session.address, side, stakeMicros: stake, roundId, now })
+    const result = placeBuyIn({ address: session.address, side, stakeMicros: stake, roundId, now })
     if (!result.ok) return json(result.code ? { error: result.error, code: result.code } : { error: result.error }, 400)
     markRoundDirty()
     return json({ you: result.you })

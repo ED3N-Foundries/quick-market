@@ -75,7 +75,7 @@ export function holdLine(frame: FeedFrame, now: number): string {
   const handoff = frame.handoff
   if (!handoff) return `configured ${frame.configured}   handoff none`
   if (!handoff.to) return `configured ${frame.configured}   handoff ${handoff.from} dropped, waiting`
-  const wait = handoff.resumeAt != null && handoff.resumeAt > now ? `   bets resume in ${formatAge(handoff.resumeAt - now)}` : ""
+  const wait = handoff.resumeAt != null && handoff.resumeAt > now ? `   buy-in resumes in ${formatAge(handoff.resumeAt - now)}` : ""
   return `configured ${frame.configured}   handoff ${handoff.from} → ${handoff.to}${wait}`
 }
 

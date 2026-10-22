@@ -5,7 +5,7 @@ import { botEnrollMessage, loginMessage } from "../shared/login"
 import { enrollBot, resurrectBot } from "./agents"
 import { holdBurn, refundBurn } from "./custody"
 import { getDb, useDatabase } from "./db"
-import { advance, board, credit, notePrint, placeBets, resetRuntime, youFor, type Print } from "./rounds"
+import { advance, board, credit, notePrint, placeBuyIns, resetRuntime, youFor, type Print } from "./rounds"
 import { openSession } from "./session"
 
 const USDC = 1_000_000
@@ -49,7 +49,7 @@ test("one poor row does not reject the good rows, and a retry does not double th
   const rich = bot(1, 10 * USDC)
   const poor = bot(2, 0)
   const other = bot(3, 8 * USDC)
-  const first = placeBets({
+  const first = placeBuyIns({
     now: T + 100,
     roundId: T / WINDOW,
     orders: [
@@ -68,7 +68,7 @@ test("one poor row does not reject the good rows, and a retry does not double th
   expect(card?.poolUpMicros).toBe(1_500_000)
   expect(card?.poolDownMicros).toBe(2_250_000)
 
-  const again = placeBets({
+  const again = placeBuyIns({
     now: T + 150,
     roundId: T / WINDOW,
     orders: [

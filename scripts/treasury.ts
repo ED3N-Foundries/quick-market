@@ -508,7 +508,7 @@ export function readLedger(path: string): LedgerView {
     const openStakeMicros = one(
       db,
       `SELECT COALESCE(SUM(b.stake_micros), 0) AS n
-       FROM bets b JOIN rounds r ON r.id = b.round_id
+       FROM buy_ins b JOIN rounds r ON r.id = b.round_id
        WHERE r.status = 'open'`,
     )
     const pendingMicros = one(db, "SELECT COALESCE(SUM(amount_micros), 0) AS n FROM withdrawals WHERE status = 'pending'")

@@ -1,10 +1,10 @@
 import { settleRound } from "../server/settle"
 import type { Side } from "./decide"
 
-export type OurBet = { address: string; side: Side; stakeMicros: number }
+export type OurBuyIn = { address: string; side: Side; stakeMicros: number }
 
 export function replayPayouts(input: {
-  ours: OurBet[]
+  ours: OurBuyIn[]
   poolUpMicros: number
   poolDownMicros: number
   strike: string | null

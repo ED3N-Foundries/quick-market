@@ -5,7 +5,7 @@ import {
   chainNetworkLabel,
   extractAccountLabel,
   formatDollarMove,
-  formatGainLoss,
+  formatReturn,
   formatGrantTimer,
   formatGrantWait,
   formatMoney,
@@ -36,10 +36,10 @@ test("formatMoney rounds half-up to cents for display", () => {
   expect(formatMoney(0)).toBe("$0.00")
 })
 
-test("formatGainLoss shows the lost stake or the stake plus winnings", () => {
-  expect(formatGainLoss(10_000_000, 0)).toBe("-$10.00")
-  expect(formatGainLoss(10_000_000, 18_500_000)).toBe("+$18.50")
-  expect(formatGainLoss(10_000_000, 10_000_000)).toBe("$0.00")
+test("formatReturn shows what came back, and the profit only on a win", () => {
+  expect(formatReturn(10_000_000, 0)).toEqual({ back: "$0.00", profit: null, tone: "loss" })
+  expect(formatReturn(10_000_000, 18_500_000)).toEqual({ back: "$18.50", profit: "+$8.50", tone: "gain" })
+  expect(formatReturn(10_000_000, 10_000_000)).toEqual({ back: "$10.00", profit: null, tone: "flat" })
 })
 
 test("source labels follow the configured feed", () => {

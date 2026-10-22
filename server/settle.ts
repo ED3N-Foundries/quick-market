@@ -2,14 +2,14 @@ import { comparePrice } from "./money"
 
 export type Side = "up" | "down"
 
-export type BetInput = {
+export type BuyInInput = {
   id: string
   address: string
   side: Side
   stakeMicros: number
 }
 
-export type Payout = BetInput & { payoutMicros: number }
+export type Payout = BuyInInput & { payoutMicros: number }
 
 export type Resolution = "paid" | "refund" | "void"
 
@@ -23,7 +23,7 @@ export type Settlement = {
   payouts: Payout[]
 }
 
-function pools(bets: BetInput[]) {
+function pools(bets: BuyInInput[]) {
   let up = 0
   let down = 0
   for (const bet of bets) {
@@ -34,7 +34,7 @@ function pools(bets: BetInput[]) {
 }
 
 function refund(
-  bets: BetInput[],
+  bets: BuyInInput[],
   poolUpMicros: number,
   poolDownMicros: number,
   resolution: Resolution,
@@ -53,7 +53,7 @@ function refund(
 }
 
 export function settleRound(args: {
-  bets: BetInput[]
+  bets: BuyInInput[]
   strike: string | null
   settle: string | null
   feeBps: number
