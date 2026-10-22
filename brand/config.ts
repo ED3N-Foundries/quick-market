@@ -36,10 +36,14 @@ export const brand = {
     size: 1024,
     safeWidth: 0.62,
   },
+  /**
+   * Share card. Tighter than a full-bleed line so a cropped preview keeps
+   * the words, and looser than the X header.
+   */
   og: {
     width: 2400,
     height: 1260,
-    safeWidth: 0.8,
+    safeWidth: 0.45,
   },
   /**
    * X header. Smaller profile views crop the top and bottom, and the profile

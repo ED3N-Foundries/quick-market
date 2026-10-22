@@ -19,6 +19,7 @@ test("the marks use the regular wordmark face and the brand lines", () => {
   expect(brand.avatar.text).toBe("qmkt.app")
   expect(brand.tagline).toBe("trade next, now.")
   expect(brand.origin).toBe("https://qmkt.app")
-  expect(brand.banner.safeWidth).toBe(0.52)
+  expect(brand.banner.safeWidth).toBe(0.34)
+  expect(brand.og.safeWidth).toBe(0.55)
   expect(brand.banner.safeWidth).toBeLessThan(brand.og.safeWidth)
 })
