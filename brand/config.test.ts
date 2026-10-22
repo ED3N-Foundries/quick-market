@@ -16,7 +16,7 @@ test("the marks use the regular wordmark face and the brand lines", () => {
   expect(brand.font.letterSpacing).toBe("-0.03em")
   expect(brand.font.boldLocal[0]).toBe("Iowan Old Style Bold")
   expect(brand.favicon.text).toBe("qm")
-  expect(brand.avatar.text).toBe("qmkt.app")
+  expect(brand.avatar.text).toBe("😭")
   expect(brand.tagline).toBe("we're tired of winning 😭")
   expect(brand.origin).toBe("https://qmkt.app")
   expect(brand.banner.safeWidth).toBe(0.34)

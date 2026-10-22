@@ -31,6 +31,11 @@ type Shot = {
   rendering: "geometricPrecision" | "optimizeLegibility"
   /** Defaults to the regular weight. The 16px icon uses 700. */
   weight?: number
+  /**
+   * Wordmarks must contain a near-white pixel. A color emoji does not,
+   * so those shots accept any pixel that leaves the backdrop.
+   */
+  ink?: "white" | "color"
 }
 
 function cssFamily(name: string) {
@@ -98,7 +103,6 @@ async function fit(page: Page, shot: Shot) {
       const line = document.getElementById("line")
       if (!(line instanceof HTMLElement)) throw new Error("missing line")
       document.body.style.textRendering = rendering
-      line.textContent = text
       line.style.letterSpacing = letterSpacing
       line.style.fontWeight = String(weight)
       await document.fonts.load(`${weight} 72px "${family}"`)
@@ -108,6 +112,9 @@ async function fit(page: Page, shot: Shot) {
         line.style.fontSize = "72px"
         return line.getBoundingClientRect().width
       }
+      // Emoji is drawn by the color-emoji face in every family, so the shot
+      // text cannot prove which serif loaded. A Latin probe can.
+      line.textContent = "H"
       const branded = widthOf(`"${family}", "Courier New", monospace`)
       const courier = widthOf(`"Courier New", monospace`)
       if (Math.abs(branded - courier) < 1) {
@@ -120,6 +127,7 @@ async function fit(page: Page, shot: Shot) {
         const heavy = widthOf(`"${family}", "Courier New", monospace`)
         if (Math.abs(heavy - roman) < 1) throw new Error(`${family} bold did not load`)
       }
+      line.textContent = text
       line.style.fontFamily = stack
       line.style.fontWeight = String(weight)
       const maxWidth = window.innerWidth * safeWidth
@@ -155,7 +163,7 @@ async function fit(page: Page, shot: Shot) {
   )
 }
 
-async function assertArt(png: Buffer, label: string, minWhite: number) {
+async function assertArt(png: Buffer, label: string, minWhite: number, ink: "white" | "color" = "white") {
   const { data, info } = await sharp(png).ensureAlpha().raw().toBuffer({ resolveWithObject: true })
   const channels = info.channels
   if (data[0] !== 18 || data[1] !== 53 || data[2] !== 36) {
@@ -165,11 +173,15 @@ async function assertArt(png: Buffer, label: string, minWhite: number) {
     const pixel = data[i]
     const green = data[i + 1]
     const blue = data[i + 2]
-    if (pixel !== undefined && green !== undefined && blue !== undefined && pixel >= minWhite && green >= minWhite && blue >= minWhite) {
+    if (pixel === undefined || green === undefined || blue === undefined) continue
+    if (ink === "color") {
+      const lift = (pixel - 18) ** 2 + (green - 53) ** 2 + (blue - 36) ** 2
+      if (lift > 800) return
+    } else if (pixel >= minWhite && green >= minWhite && blue >= minWhite) {
       return
     }
   }
-  throw new Error(`${label} has no white text`)
+  throw new Error(ink === "color" ? `${label} has no ink` : `${label} has no white text`)
 }
 
 function channel(hex: string, offset: number) {
@@ -249,7 +261,7 @@ async function shoot(page: Page, shot: Shot) {
   if (meta.width !== shot.width || meta.height !== shot.height) {
     throw new Error(`${shot.label} screenshot is ${meta.width}x${meta.height}`)
   }
-  await assertArt(png, shot.label, shot.minWhite)
+  await assertArt(png, shot.label, shot.minWhite, shot.ink ?? "white")
   console.log(`${shot.label}  ${shot.width}x${shot.height}  type ${fitted.fontSize}px`)
   return png
 }
@@ -335,6 +347,7 @@ async function renderAll(fontSrc: string) {
         safeWidth: brand.avatar.safeWidth,
         minWhite: 200,
         rendering: "geometricPrecision",
+        ink: "color",
       })
       await writeFile(join(publicDir, "avatar.png"), avatar)
     }

@@ -32,7 +32,7 @@ export const brand = {
     safeWidth: 0.7,
   },
   avatar: {
-    text: "qmkt.app",
+    text: "😭",
     size: 1024,
     safeWidth: 0.62,
   },
