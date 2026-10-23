@@ -37,6 +37,7 @@ import type { Band, Board, HistoryRound, OpenBuyIn, SettledMessage, Side, TrayRo
 import { readCachedBalance, visibleBalance } from "./balanceCache"
 import { readGrantConfirmations } from "./grantChain"
 import { grantLanded, grantTxUrl } from "./grantWatch"
+import { formatLag, lagButtonName, type LinkStatus } from "./lag"
 import { useMarket } from "./useMarket"
 import { FeedBadge } from "./venues"
 import { useSideBook } from "./useSideBook"
@@ -304,7 +305,10 @@ export function App() {
     <div className="app">
       <header className="top">
         <div className="brand">
-          <span className="mark">Quick Market</span>
+          <span className="mark">
+            <img className="logomark" src="/apple-touch-icon.png" alt="" />
+            Quick Market
+          </span>
         </div>
         <div className="clock-cluster" data-move={heldSpan?.strike ? "1" : "0"}>
           <PriceReadout
@@ -771,7 +775,61 @@ export function App() {
             {(market.config.feeBps / 100).toFixed(2)}% fee on a paid pool. Price from {market.ticker.label || sourceLabel(market.ticker.venue)}.
           </p>
         </div>
+        <ConnectionStatus link={market.link} />
       </footer>
+    </div>
+  )
+}
+
+function ConnectionStatus({ link }: { link: LinkStatus }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!open) return
+    const onPointerDown = (event: PointerEvent) => {
+      if (ref.current && !ref.current.contains(event.target as Node)) setOpen(false)
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false)
+    }
+    document.addEventListener("pointerdown", onPointerDown)
+    window.addEventListener("keydown", onKeyDown)
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown)
+      window.removeEventListener("keydown", onKeyDown)
+    }
+  }, [open])
+
+  return (
+    <div className="connection" ref={ref}>
+      <button
+        type="button"
+        className="plain connection-button"
+        data-open={open ? "1" : "0"}
+        aria-expanded={open}
+        aria-haspopup="dialog"
+        aria-label={lagButtonName(link.label, link.rttMs)}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <span className="connection-dot" data-tone={link.tone} />
+      </button>
+      {open && (
+        <div className="connection-pop" role="dialog" aria-label="Connection">
+          <p className="connection-label">{link.label}</p>
+          <p>
+            <span>Up</span>
+            <span>{formatLag(link.upMs)}</span>
+          </p>
+          <p>
+            <span>Down</span>
+            <span>{formatLag(link.downMs)}</span>
+          </p>
+          <p>
+            <span>Round trip</span>
+            <span>{formatLag(link.rttMs)}</span>
+          </p>
+        </div>
+      )}
     </div>
   )
 }

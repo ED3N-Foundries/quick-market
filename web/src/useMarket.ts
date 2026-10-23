@@ -7,6 +7,19 @@ import { writeCachedBalance } from "./balanceCache"
 import { applyBuyIn } from "./buyInIntent"
 import type { TapeChart, TapePoint } from "./chart"
 import { createClock, easeClock, noteClock } from "./clock"
+import {
+  ageProbe,
+  createLag,
+  createProbe,
+  lagProbe,
+  linkStatus,
+  noteDown,
+  noteEcho,
+  noteProbeInbound,
+  noteProbeSent,
+  probeDue,
+  readEcho,
+} from "./lag"
 import { parseAmountMicros } from "./format"
 import { grantLanded } from "./grantWatch"
 import type { Handoff, Ticker } from "../../shared/source"
@@ -66,6 +79,11 @@ export function useMarket(token: string | null, seed: You | null = null) {
 
   const offsetRef = useRef(0)
   const clockRef = useRef(createClock())
+  const lagRef = useRef(createLag())
+  const probeRef = useRef(createProbe())
+  const lastInboundRef = useRef<number | null>(null)
+  const openedAtRef = useRef<number | null>(null)
+  const socketRef = useRef<WebSocket | null>(null)
   const priceRef = useRef<string | null>(null)
   const chartRef = useRef<TapeChart | null>(null)
   const tokenRef = useRef(token)
@@ -162,7 +180,24 @@ export function useMarket(token: string | null, seed: You | null = null) {
   )
 
   useEffect(() => {
-    const id = window.setInterval(() => setPulse((value) => value + 1), 200)
+    const id = window.setInterval(() => {
+      const now = Date.now()
+      const socket = socketRef.current
+      const aged = ageProbe(probeRef.current, now, lastInboundRef.current ?? 0)
+      probeRef.current = aged.probe
+      if (aged.close && socket && socket.readyState === WebSocket.OPEN) {
+        socket.close()
+      } else if (socket && socket.readyState === WebSocket.OPEN && probeDue(probeRef.current, now)) {
+        const t = Date.now()
+        try {
+          socket.send(lagProbe(t))
+        } catch {
+          // The close handler reconnects.
+        }
+        probeRef.current = noteProbeSent(probeRef.current, t)
+      }
+      setPulse((value) => value + 1)
+    }, 200)
     return () => window.clearInterval(id)
   }, [])
 
@@ -242,14 +277,46 @@ export function useMarket(token: string | null, seed: You | null = null) {
 
     const connect = () => {
       if (stopped) return
+      lagRef.current = createLag()
+      probeRef.current = createProbe()
+      lastInboundRef.current = null
+      openedAtRef.current = null
       const protocol = location.protocol === "https:" ? "wss" : "ws"
-      socket = new WebSocket(`${protocol}://${location.host}/ws`)
-      socket.onmessage = (event) => {
+      const current = new WebSocket(`${protocol}://${location.host}/ws`)
+      socket = current
+      socketRef.current = current
+      current.onopen = () => {
+        if (socketRef.current !== current) return
+        openedAtRef.current = Date.now()
+        const t = Date.now()
+        try {
+          current.send(lagProbe(t))
+        } catch {
+          // The close handler reconnects.
+        }
+        probeRef.current = noteProbeSent(probeRef.current, t)
+      }
+      current.onmessage = (event) => {
+        const arrival = Date.now()
+        lastInboundRef.current = arrival
+        probeRef.current = noteProbeInbound(probeRef.current)
         const message = JSON.parse(String(event.data)) as
           | { type: "tick"; price: string; exchangeTs: number; serverNow: number; feed: "live" | "stale" }
           | { type: "round"; serverNow: number; feed: "live" | "stale"; board: Board; ticker?: Ticker; handoff?: Handoff | null }
+          | { type: "lag" }
           | SettledMessage
-        if ("serverNow" in message) noteServerNow(message.serverNow)
+        if (message.type === "lag") {
+          const echo = readEcho(message)
+          if (echo) {
+            lagRef.current = noteEcho(lagRef.current, echo, arrival)
+            noteServerNow(echo.serverNow)
+          }
+          return
+        }
+        if ("serverNow" in message) {
+          noteServerNow(message.serverNow)
+          lagRef.current = noteDown(lagRef.current, message.serverNow, arrival)
+        }
         if (message.type === "tick") {
           setFeed(message.feed)
           pushTick(message.exchangeTs, message.price)
@@ -281,7 +348,11 @@ export function useMarket(token: string | null, seed: You | null = null) {
           setHistoryVersion((value) => value + 1)
         }
       }
-      socket.onclose = () => {
+      current.onclose = () => {
+        if (socketRef.current === current) {
+          socketRef.current = null
+          openedAtRef.current = null
+        }
         if (stopped) return
         retry = window.setTimeout(connect, 400)
       }
@@ -471,6 +542,13 @@ export function useMarket(token: string | null, seed: You | null = null) {
 
   const now = Date.now() + offsetRef.current
   void pulse
+  const link = linkStatus(
+    lagRef.current,
+    Date.now(),
+    socketRef.current?.readyState === WebSocket.OPEN,
+    lastInboundRef.current,
+    openedAtRef.current,
+  )
 
   return {
     address: you?.address ?? null,
@@ -505,5 +583,6 @@ export function useMarket(token: string | null, seed: You | null = null) {
     waitForBalance,
     bindChart,
     token,
+    link,
   }
 }

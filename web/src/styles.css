@@ -89,10 +89,20 @@ body {
 
 .brand { display: flex; flex-direction: column; gap: 2px; }
 .mark {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   font-family: Iowan Old Style, Palatino, ui-serif, serif;
   font-size: 28px;
   letter-spacing: -0.03em;
   line-height: 1;
+  white-space: nowrap;
+}
+.logomark {
+  width: 28px;
+  height: 28px;
+  display: block;
+  flex: none;
 }
 .pair-badge {
   display: inline-flex;
@@ -1110,13 +1120,73 @@ tr.open td { color: var(--text); }
 }
 
 .footer {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
   margin-top: 22px;
   color: var(--muted);
   font-size: 12px;
   line-height: 1.5;
 }
+.rules { min-width: 0; }
 .rules p { margin: 0 0 4px; }
 .periods { color: var(--text); letter-spacing: 0.03em; }
+.connection { position: relative; flex: none; }
+.app button.connection-button {
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 999px;
+  background: none;
+  padding: 0;
+  display: grid;
+  place-items: center;
+}
+.app button.connection-button:hover,
+.app button.connection-button[data-open="1"] {
+  background: rgba(243, 240, 232, 0.06);
+}
+.app button.connection-button:focus-visible {
+  outline: 1px solid rgba(243, 240, 232, 0.4);
+  outline-offset: 2px;
+}
+.connection-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--up);
+}
+.connection-dot[data-tone="slow"] { background: var(--warn); }
+.connection-dot[data-tone="down"] { background: var(--down); }
+.connection-pop {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 6px);
+  z-index: 25;
+  width: 196px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: #0c0d11;
+  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.55);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+.connection-pop p {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+.connection-pop p + p { margin-top: 3px; }
+.connection-label {
+  color: var(--text);
+  font-weight: 600;
+}
+.connection-pop p span:last-child { color: var(--text); }
 
 @media (max-width: 860px) {
   .app { padding-top: 12px; }
@@ -1205,7 +1275,7 @@ tr.open td { color: var(--text); }
     font-weight: 700;
   }
   .connect-error { margin: 8px 0 0; }
-  .footer { grid-template-columns: 1fr; }
+  .footer { align-items: flex-end; }
   .share { font-size: 38px; margin-top: 6px; }
   .history-count { display: none; }
   .history { overflow-x: auto; }

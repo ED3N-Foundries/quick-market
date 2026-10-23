@@ -11,6 +11,7 @@ import { getDb } from "./db"
 import { MINT_CONFIRMATIONS } from "../shared/mint"
 import { grantOnSignIn, grantSettings, noteGrantTx, settleGrantRequest, startGrant } from "./grant"
 import { hub } from "./hub"
+import { LAG_MAX_BYTES, lagEcho } from "./lag"
 import { parseMicros } from "./money"
 import { feedsNow } from "./feeds"
 import { oracleView, startOracle } from "./oracle"
@@ -390,7 +391,14 @@ Bun.serve({
         }),
       )
     },
-    message() {},
+    message(ws, raw) {
+      const size = typeof raw === "string" ? raw.length : raw.byteLength
+      if (size > LAG_MAX_BYTES) return
+      const text = typeof raw === "string" ? raw : raw.toString()
+      const recv = Date.now()
+      const reply = lagEcho(text, recv, Date.now())
+      if (reply) ws.send(reply)
+    },
     close(ws) {
       hub.remove(ws)
     },
