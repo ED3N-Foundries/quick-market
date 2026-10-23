@@ -1,5 +1,6 @@
 import type { PriceSource } from "../shared/market"
 import { quotePair, sourceLabel } from "../shared/source"
+import { dollarGap } from "./blend"
 import { loadEnv } from "./env"
 import { VENUE_ORDER } from "./oracle"
 import type { FeedFrame, LegRole, VenueRow } from "./feeds"
@@ -21,8 +22,29 @@ export type KeyInput = {
   sequence?: string
 }
 
-export function feedsUrl(port = loadEnv().port): string {
-  return `http://127.0.0.1:${port}/api/feeds`
+export type BookSide = {
+  poolMicros: number
+  players: number
+}
+
+export type MarketStats = {
+  phase: "buy-in" | "market"
+  windowEndsAt: number
+  join: { up: BookSide; down: BookSide } | null
+  live: { strike: string | null; settlesAt: number; up: BookSide; down: BookSide } | null
+}
+
+/** API origin. `API_URL` wins, so a dashboard on the host or inside the compose network hits the same server. */
+export function apiBase(apiUrl = loadEnv().apiUrl): string {
+  return apiUrl.trim().replace(/\/api\/session\/?$/, "").replace(/\/+$/, "")
+}
+
+export function feedsUrl(apiUrl = loadEnv().apiUrl): string {
+  return `${apiBase(apiUrl)}/api/feeds`
+}
+
+export function stateUrl(apiUrl = loadEnv().apiUrl): string {
+  return `${apiBase(apiUrl)}/api/state`
 }
 
 export function apiHost(url: string): string {
@@ -79,11 +101,51 @@ export function holdLine(frame: FeedFrame, now: number): string {
   return `configured ${frame.configured}   handoff ${handoff.from} → ${handoff.to}${wait}`
 }
 
+export function signedMove(strike: string, price: string): string {
+  const gap = dollarGap(strike, price)
+  if (gap == null) return "—"
+  const amount = Number(gap)
+  if (!Number.isFinite(amount)) return gap
+  const text = amount.toFixed(2)
+  const left = Number(strike)
+  const right = Number(price)
+  if (!Number.isFinite(left) || !Number.isFinite(right) || right === left || amount < 0.005) return "=$0.00"
+  return right > left ? `+$${text}` : `−$${text}`
+}
+
+export function marketLines(stats: MarketStats, price: string | null, now: number): string[] {
+  const wait = formatAge(Math.max(0, stats.windowEndsAt - now))
+  const buyIn = stats.join
+    ? `buy-in ${wait}   ${sideText("up", stats.join.up)}   ${sideText("down", stats.join.down)}`
+    : `buy-in closed   resumes in ${wait}`
+  const lines = [buyIn]
+  const live = stats.live
+  if (!live) return lines
+  const move = live.strike && price ? signedMove(live.strike, price) : "—"
+  const left = formatAge(Math.max(0, live.settlesAt - now))
+  lines.push(
+    `market ${left}   strike ${showPrice(live.strike)}   ${move}   ${sideText("up", live.up)}   ${sideText("down", live.down)}`,
+  )
+  return lines
+}
+
+function sideText(name: string, side: BookSide): string {
+  return `${name} ${dollars(side.poolMicros)} · ${Math.trunc(side.players)}`
+}
+
+function dollars(micros: number): string {
+  const sign = micros < 0 ? "-" : ""
+  const abs = Math.abs(Math.trunc(micros))
+  const whole = Math.floor(abs / 1_000_000)
+  const cents = Math.floor((abs % 1_000_000) / 10_000)
+  return `${sign}$${whole.toLocaleString("en-US")}.${String(cents).padStart(2, "0")}`
+}
+
 export function detailLine(row: VenueRow | null, now: number): string {
   if (!row) return "no venue selected"
   const age = row.at > 0 ? formatAge(Math.max(0, now - row.at)) : "—"
   const gap = row.gap == null ? "—" : Number(row.gap).toFixed(2)
-  return `${row.venue}  ${quotePair(row.venue)}  ${row.role}  ${row.reason}  age ${age}  gap ${gap}`
+  return `${row.venue}  ${quotePair(row.venue)}  ${row.role}  ${row.reason}  ping ${age}  gap ${gap}`
 }
 
 export function venueLine(row: VenueRow, selected: boolean, wide: boolean, now: number): string {
@@ -94,7 +156,7 @@ export function venueLine(row: VenueRow, selected: boolean, wide: boolean, now: 
 }
 
 export function headLine(wide: boolean): string {
-  const head = `  ${cell("venue", 10)}${cell("role", 8)}${cell("price", 12)}${cell("age", 8)}`
+  const head = `  ${cell("venue", 10)}${cell("role", 8)}${cell("price", 12)}${cell("ping", 8)}`
   if (!wide) return head.trimEnd()
   return `${head}${cell("gap", 10)}feed`
 }
@@ -104,15 +166,18 @@ export function renderFeeds(
   state: DashState & { quiet: boolean },
   now: number,
   url: string,
+  stats: MarketStats | null = null,
 ): string {
   if (!frame) {
     const lines = [`Waiting for the API on ${apiHost(url)}.`, "q closes this dashboard. The API keeps going."]
     if (state.quiet) lines.push("api quiet")
     return lines.join("\n")
   }
+  const price = frame.venues.find((row) => row.venue === frame.active)?.price ?? frame.anchor
   const lines = [
     sourceLine(frame, now),
     holdLine(frame, now),
+    ...(stats ? marketLines(stats, price, now) : []),
     state.quiet ? "api quiet" : "",
     headLine(true),
     ...frame.venues.map((row, index) => venueLine(row, index === state.selected, true, now)),
@@ -122,16 +187,53 @@ export function renderFeeds(
   return lines.filter((line) => line !== "").join("\n")
 }
 
-export async function pullFeeds(url: string): Promise<{ frame: FeedFrame | null; quiet: boolean }> {
+export async function pullFeeds(url: string): Promise<{ frame: FeedFrame | null; stats: MarketStats | null; quiet: boolean }> {
+  const base = url.replace(/\/api\/feeds\/?$/, "")
   try {
-    const response = await fetch(url)
-    if (!response.ok) return { frame: null, quiet: true }
-    const frame = parseFeedFrame(await response.json())
-    if (!frame) return { frame: null, quiet: true }
-    return { frame, quiet: false }
+    const [feedsRes, stateRes] = await Promise.all([fetch(url), fetch(`${base}/api/state`)])
+    if (!feedsRes.ok) return { frame: null, stats: null, quiet: true }
+    const frame = parseFeedFrame(await feedsRes.json())
+    if (!frame) return { frame: null, stats: null, quiet: true }
+    const stats = stateRes.ok ? parseMarketStats(await stateRes.json()) : null
+    return { frame, stats, quiet: false }
   } catch {
-    return { frame: null, quiet: true }
+    return { frame: null, stats: null, quiet: true }
   }
+}
+
+export function parseMarketStats(value: unknown): MarketStats | null {
+  if (!isRecord(value) || !isRecord(value.board)) return null
+  const board = value.board
+  if (board.phase !== "buy-in" && board.phase !== "market") return null
+  if (typeof board.windowEndsAt !== "number" || !Number.isFinite(board.windowEndsAt)) return null
+  if (board.join !== null && !isRecord(board.join)) return null
+  const join = board.join === null ? null : parseBook(board.join)
+  if (board.join !== null && !join) return null
+  if (board.live !== null && board.live !== undefined && !isRecord(board.live)) return null
+  const live = board.live == null ? null : parseLive(board.live)
+  if (board.live != null && !live) return null
+  return { phase: board.phase, windowEndsAt: board.windowEndsAt, join, live }
+}
+
+function parseBook(value: Record<string, unknown>): { up: BookSide; down: BookSide } | null {
+  const up = parseSide(value.poolUpMicros, value.playersUp)
+  const down = parseSide(value.poolDownMicros, value.playersDown)
+  if (!up || !down) return null
+  return { up, down }
+}
+
+function parseLive(value: Record<string, unknown>): MarketStats["live"] | null {
+  const book = parseBook(value)
+  if (!book) return null
+  if (value.strike !== null && typeof value.strike !== "string") return null
+  if (typeof value.settlesAt !== "number" || !Number.isFinite(value.settlesAt)) return null
+  return { strike: value.strike, settlesAt: value.settlesAt, ...book }
+}
+
+function parseSide(pool: unknown, players: unknown): BookSide | null {
+  if (typeof pool !== "number" || !Number.isFinite(pool)) return null
+  if (typeof players !== "number" || !Number.isFinite(players)) return null
+  return { poolMicros: pool, players }
 }
 
 export function parseFeedFrame(value: unknown): FeedFrame | null {
@@ -222,7 +324,7 @@ async function main() {
   const interactive = Boolean(process.stdin.isTTY && process.stdout.isTTY)
   if (!interactive) {
     const pulled = await pullFeeds(url)
-    console.log(renderFeeds(pulled.frame, { selected: 0, help: false, quiet: pulled.quiet }, Date.now(), url))
+    console.log(renderFeeds(pulled.frame, { selected: 0, help: false, quiet: pulled.quiet }, Date.now(), url, pulled.stats))
     return
   }
   const { runScreen } = await import("./screen")

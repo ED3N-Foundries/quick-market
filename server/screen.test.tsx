@@ -52,6 +52,7 @@ test("a wide screen shows the source, a ready backup, and a far backup", async (
     expect(painted).toContain("far")
     expect(painted).toContain("79.88")
     expect(painted).toContain("fresh and within $25")
+    expect(painted).toContain("ping")
   } finally {
     await setup.dispose()
   }

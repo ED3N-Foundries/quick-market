@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { handleKey, holdLine, parseFeedFrame, renderFeeds, sourceLine, venueLine } from "./dashboard"
+import { apiBase, feedsUrl, handleKey, holdLine, marketLines, parseFeedFrame, parseMarketStats, renderFeeds, signedMove, sourceLine, stateUrl, venueLine, type MarketStats } from "./dashboard"
 import { feedsNow } from "./feeds"
 
 const now = 10_000
@@ -66,6 +66,45 @@ test("j and k move the selection and q quits", () => {
   expect(handleKey({ selected: 5, help: false }, "j", 6).state.selected).toBe(5)
   expect(handleKey(start, "?", 6).state.help).toBe(true)
   expect(handleKey(start, "q", 6).quit).toBe(true)
+})
+
+test("the page follows API_URL and prints the book beside each venue ping", () => {
+  expect(apiBase("http://quick-market:3001/")).toBe("http://quick-market:3001")
+  expect(apiBase("http://127.0.0.1:3001/api/session")).toBe("http://127.0.0.1:3001")
+  expect(feedsUrl("http://quick-market:3001")).toBe("http://quick-market:3001/api/feeds")
+  expect(stateUrl("http://quick-market:3001")).toBe("http://quick-market:3001/api/state")
+  const stats: MarketStats = {
+    phase: "buy-in",
+    windowEndsAt: now + 3_200,
+    join: {
+      up: { poolMicros: 33_720_000, players: 28 },
+      down: { poolMicros: 51_970_000, players: 42 },
+    },
+    live: {
+      strike: "67400.00",
+      settlesAt: now + 1_800,
+      up: { poolMicros: 84_370_000, players: 67 },
+      down: { poolMicros: 74_210_000, players: 59 },
+    },
+  }
+  expect(signedMove("67400.00", "67420.12")).toBe("+$20.12")
+  expect(signedMove("67420.12", "67400.00")).toBe("−$20.12")
+  expect(signedMove("67420.12", "67420.124")).toBe("=$0.00")
+  expect(marketLines(stats, "67420.12", now)[0]).toBe("buy-in 3.2s   up $33.72 · 28   down $51.97 · 42")
+  expect(marketLines(stats, "67420.12", now)[1]).toContain("strike 67400.00   +$20.12")
+  const closed = marketLines({ ...stats, join: null, live: null }, null, now)
+  expect(closed).toEqual(["buy-in closed   resumes in 3.2s"])
+  const page = renderFeeds(frame(), { selected: 1, help: false, quiet: false }, now, "http://127.0.0.1:3001/api/feeds", stats)
+  expect(page).toContain("buy-in 3.2s")
+  expect(page).toContain("ping")
+  expect(page).toContain("80ms")
+  expect(parseMarketStats({ board: { phase: "buy-in", windowEndsAt: now, join: null, live: null } })).toEqual({
+    phase: "buy-in",
+    windowEndsAt: now,
+    join: null,
+    live: null,
+  })
+  expect(parseMarketStats({ ok: true })).toBeNull()
 })
 
 test("parseFeedFrame accepts the server payload and rejects a partial one", () => {

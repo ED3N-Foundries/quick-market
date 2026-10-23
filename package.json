@@ -12,6 +12,7 @@
     "build": "vite build",
     "agent": "bun run agent/index.ts",
     "agents": "bun run agent/dashboard.ts",
+    "feed": "bun run server/dashboard.ts",
     "feeds": "bun run server/dashboard.ts",
     "treasury": "bun run scripts/treasury.ts",
     "token": "bun run scripts/token.ts",

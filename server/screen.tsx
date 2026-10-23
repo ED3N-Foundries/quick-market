@@ -11,10 +11,12 @@ import {
   headLine,
   holdLine,
   keyFromEvent,
+  marketLines,
   pullFeeds,
   sourceLine,
   wideLayout,
   type DashState,
+  type MarketStats,
 } from "./dashboard"
 import type { FeedFrame, LegRole, VenueRow } from "./feeds"
 
@@ -43,6 +45,7 @@ export function FeedsView({
   height,
   quiet,
   host,
+  stats = null,
   onSelect,
 }: {
   frame: FeedFrame | null
@@ -52,6 +55,7 @@ export function FeedsView({
   height: number
   quiet: boolean
   host: string
+  stats?: MarketStats | null
   onSelect: (index: number) => void
 }) {
   const wide = wideLayout(width)
@@ -72,6 +76,13 @@ export function FeedsView({
     >
       <Text>{sourceLine(frame, now)}</Text>
       <Text fg={muted}>{holdLine(frame, now)}</Text>
+      {stats
+        ? marketLines(stats, frame.venues.find((row) => row.venue === frame.active)?.price ?? frame.anchor, now).map((line) => (
+            <Text key={line} fg={muted}>
+              {line}
+            </Text>
+          ))
+        : null}
       {quiet ? <Text fg={gold}>api quiet</Text> : null}
       <Text fg={muted}>{headLine(wide)}</Text>
       {frame.venues.map((row, index) => (
@@ -99,6 +110,7 @@ function App({ url }: { url: string }) {
   const { width, height } = useTerminalDimensions()
   const [state, setState] = useState<DashState>({ selected: 0, help: false })
   const [frame, setFrame] = useState<FeedFrame | null>(null)
+  const [stats, setStats] = useState<MarketStats | null>(null)
   const [quiet, setQuiet] = useState(false)
   const [now, setNow] = useState(() => Date.now())
   const stateRef = useRef(state)
@@ -117,6 +129,7 @@ function App({ url }: { url: string }) {
         return
       }
       setFrame(pulled.frame)
+      setStats(pulled.stats)
       setQuiet(false)
     }
     void tick()
@@ -145,6 +158,7 @@ function App({ url }: { url: string }) {
       height={height}
       quiet={quiet}
       host={apiHost(url)}
+      stats={stats}
       onSelect={(index) => {
         const next = { ...stateRef.current, selected: index }
         stateRef.current = next
