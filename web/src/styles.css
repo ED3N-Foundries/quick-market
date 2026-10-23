@@ -99,10 +99,9 @@ body {
   white-space: nowrap;
 }
 .logomark {
-  width: 28px;
-  height: 28px;
-  display: block;
   flex: none;
+  font-size: 26px;
+  line-height: 1;
 }
 .pair-badge {
   display: inline-flex;

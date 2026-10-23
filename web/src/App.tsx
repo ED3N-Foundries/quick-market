@@ -310,7 +310,7 @@ export function App() {
       <header className="top">
         <div className="brand">
           <span className="mark">
-            <img className="logomark" src="/apple-touch-icon.png" alt="" />
+            <span className="logomark" aria-hidden="true">😭</span>
             Quick Market
           </span>
         </div>
