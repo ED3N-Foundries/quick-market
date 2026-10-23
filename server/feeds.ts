@@ -36,7 +36,7 @@ export type LegInput = {
   now: number
 }
 
-/** Same gate as `pickStandby`: fresh, and within $25 of the anchor. `active` wins over the socket. */
+/** Dashboard label. `active` wins. A fresh backup within $25 is `ready`; a wider fresh gap is `far` and can still be selected. */
 export function legRole(input: LegInput): { role: LegRole; reason: string } {
   if (input.venue === input.active) {
     return { role: "active", reason: input.up ? "publishing the price" : "publishing, socket down" }

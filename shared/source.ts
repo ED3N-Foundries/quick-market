@@ -52,7 +52,6 @@ export function tickerFor(venue: PriceSource): Ticker {
 
 /** Shown on the chart and returned when a buy-in is rejected during the hold. */
 export function handoffBanner(from: string, to: string | null): string {
-  const dropped = `${sourceName(from)} feed dropped. Open markets were voided and stakes returned.`
-  if (!to) return `${dropped} Waiting for the next price feed.`
-  return `${dropped} Price is now ${sourceLabel(to)}. Buy-in opens on the next window.`
+  if (!to) return `${sourceName(from)} dropped`
+  return `${sourceName(from)} → ${sourceName(to)}`
 }

@@ -20,6 +20,7 @@ import {
   parseAmountMicros,
   payoutMicros,
   quoteDollar,
+  handoffBanner,
   quotePair,
   sourceLabel,
   walletDisplayLabel,
@@ -54,6 +55,8 @@ test("source labels follow the configured feed", () => {
   expect(quotePair("coinbase")).toBe("BTC-USD")
   expect(quotePair("kraken")).toBe("BTC/USD")
   expect(quotePair("other")).toBe("BTC")
+  expect(handoffBanner("binance", "bybit")).toBe("Binance → Bybit")
+  expect(handoffBanner("binance", null)).toBe("Binance dropped")
 })
 
 test("formatPrice always shows 4 decimal places", () => {

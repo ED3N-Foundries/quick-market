@@ -501,7 +501,42 @@ body {
   touch-action: none;
 }
 .chart-wrap:active { cursor: grabbing; }
+.chart-wrap[data-loading="1"],
+.chart-wrap[data-loading="1"]:active { cursor: default; }
+.chart-wrap[data-loading="1"] canvas,
+.chart-wrap[data-loading="1"] .chart-overlay,
+.chart-wrap[data-loading="1"] .now-jump { visibility: hidden; }
 .chart-wrap canvas { width: 100%; height: 100%; display: block; }
+.chart-skeleton {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 18px;
+  padding: 48px 28px;
+  pointer-events: none;
+}
+.chart-skeleton span {
+  display: block;
+  height: 12px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--raise-2) 0%, rgba(243, 240, 232, 0.16) 45%, var(--raise-2) 90%);
+  background-size: 220% 100%;
+  animation: chart-shimmer 1.4s ease-in-out infinite;
+}
+.chart-skeleton span:nth-child(1) { width: 72%; }
+.chart-skeleton span:nth-child(2) { width: 100%; }
+.chart-skeleton span:nth-child(3) { width: 84%; }
+.chart-skeleton span:nth-child(4) { width: 46%; }
+@keyframes chart-shimmer {
+  from { background-position: 100% 0; }
+  to { background-position: -100% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .chart-skeleton span { animation: none; background: var(--raise-2); }
+}
 .chart-overlay { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
 .chip, .ytick { position: absolute; font-size: 11px; font-variant-numeric: tabular-nums; }
 .chip {
@@ -581,17 +616,23 @@ body {
 }
 .handoff-banner {
   position: absolute;
-  z-index: 3;
-  top: 12px;
-  left: 12px;
-  right: 12px;
+  z-index: 4;
+  top: 50%;
+  left: 50%;
+  right: auto;
+  transform: translate(-50%, -50%);
+  max-width: calc(100% - 32px);
   margin: 0;
-  padding: 8px 10px;
-  border-radius: 10px;
-  background: rgba(9, 10, 12, 0.92);
+  padding: 22px 28px;
+  border-radius: 16px;
+  background: rgba(9, 10, 12, 0.94);
   border: 1px solid var(--warn);
   color: var(--text);
-  font-size: 13px;
+  font-size: 28px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+  text-align: center;
 }
 
 .trade {
@@ -1244,6 +1285,8 @@ tr.open td { color: var(--text); }
   }
   .clock { font-size: 40px; }
   .chart-wrap { height: 220px; }
+  .handoff-banner { font-size: 22px; padding: 16px 18px; }
+  .chart-skeleton { gap: 14px; padding: 28px 18px; }
   .trade {
     grid-template-columns: 1fr 1fr;
     gap: 10px;

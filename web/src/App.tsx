@@ -54,6 +54,7 @@ export function App() {
   const walletMenuRef = useRef<HTMLSpanElement>(null)
   const viewRef = useRef({ follow: true, start: 0, end: 0 })
   const viewSecondsRef = useRef(market.config.viewSeconds)
+  const handoffRef = useRef(market.handoff)
   const boardRef = useRef(market.board)
   const openBuyInsRef = useRef<OpenBuyIn[]>([])
   const [chart, setChart] = useState<TapeChart | null>(null)
@@ -78,6 +79,8 @@ export function App() {
   boardRef.current = market.board
   openBuyInsRef.current = market.you?.openBuyIns ?? []
   viewSecondsRef.current = market.config.viewSeconds
+  const handoff = market.handoff
+  handoffRef.current = handoff
 
   useEffect(() => {
     if (market.unauthorized) expireRef.current()
@@ -178,7 +181,7 @@ export function App() {
         if (!held) return null
         return openBuyInsRef.current.find((bet) => bet.roundId === held.id)?.side ?? null
       },
-      extendLive: () => true,
+      extendLive: () => handoffRef.current == null,
       onHead: (text) => {
         market.priceRef.current = text
       },
@@ -233,7 +236,7 @@ export function App() {
     betRoundId !== null &&
     market.feed === "live" &&
     !market.pending &&
-    !market.handoff
+    !handoff
   const ticketWin = held ? payoutMicros(held.stakeMicros, held.side, focus?.poolUpMicros ?? 0, focus?.poolDownMicros ?? 0, market.config.feeBps) : 0
   const fundMicros = parseAmountMicros(fundAmount)
   const testnet = market.config.tokenKind === "qm" || isTestnetChain(market.config.chainId)
@@ -280,6 +283,7 @@ export function App() {
   }
 
   function onPointerDown(event: ReactPointerEvent<HTMLElement>) {
+    if (handoffRef.current) return
     const current = chartRef.current?.getScale()
     if (!current || event.button !== 0) return
     scrub.clear()
@@ -319,10 +323,10 @@ export function App() {
             venue={market.ticker.venue}
           />
           <div className="clock-block">
-            <span className="clock-label">{market.handoff ? "Opens" : heldSpan ? "Settles" : "Buy-in"}</span>
-            {market.handoff?.resumeAt ? (
-              <Countdown endsAt={market.handoff.resumeAt} offsetRef={market.offsetRef} />
-            ) : board && !market.handoff ? (
+            <span className="clock-label">{handoff ? "Opens" : heldSpan ? "Settles" : "Buy-in"}</span>
+            {handoff?.resumeAt ? (
+              <Countdown endsAt={handoff.resumeAt} offsetRef={market.offsetRef} />
+            ) : board && !handoff ? (
               <Countdown endsAt={heldSpan ? heldSpan.settlesAt : board.windowEndsAt} offsetRef={market.offsetRef} />
             ) : (
               <span className="clock-line">
@@ -339,9 +343,19 @@ export function App() {
         </p>
       )}
 
-      <section className="chart-wrap" onPointerDown={onPointerDown} onPointerMove={scrub.move} onPointerLeave={scrub.clear}>
+      <section
+        className="chart-wrap"
+        data-loading={handoff ? "1" : undefined}
+        aria-busy={handoff ? true : undefined}
+        onPointerDown={onPointerDown}
+        onPointerMove={(event) => {
+          if (handoffRef.current) return
+          scrub.move(event)
+        }}
+        onPointerLeave={scrub.clear}
+      >
         <canvas ref={canvasRef} />
-        {chart && (
+        {chart && !handoff && (
           <ChartOverlay
             chart={chart}
             board={board}
@@ -351,8 +365,16 @@ export function App() {
             offsetRef={market.offsetRef}
           />
         )}
-        {market.handoff && <p className="handoff-banner">{handoffBanner(market.handoff.from, market.handoff.to)}</p>}
-        {market.feed === "stale" && !market.handoff && <p className="feed-flag">Price delayed</p>}
+        {handoff && (
+          <div className="chart-skeleton" aria-hidden="true">
+            <span />
+            <span />
+            <span />
+            <span />
+          </div>
+        )}
+        {handoff && <p className="handoff-banner">{handoffBanner(handoff.from, handoff.to)}</p>}
+        {market.feed === "stale" && !handoff && <p className="feed-flag">Price delayed</p>}
         {!following && (
           <button
             type="button"

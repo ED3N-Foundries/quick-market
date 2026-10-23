@@ -50,6 +50,21 @@ export function movedAtLeast(left: string, right: string, threshold: string): bo
   return compareAbs(left, right, threshold) >= 0
 }
 
+/** Negative when `left` is closer to `anchor` than `right`. A price that will not parse sorts farther away. */
+export function compareGap(anchor: string, left: string, right: string): number {
+  const a = absDiff(anchor, left)
+  const b = absDiff(anchor, right)
+  if (!a && !b) return 0
+  if (!a) return 1
+  if (!b) return -1
+  const scale = Math.max(a.scale, b.scale)
+  const x = scaleTo(a.n, a.scale, scale)
+  const y = scaleTo(b.n, b.scale, scale)
+  if (x < y) return -1
+  if (x > y) return 1
+  return 0
+}
+
 function compareAbs(left: string, right: string, threshold: string): number {
   const gap = absDiff(left, right)
   const limit = parseDec(threshold)

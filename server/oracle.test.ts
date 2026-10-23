@@ -109,7 +109,7 @@ test("a stream that has printed retries the same URL before walking on", () => {
   expect(nextFeedStep({ printed: false, retries: 0, index: 2 })).toEqual({ index: 3, retries: 0, delay: 0 })
 })
 
-test("a standby more than $25 away is skipped", () => {
+test("a standby is ranked by gap, and a far quote can still take over", () => {
   const now = 10_000
   const rows = [
     { venue: "bybit" as const, price: "81600", at: now },
@@ -117,6 +117,40 @@ test("a standby more than $25 away is skipped", () => {
     { venue: "okx" as const, price: "81590", at: now - STANDBY_MS - 1 },
   ]
   expect(pickStandby("binance", "81620", rows, now)).toBe("bybit")
-  expect(pickStandby("binance", "81620", [{ venue: "kraken", price: "81400", at: now }], now)).toBeNull()
+  expect(pickStandby("binance", "81620", [{ venue: "kraken", price: "81400", at: now }], now)).toBe("kraken")
   expect(pickStandby("bitstamp", "100", [{ venue: "binance", price: "101", at: now }], now)).toBe("binance")
+  expect(
+    pickStandby(
+      "binance",
+      "81620",
+      [
+        { venue: "bybit", price: "80000", at: now },
+        { venue: "kraken", price: "81600", at: now },
+      ],
+      now,
+    ),
+  ).toBe("kraken")
+  expect(
+    pickStandby(
+      "binance",
+      "100",
+      [
+        { venue: "kraken", price: "100", at: now },
+        { venue: "bybit", price: "100", at: now },
+      ],
+      now,
+    ),
+  ).toBe("bybit")
+  expect(
+    pickStandby(
+      "binance",
+      null,
+      [
+        { venue: "kraken", price: "100", at: now },
+        { venue: "bybit", price: "90", at: now },
+      ],
+      now,
+    ),
+  ).toBe("bybit")
+  expect(pickStandby("binance", "100", [{ venue: "binance", price: "100", at: now }], now)).toBeNull()
 })

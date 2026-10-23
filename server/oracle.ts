@@ -1,4 +1,4 @@
-import { microPrice, movedAtLeast, withinDollars } from "./blend"
+import { compareGap, microPrice, movedAtLeast } from "./blend"
 import { priceSource, type PriceSource } from "./config"
 import { openFeed, type FeedConn } from "./feedSocket"
 import type { Print } from "./rounds"
@@ -53,25 +53,24 @@ export function nextFeedStep(input: { printed: boolean; retries: number; index: 
   return { index: input.index + 1, retries: 0, delay: 0 }
 }
 
-/** Next warm venue after `from` whose price is fresh and within $25 of the last good print. */
+/** Closest fresh venue other than `from`. A wide dollar gap ranks later and can still be chosen. */
 export function pickStandby(
   from: PriceSource,
   anchor: string | null,
   rows: readonly Standby[],
   now: number,
 ): PriceSource | null {
-  if (!anchor) return null
-  const start = VENUE_ORDER.indexOf(from)
-  if (start < 0) return null
-  for (let step = 1; step < VENUE_ORDER.length; step++) {
-    const venue = VENUE_ORDER[(start + step) % VENUE_ORDER.length]!
-    const row = rows.find((item) => item.venue === venue)
-    if (!row?.price) continue
-    if (now - row.at > STANDBY_MS) continue
-    if (!withinDollars(anchor, row.price, SWITCH_DOLLARS)) continue
-    return venue
-  }
-  return null
+  const fresh = rows.filter((row) => row.venue !== from && row.price && now - row.at <= STANDBY_MS)
+  if (fresh.length === 0) return null
+  const order = (venue: PriceSource) => VENUE_ORDER.indexOf(venue)
+  fresh.sort((a, b) => {
+    if (anchor && a.price && b.price) {
+      const gap = compareGap(anchor, a.price, b.price)
+      if (gap !== 0) return gap
+    }
+    return order(a.venue) - order(b.venue)
+  })
+  return fresh[0]!.venue
 }
 
 type Feed = {
