@@ -373,7 +373,12 @@ export function App() {
             <span />
           </div>
         )}
-        {handoff && <p className="handoff-banner">{handoffBanner(handoff.from, handoff.to)}</p>}
+        {handoff && (
+          <p className="handoff-banner">
+            {handoff.to && <span className="handoff-kicker">Switching price source</span>}
+            <span>{handoffBanner(handoff.from, handoff.to)}</span>
+          </p>
+        )}
         {market.feed === "stale" && !handoff && <p className="feed-flag">Price delayed</p>}
         {!following && (
           <button
