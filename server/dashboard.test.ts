@@ -112,4 +112,24 @@ test("parseFeedFrame accepts the server payload and rejects a partial one", () =
   expect(parseFeedFrame(JSON.parse(JSON.stringify(body)))).toEqual(body)
   expect(parseFeedFrame({ ok: true })).toBeNull()
   expect(parseFeedFrame({ ...body, venues: body.venues.slice(0, 2) })).toBeNull()
+  const { switches: _omit, ...withoutLog } = body
+  expect(parseFeedFrame(withoutLog)?.switches).toEqual([])
+})
+
+test("the switch log shows five rows on a tall screen and the newest on a short one", () => {
+  const body = frame()
+  body.switches = [5, 4, 3, 2, 1].map((n) => ({
+    at: Date.UTC(2026, 0, 1, 19, 0, n),
+    from: "binance" as const,
+    to: n % 2 === 0 ? null : ("bybit" as const),
+    reason: `reason ${n}`,
+  }))
+  const tall = renderFeeds(body, { selected: 0, help: false, quiet: false }, now, "http://127.0.0.1:3001/api/feeds", null, 24)
+  expect(tall).toContain("19:00:05Z  binance → bybit  reason 5")
+  expect(tall).toContain("19:00:01Z  binance → bybit  reason 1")
+  expect(tall).toContain("swing")
+  const short = renderFeeds(body, { selected: 0, help: false, quiet: false }, now, "http://127.0.0.1:3001/api/feeds", null, 16)
+  expect(short).toContain("reason 5")
+  expect(short).not.toContain("reason 1")
+  expect(renderFeeds(frame(), { selected: 0, help: false, quiet: false }, now, "http://127.0.0.1:3001/api/feeds")).toContain("switches  none")
 })

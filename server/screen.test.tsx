@@ -53,9 +53,48 @@ test("a wide screen shows the source, a ready backup, and a far backup", async (
     expect(painted).toContain("79.88")
     expect(painted).toContain("fresh and within $25")
     expect(painted).toContain("ping")
+    expect(painted).toContain("swing")
+    expect(painted).toContain("switches  none")
   } finally {
     await setup.dispose()
   }
+})
+
+test("a tall screen lists five switches and a short screen lists the newest", async () => {
+  const logged = frame()
+  logged.switches = [5, 4, 3, 2, 1].map((n) => ({
+    at: Date.UTC(2026, 0, 1, 19, 0, n),
+    from: "binance" as const,
+    to: "bybit" as const,
+    reason: `reason ${n}`,
+  }))
+  const paint = async (height: number) => {
+    const setup = await testRender(
+      <FeedsView
+        frame={logged}
+        state={{ selected: 1, help: false }}
+        now={now}
+        width={120}
+        height={height}
+        quiet={false}
+        host="127.0.0.1:3001"
+        onSelect={() => {}}
+      />,
+      { width: 120, height },
+    )
+    try {
+      await setup.renderOnce()
+      return setup.captureCharFrame()
+    } finally {
+      await setup.dispose()
+    }
+  }
+  const tall = await paint(30)
+  expect(tall).toContain("19:00:05Z  binance → bybit  reason 5")
+  expect(tall).toContain("19:00:01Z  binance → bybit  reason 1")
+  const short = await paint(16)
+  expect(short).toContain("reason 5")
+  expect(short).not.toContain("reason 1")
 })
 
 test("a narrow screen drops the gap and the feed name", async () => {

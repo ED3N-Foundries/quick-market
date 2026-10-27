@@ -8,7 +8,13 @@ test("legRole names the publishing venue and each backup gate", () => {
   expect(legRole({ venue: "binance", active: "binance", anchor: "100", price: "100", at: now, up: true, now }).role).toBe("active")
   expect(legRole({ venue: "binance", active: "binance", anchor: "100", price: null, at: 0, up: false, now }).role).toBe("active")
   expect(legRole({ venue: "bybit", active: "binance", anchor: "100", price: "125", at: now - STANDBY_MS, up: true, now }).role).toBe("ready")
-  expect(legRole({ venue: "bybit", active: "binance", anchor: "100", price: "125", at: now - STANDBY_MS - 1, up: true, now }).role).toBe("stale")
+  expect(legRole({ venue: "bybit", active: "binance", anchor: "100", price: "125", at: now - STANDBY_MS - 1, up: true, now })).toEqual({
+    role: "stale",
+    reason: "no price move for 5s",
+  })
+  expect(legRole({ venue: "bybit", active: "binance", anchor: "100", price: "100", at: now, movedAt: now - STANDBY_MS - 1, up: true, now }).role).toBe(
+    "stale",
+  )
   expect(legRole({ venue: "okx", active: "binance", anchor: "100", price: "125.01", at: now, up: true, now }).role).toBe("far")
   expect(legRole({ venue: "okx", active: "binance", anchor: null, price: "100", at: now, up: true, now }).role).toBe("far")
   expect(legRole({ venue: "coinbase", active: "binance", anchor: "100", price: null, at: 0, up: true, now }).role).toBe("quiet")

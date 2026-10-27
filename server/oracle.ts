@@ -1,43 +1,187 @@
-import { compareGap, microPrice, movedAtLeast } from "./blend"
+import { compareGap, dollarGap, microPrice, movedAtLeast, withinDollars } from "./blend"
 import { priceSource, type PriceSource } from "./config"
 import { openFeed, type FeedConn } from "./feedSocket"
 import type { Print } from "./rounds"
 
 const PRICE = /^\d+(\.\d+)?$/
+const MONEY = /^\d+(\.\d+)?$/
 
-/** Healthy books gap past 1s (Bybit ~1.9s, OKX ~2.1s, Binance ~1.2s). Three seconds is a dead socket. */
+/** A book quote older than this may be replaced by a trade. The switch clock is MOVE_MS. */
 export const BREAK_MS = 3_000
-export const STANDBY_MS = 3_000
+/** No price change for this long leaves the active venue. */
+export const MOVE_MS = 5_000
+export const STANDBY_MS = MOVE_MS
+export const RATE_MS = 30_000
+export const RECOVERY_MS = 2_000
+export const PRINTED_IDLE_MS = 8_000
+export const OPEN_ARM_MS = 2_000
 export const SWITCH_DOLLARS = 25
 export const COALESCE_MS = 100
+export const SWITCH_LOG = 5
+/** Binance allows 300 connection attempts per 5 minutes per IP. Stay far under that. */
+export const BINANCE_ATTEMPT_GAP_MS = 10_000
+export const BINANCE_MAX_ATTEMPTS = 12
+export const BINANCE_WINDOW_MS = 5 * 60_000
+export const BINANCE_FAST_MS = 1_000
+export const BINANCE_FAST_FAILS = 3
+export const BINANCE_FREEZE_MS = 5 * 60_000
 const RETRIES = 4
 
 export const VENUE_ORDER: PriceSource[] = ["binance", "bybit", "okx", "coinbase", "kraken", "bitstamp"]
 
 export type Quote = { price: string; kind: "book" | "trade" }
 
-export type Standby = { venue: PriceSource; price: string | null; at: number }
+export type SwingSample = { at: number; dollars: string }
+
+export type Standby = { venue: PriceSource; price: string | null; at: number; swing?: string }
+
+export type SwitchEvent = {
+  at: number
+  from: PriceSource
+  to: PriceSource | null
+  reason: string
+}
+
+export type RankedStandby = { venue: PriceSource; swing: string }
+
+export type MoveState = { price: string | null; movedAt: number; samples: SwingSample[] }
+
+export type BinanceAttempt = { at: number; diedAt: number | null }
+
+export type BinanceBudget = { ok: boolean; reason: string }
 
 export type OracleView = {
   active: PriceSource | null
   anchor: string | null
-  venues: { venue: PriceSource; price: string | null; at: number; feed: string | null; up: boolean }[]
+  switches?: SwitchEvent[]
+  venues: {
+    venue: PriceSource
+    price: string | null
+    at: number
+    movedAt?: number
+    swing?: string
+    feed: string | null
+    up: boolean
+  }[]
 }
 
 let epoch = 0
 let latest: OracleView = {
   active: null,
   anchor: null,
-  venues: VENUE_ORDER.map((venue) => ({ venue, price: null, at: 0, feed: null, up: false })),
+  switches: [],
+  venues: VENUE_ORDER.map((venue) => ({ venue, price: null, at: 0, movedAt: 0, swing: "0", feed: null, up: false })),
 }
 
 export function oracleView(): OracleView {
   return latest
 }
 
-export function silenceBreak(lastAt: number | null, now: number): boolean {
-  if (lastAt == null) return false
-  return now - lastAt >= BREAK_MS
+/** True once the active price itself has been still for MOVE_MS. A missing clock has not earned a switch. */
+export function moveBreak(lastMoveAt: number | null, now: number): boolean {
+  if (lastMoveAt == null || lastMoveAt <= 0) return false
+  return now - lastMoveAt >= MOVE_MS
+}
+
+/** Any numeric difference counts. An equal value spelled two ways does not. */
+export function priceChanged(left: string, right: string): boolean {
+  const gap = dollarGap(left, right)
+  return gap != null && gap !== "0"
+}
+
+/** A socket that has printed may sit quiet longer than the switch clock. A silent open still fails fast. */
+export function feedIdleMs(printed: boolean): number {
+  return printed ? PRINTED_IDLE_MS : OPEN_ARM_MS
+}
+
+/** First price starts the clock and adds no dollars. Later changes add the absolute gap. */
+export function noteMove(state: MoveState, price: string | null, now: number): MoveState {
+  const samples = state.samples.filter((sample) => sample.at <= now && now - sample.at <= RATE_MS)
+  if (!price) return { ...state, samples }
+  if (!state.price) return { price, movedAt: now, samples }
+  if (!priceChanged(state.price, price)) return { price: state.price, movedAt: state.movedAt, samples }
+  const dollars = dollarGap(state.price, price)
+  if (!dollars) return { price, movedAt: now, samples }
+  return { price, movedAt: now, samples: [...samples, { at: now, dollars }] }
+}
+
+/** Sum of absolute dollar changes inside the rating window. */
+export function swingScore(samples: readonly SwingSample[], now: number): string {
+  let total = "0"
+  for (const sample of samples) {
+    if (sample.at > now || now - sample.at > RATE_MS) continue
+    total = addMoney(total, sample.dollars)
+  }
+  return total
+}
+
+export function pushSwitch(log: readonly SwitchEvent[], event: SwitchEvent): SwitchEvent[] {
+  return [event, ...log].slice(0, SWITCH_LOG)
+}
+
+/** An adopt fills the open drop instead of taking a second slot. */
+export function fillSwitch(log: readonly SwitchEvent[], to: PriceSource): SwitchEvent[] {
+  const index = log.findIndex((row) => row.to == null)
+  if (index < 0) return log.slice()
+  return log.map((row, at) => (at === index ? { ...row, to } : row))
+}
+
+export function formatSwing(dollars: string): string {
+  const amount = Number(dollars)
+  if (!Number.isFinite(amount)) return `$${dollars}`
+  return `$${amount.toFixed(2)}`
+}
+
+export function switchReason(cause: string, ranked: readonly RankedStandby[]): string {
+  const top = ranked.slice(0, 2)
+  if (top.length === 0) return cause
+  return `${cause}; ${top.map((row) => `${row.venue} swing ${formatSwing(row.swing)}`).join(", ")}`
+}
+
+/**
+ * Refuse a Binance connect when it would add to a ban.
+ * Twelve attempts are already in the window, the last one is inside 10s, or three fast deaths froze us.
+ */
+export function allowBinanceConnect(attempts: readonly BinanceAttempt[], now: number): BinanceBudget {
+  const freeze = fastFreezeUntil(attempts)
+  if (freeze > now) return { ok: false, reason: "fast failures" }
+  const recent = attempts.filter((item) => item.at <= now && now - item.at < BINANCE_WINDOW_MS)
+  if (recent.length >= BINANCE_MAX_ATTEMPTS) return { ok: false, reason: `${BINANCE_MAX_ATTEMPTS} attempts in 5m` }
+  const last = recent.reduce((max, item) => Math.max(max, item.at), 0)
+  if (last > 0 && now - last < BINANCE_ATTEMPT_GAP_MS) {
+    const seconds = Math.floor((now - last) / 1000)
+    return { ok: false, reason: `last attempt ${seconds}s ago` }
+  }
+  return { ok: true, reason: "" }
+}
+
+/** How long to wait before the next Binance connect is inside the budget. */
+export function binanceWaitMs(attempts: readonly BinanceAttempt[], now: number): number {
+  if (allowBinanceConnect(attempts, now).ok) return 0
+  const recent = attempts.filter((item) => item.at <= now && now - item.at < BINANCE_WINDOW_MS)
+  let wait = 0
+  const freeze = fastFreezeUntil(attempts)
+  if (freeze > now) wait = freeze - now
+  if (recent.length >= BINANCE_MAX_ATTEMPTS) {
+    const oldest = Math.min(...recent.map((item) => item.at))
+    wait = Math.max(wait, oldest + BINANCE_WINDOW_MS - now)
+  }
+  const last = recent.reduce((max, item) => Math.max(max, item.at), 0)
+  if (last > 0 && now - last < BINANCE_ATTEMPT_GAP_MS) wait = Math.max(wait, BINANCE_ATTEMPT_GAP_MS - (now - last))
+  return Math.max(wait, 1)
+}
+
+export function recoveryAction(input: {
+  venue: PriceSource
+  messagesSilentMs: number
+  budget: BinanceBudget
+  alreadyTried: boolean
+}): { action: "switch" | "reconnect"; reason: string } {
+  const stalled = input.messagesSilentMs >= MOVE_MS
+  if (input.venue !== "binance" || !stalled) return { action: "switch", reason: "no price change for 5.0s" }
+  if (input.alreadyTried) return { action: "switch", reason: "reconnect produced no move" }
+  if (!input.budget.ok) return { action: "switch", reason: `reconnect skipped (${input.budget.reason})` }
+  return { action: "reconnect", reason: "" }
 }
 
 /** A stream that has printed stays on that URL for a few retries. A silent open moves on. */
@@ -53,24 +197,104 @@ export function nextFeedStep(input: { printed: boolean; retries: number; index: 
   return { index: input.index + 1, retries: 0, delay: 0 }
 }
 
-/** Closest fresh venue other than `from`. A wide dollar gap ranks later and can still be chosen. */
+/**
+ * Freshest changing book, weighted by swing.
+ * Inside $25 wins over a wider quote. Equal swings prefer the configured venue, then the smaller gap.
+ */
+export function rankStandbys(
+  from: PriceSource,
+  anchor: string | null,
+  rows: readonly Standby[],
+  now: number,
+  configured: PriceSource = priceSource(),
+): RankedStandby[] {
+  const fresh = rows.filter((row) => row.venue !== from && row.price && row.at > 0 && now - row.at <= STANDBY_MS)
+  if (fresh.length === 0) return []
+  const near = anchor ? fresh.filter((row) => row.price != null && withinDollars(anchor, row.price, SWITCH_DOLLARS)) : fresh
+  const pool = near.length > 0 ? near : fresh
+  const order = (venue: PriceSource) => VENUE_ORDER.indexOf(venue)
+  return [...pool]
+    .sort((a, b) => {
+      const swing = compareMoney(b.swing ?? "0", a.swing ?? "0")
+      if (swing !== 0) return swing
+      const prefer = Number(a.venue !== configured) - Number(b.venue !== configured)
+      if (prefer !== 0) return prefer
+      if (anchor && a.price && b.price) {
+        const gap = compareGap(anchor, a.price, b.price)
+        if (gap !== 0) return gap
+      }
+      return order(a.venue) - order(b.venue)
+    })
+    .map((row) => ({ venue: row.venue, swing: row.swing ?? "0" }))
+}
+
 export function pickStandby(
   from: PriceSource,
   anchor: string | null,
   rows: readonly Standby[],
   now: number,
+  configured: PriceSource = priceSource(),
 ): PriceSource | null {
-  const fresh = rows.filter((row) => row.venue !== from && row.price && now - row.at <= STANDBY_MS)
-  if (fresh.length === 0) return null
-  const order = (venue: PriceSource) => VENUE_ORDER.indexOf(venue)
-  fresh.sort((a, b) => {
-    if (anchor && a.price && b.price) {
-      const gap = compareGap(anchor, a.price, b.price)
-      if (gap !== 0) return gap
+  return rankStandbys(from, anchor, rows, now, configured)[0]?.venue ?? null
+}
+
+function fastFreezeUntil(attempts: readonly BinanceAttempt[]): number {
+  let streak = 0
+  let until = 0
+  for (const item of attempts) {
+    if (item.diedAt == null) {
+      streak = 0
+      continue
     }
-    return order(a.venue) - order(b.venue)
-  })
-  return fresh[0]!.venue
+    const life = item.diedAt - item.at
+    if (life >= 0 && life < BINANCE_FAST_MS) {
+      streak += 1
+      if (streak >= BINANCE_FAST_FAILS) until = item.diedAt + BINANCE_FREEZE_MS
+    } else streak = 0
+  }
+  return until
+}
+
+function addMoney(left: string, right: string): string {
+  const a = moneyParts(left)
+  const b = moneyParts(right)
+  if (!a || !b) return "0"
+  const scale = Math.max(a.scale, b.scale)
+  return formatMoney(scaleMoney(a.n, a.scale, scale) + scaleMoney(b.n, b.scale, scale), scale)
+}
+
+function compareMoney(left: string, right: string): number {
+  const a = moneyParts(left)
+  const b = moneyParts(right)
+  if (!a && !b) return 0
+  if (!a) return -1
+  if (!b) return 1
+  const scale = Math.max(a.scale, b.scale)
+  const x = scaleMoney(a.n, a.scale, scale)
+  const y = scaleMoney(b.n, b.scale, scale)
+  if (x < y) return -1
+  if (x > y) return 1
+  return 0
+}
+
+function moneyParts(value: string): { n: bigint; scale: number } | null {
+  if (!MONEY.test(value)) return null
+  const [whole, frac = ""] = value.split(".")
+  const digits = `${whole}${frac}`.replace(/^0+(?=\d)/, "")
+  return { n: BigInt(digits.length === 0 ? "0" : digits), scale: frac.length }
+}
+
+function scaleMoney(n: bigint, from: number, to: number): bigint {
+  if (to <= from) return n / 10n ** BigInt(from - to)
+  return n * 10n ** BigInt(to - from)
+}
+
+function formatMoney(value: bigint, scale: number): string {
+  const text = value.toString().padStart(scale + 1, "0")
+  if (scale === 0) return text
+  const cut = text.length - scale
+  const trimmed = `${text.slice(0, cut)}.${text.slice(cut)}`.replace(/0+$/, "").replace(/\.$/, "")
+  return trimmed.length === 0 ? "0" : trimmed
 }
 
 type Feed = {
@@ -198,7 +422,13 @@ export type OracleHandlers = {
   onAdopt: (event: { to: PriceSource; at: number }) => void
 }
 
-type Leg = { price: string | null; at: number; bookAt: number }
+type Leg = { price: string | null; at: number; bookAt: number; movedAt: number; samples: SwingSample[] }
+
+type ConnectGate = {
+  allow: (now: number) => { ok: boolean; waitMs: number }
+  recordOpen: (now: number) => void
+  recordDeath: (now: number) => void
+}
 
 export function startOracle(handlers: OracleHandlers): () => void {
   const mine = ++epoch
@@ -209,26 +439,62 @@ export function startOracle(handlers: OracleHandlers): () => void {
   let anchor: string | null = null
   let lastEmitted: string | null = null
   let lastEmitAt = 0
-  let lastActiveAt = 0
+  let lastMoveAt = 0
+  let recoveryTried = false
   let pendingPrint: Print | null = null
   let pendingTimer: ReturnType<typeof setTimeout> | null = null
   let breakTimer: ReturnType<typeof setTimeout> | null = null
-  const legs = Object.fromEntries(VENUE_ORDER.map((venue) => [venue, { price: null, at: 0, bookAt: 0 }])) as Record<PriceSource, Leg>
+  let switches: SwitchEvent[] = []
+  let binanceAttempts: BinanceAttempt[] = []
+  const legs = Object.fromEntries(
+    VENUE_ORDER.map((venue) => [venue, { price: null, at: 0, bookAt: 0, movedAt: 0, samples: [] }]),
+  ) as Record<PriceSource, Leg>
   const sockets = Object.fromEntries(VENUE_ORDER.map((venue) => [venue, { feed: null as string | null, up: false }])) as Record<
     PriceSource,
     { feed: string | null; up: boolean }
   >
   const seen = new Set<string>()
 
+  const trimAttempts = (now: number) => {
+    const keep = now - BINANCE_WINDOW_MS - BINANCE_FREEZE_MS
+    binanceAttempts = binanceAttempts.filter((item) => item.at >= keep)
+  }
+
+  const gate: ConnectGate = {
+    allow(now) {
+      const budget = allowBinanceConnect(binanceAttempts, now)
+      if (budget.ok) return { ok: true, waitMs: 0 }
+      return { ok: false, waitMs: binanceWaitMs(binanceAttempts, now) }
+    },
+    recordOpen(now) {
+      binanceAttempts.push({ at: now, diedAt: null })
+      trimAttempts(now)
+    },
+    recordDeath(now) {
+      for (let index = binanceAttempts.length - 1; index >= 0; index--) {
+        const item = binanceAttempts[index]!
+        if (item.diedAt == null) {
+          item.diedAt = now
+          break
+        }
+      }
+      trimAttempts(now)
+    },
+  }
+
   const publish = () => {
     if (mine !== epoch) return
+    const now = Date.now()
     latest = {
       active,
       anchor,
+      switches,
       venues: VENUE_ORDER.map((venue) => ({
         venue,
         price: legs[venue].price,
         at: legs[venue].at,
+        movedAt: legs[venue].movedAt,
+        swing: swingScore(legs[venue].samples, now),
         feed: sockets[venue].feed,
         up: sockets[venue].up,
       })),
@@ -243,12 +509,19 @@ export function startOracle(handlers: OracleHandlers): () => void {
     lastEmitAt = 0
   }
 
-  const snapshot = (): Standby[] => VENUE_ORDER.map((venue) => ({ venue, price: legs[venue].price, at: legs[venue].at }))
+  const snapshot = (): Standby[] =>
+    VENUE_ORDER.map((venue) => ({
+      venue,
+      price: legs[venue].price,
+      at: legs[venue].movedAt,
+      swing: swingScore(legs[venue].samples, Date.now()),
+    }))
 
   const armBreak = (fromAt: number) => {
-    lastActiveAt = fromAt
+    if (fromAt <= 0) return
+    lastMoveAt = fromAt
     if (breakTimer) clearTimeout(breakTimer)
-    const wait = Math.max(0, BREAK_MS - (Date.now() - fromAt))
+    const wait = Math.max(0, MOVE_MS - (Date.now() - fromAt))
     breakTimer = setTimeout(fireBreak, wait)
   }
 
@@ -287,33 +560,55 @@ export function startOracle(handlers: OracleHandlers): () => void {
 
   const tryAdopt = (now: number) => {
     if (stopped || !waiting || !brokeFrom) return
-    const to = pickStandby(brokeFrom, anchor, snapshot(), now)
+    const ranked = rankStandbys(brokeFrom, anchor, snapshot(), now)
+    const to = ranked[0]?.venue
     if (!to) return
     waiting = false
     active = to
     clearPending()
+    switches = fillSwitch(switches, to)
     console.log(`price feed: ${to}`)
     handlers.onAdopt({ to, at: now })
-    armBreak(now)
+    armBreak(legs[to].movedAt)
     publish()
   }
 
   const fireBreak = () => {
     if (stopped || !active) return
     const now = Date.now()
-    if (!silenceBreak(lastActiveAt, now)) {
-      armBreak(lastActiveAt)
+    if (!moveBreak(lastMoveAt, now)) {
+      armBreak(lastMoveAt)
       return
     }
     const from = active
+    const silent = legs[from].at > 0 ? now - legs[from].at : MOVE_MS
+    const decision = recoveryAction({
+      venue: from,
+      messagesSilentMs: silent,
+      budget: allowBinanceConnect(binanceAttempts, now),
+      alreadyTried: recoveryTried,
+    })
+    if (decision.action === "reconnect") {
+      recoveryTried = true
+      console.log("price feed: binance reconnect")
+      reconnectBinance()
+      if (breakTimer) clearTimeout(breakTimer)
+      breakTimer = setTimeout(fireBreak, RECOVERY_MS)
+      publish()
+      return
+    }
+    recoveryTried = false
+    const ranked = rankStandbys(from, anchor ?? legs[from].price, snapshot(), now)
+    const to = ranked[0]?.venue ?? null
+    const reason = switchReason(decision.reason, ranked)
     brokeFrom = from
-    const to = pickStandby(from, anchor ?? legs[from].price, snapshot(), now)
     active = to
     waiting = to == null
     clearPending()
-    console.log(`price feed: ${from} dropped, ${to ?? "waiting"}`)
+    switches = pushSwitch(switches, { at: now, from, to, reason })
+    console.log(`price feed: ${from} dropped, ${to ?? "waiting"} (${reason})`)
     handlers.onBreak({ from, to, at: now })
-    if (to) armBreak(now)
+    if (to) armBreak(legs[to].movedAt)
     publish()
   }
 
@@ -321,27 +616,38 @@ export function startOracle(handlers: OracleHandlers): () => void {
     if (stopped) return
     const now = Date.now()
     const leg = legs[venue]
+    const prevPrice = leg.price
+    const prevMoved = leg.movedAt
     leg.at = now
+    let nextPrice = prevPrice
     if (quote.kind === "book") {
       leg.bookAt = now
-      leg.price = quote.price
+      nextPrice = quote.price
     } else if (now - leg.bookAt > BREAK_MS) {
-      leg.price = quote.price
+      nextPrice = quote.price
     }
+    const moved = noteMove({ price: prevPrice, movedAt: prevMoved, samples: leg.samples }, nextPrice, now)
+    leg.price = moved.price
+    leg.movedAt = moved.movedAt
+    leg.samples = moved.samples
     if (venue !== active) {
       if (waiting) tryAdopt(now)
       publish()
       return
     }
-    armBreak(now)
+    if (moved.movedAt !== prevMoved) {
+      recoveryTried = false
+      armBreak(leg.movedAt)
+    }
     handlers.onAlive(now)
     const publishPrint = quote.kind === "book" || now - leg.bookAt > BREAK_MS
     if (publishPrint && leg.price) consider({ price: leg.price, exchangeTs: now, receivedAt: now, source: venue })
     publish()
   }
 
-  const stops = VENUE_ORDER.map((venue) =>
-    startWalker(
+  let reconnectBinance = () => {}
+  const stops = VENUE_ORDER.map((venue) => {
+    const walker = startWalker(
       FEEDS[venue],
       (feed, quote) => {
         if (!seen.has(feed.name)) {
@@ -354,8 +660,11 @@ export function startOracle(handlers: OracleHandlers): () => void {
         sockets[venue] = status
         publish()
       },
-    ),
-  )
+      venue === "binance" ? gate : null,
+    )
+    if (venue === "binance") reconnectBinance = walker.reconnect
+    return walker.stop
+  })
 
   publish()
 
@@ -374,7 +683,8 @@ function startWalker(
   feeds: Feed[],
   onQuote: (feed: Feed, quote: Quote) => void,
   onStatus: (status: { feed: string | null; up: boolean }) => void,
-): () => void {
+  gate: ConnectGate | null,
+): { stop: () => void; reconnect: () => void } {
   let stopped = false
   let index = 0
   let retries = 0
@@ -382,13 +692,21 @@ function startWalker(
   let generation = 0
   let socket: FeedConn | null = null
   let timer: ReturnType<typeof setTimeout> | null = null
+  let retry: ReturnType<typeof setTimeout> | null = null
   let beat: ReturnType<typeof setInterval> | null = null
   let quiet = false
+  let openAt: number | null = null
 
   const clearTimer = () => {
     if (!timer) return
     clearTimeout(timer)
     timer = null
+  }
+
+  const clearRetry = () => {
+    if (!retry) return
+    clearTimeout(retry)
+    retry = null
   }
 
   const clearBeat = () => {
@@ -397,8 +715,31 @@ function startWalker(
     beat = null
   }
 
+  const schedule = (ms: number) => {
+    clearRetry()
+    retry = setTimeout(() => {
+      retry = null
+      connect()
+    }, ms)
+  }
+
+  const markDeath = () => {
+    if (openAt == null) return
+    gate?.recordDeath(Date.now())
+    openAt = null
+  }
+
   const connect = () => {
     if (stopped) return
+    if (gate) {
+      const verdict = gate.allow(Date.now())
+      if (!verdict.ok) {
+        schedule(verdict.waitMs)
+        return
+      }
+      openAt = Date.now()
+      gate.recordOpen(openAt)
+    }
     const gen = ++generation
     const feed = feeds[index % feeds.length]!
     let printed = false
@@ -407,6 +748,7 @@ function startWalker(
     const giveUp = () => {
       if (stopped || gen !== generation) return
       generation++
+      markDeath()
       clearTimer()
       clearBeat()
       socket?.close()
@@ -417,7 +759,7 @@ function startWalker(
       index = step.index
       retries = step.retries
       if (!moved) {
-        setTimeout(connect, step.delay)
+        schedule(step.delay)
         return
       }
       const next = feeds[index % feeds.length]!
@@ -428,7 +770,7 @@ function startWalker(
         quiet = true
         delay = Math.min(delay * 2, 2_000)
       }
-      setTimeout(connect, wait)
+      schedule(wait)
     }
 
     const arm = (ms: number) => {
@@ -443,12 +785,12 @@ function startWalker(
         onStatus({ feed: feed.name, up: true })
         feed.subscribe?.(send)
         if (feed.beat && feed.heartbeatMs) beat = setInterval(() => feed.beat?.(send), feed.heartbeatMs)
-        arm(2_000)
+        arm(feedIdleMs(printed))
       },
       onMessage: (data) => {
         if (gen !== generation) return
         if (feed.consume?.(data, send)) {
-          arm(3_000)
+          arm(feedIdleMs(printed))
           return
         }
         const quote = feed.parse(data)
@@ -457,22 +799,39 @@ function startWalker(
         retries = 0
         delay = 200
         quiet = false
-        arm(3_000)
+        arm(feedIdleMs(printed))
         onQuote(feed, quote)
       },
       onDown: giveUp,
     })
-    arm(3_000)
+    arm(feedIdleMs(false))
   }
 
-  connect()
-  return () => {
-    stopped = true
+  const reconnect = () => {
+    if (stopped) return
+    clearRetry()
+    markDeath()
     generation++
     clearTimer()
     clearBeat()
     socket?.close()
+    socket = null
     onStatus({ feed: null, up: false })
+    connect()
+  }
+
+  connect()
+  return {
+    stop() {
+      stopped = true
+      generation++
+      clearRetry()
+      clearTimer()
+      clearBeat()
+      socket?.close()
+      onStatus({ feed: null, up: false })
+    },
+    reconnect,
   }
 }
 

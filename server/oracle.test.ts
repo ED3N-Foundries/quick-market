@@ -8,10 +8,27 @@ import {
   parseCoinbaseExchange,
   parseKraken,
   parseOkx,
+  allowBinanceConnect,
+  binanceWaitMs,
+  BINANCE_FREEZE_MS,
+  BINANCE_MAX_ATTEMPTS,
+  feedIdleMs,
+  fillSwitch,
+  formatSwing,
+  MOVE_MS,
+  moveBreak,
+  noteMove,
+  OPEN_ARM_MS,
   pickStandby,
-  silenceBreak,
-  BREAK_MS,
+  priceChanged,
+  PRINTED_IDLE_MS,
+  pushSwitch,
+  RATE_MS,
+  recoveryAction,
   STANDBY_MS,
+  swingScore,
+  switchReason,
+  type SwitchEvent,
 } from "./oracle"
 
 test("parseBinance unwraps a combined book frame and weights the size", () => {
@@ -96,10 +113,38 @@ test("parseKraken and parseBitstamp keep decimal strings", () => {
   ).toBe("101.0000")
 })
 
-test("silence inside the break window keeps the market", () => {
-  expect(silenceBreak(null, 5_000)).toBe(false)
-  expect(silenceBreak(1_000, 1_000 + BREAK_MS - 1)).toBe(false)
-  expect(silenceBreak(1_000, 1_000 + BREAK_MS)).toBe(true)
+test("a price that changed inside five seconds keeps the market", () => {
+  expect(moveBreak(null, 5_000)).toBe(false)
+  expect(moveBreak(0, 5_000)).toBe(false)
+  expect(moveBreak(1_000, 1_000 + MOVE_MS - 1)).toBe(false)
+  expect(moveBreak(1_000, 1_000 + MOVE_MS)).toBe(true)
+})
+
+test("any price change counts, and an identical number does not", () => {
+  expect(priceChanged("100", "100.0001")).toBe(true)
+  expect(priceChanged("100", "100.0")).toBe(false)
+  expect(priceChanged("100.00", "100.00")).toBe(false)
+  const first = noteMove({ price: null, movedAt: 0, samples: [] }, "100", 1_000)
+  expect(first).toEqual({ price: "100", movedAt: 1_000, samples: [] })
+  expect(noteMove(first, "100.000", 2_000).movedAt).toBe(1_000)
+  const tick = noteMove(first, "100.0001", 2_000)
+  expect(tick.movedAt).toBe(2_000)
+  expect(tick.samples).toEqual([{ at: 2_000, dollars: "0.0001" }])
+})
+
+test("swing is the sum of absolute changes, so a wild book outranks a busy one", () => {
+  const now = 50_000
+  const tiny = Array.from({ length: 40 }, (_, index) => ({ at: now - index, dollars: "0.10" }))
+  const wild = [
+    { at: now, dollars: "10" },
+    { at: now - 1, dollars: "10" },
+  ]
+  expect(swingScore(tiny, now)).toBe("4")
+  expect(swingScore(wild, now)).toBe("20")
+  expect(swingScore([{ at: now - RATE_MS - 1, dollars: "10" }, { at: now, dollars: "1" }], now)).toBe("1")
+  expect(formatSwing("18.2")).toBe("$18.20")
+  expect(feedIdleMs(true)).toBe(PRINTED_IDLE_MS)
+  expect(feedIdleMs(false)).toBe(OPEN_ARM_MS)
 })
 
 test("a stream that has printed retries the same URL before walking on", () => {
@@ -109,7 +154,7 @@ test("a stream that has printed retries the same URL before walking on", () => {
   expect(nextFeedStep({ printed: false, retries: 0, index: 2 })).toEqual({ index: 3, retries: 0, delay: 0 })
 })
 
-test("a standby is ranked by gap, and a far quote can still take over", () => {
+test("equal swings fall back to the closest quote, and a far quote can still take over", () => {
   const now = 10_000
   const rows = [
     { venue: "bybit" as const, price: "81600", at: now },
@@ -153,4 +198,91 @@ test("a standby is ranked by gap, and a far quote can still take over", () => {
     ),
   ).toBe("bybit")
   expect(pickStandby("binance", "100", [{ venue: "binance", price: "100", at: now }], now)).toBeNull()
+})
+
+test("a larger swing wins inside $25, and a quiet book is never chosen", () => {
+  const now = 10_000
+  expect(
+    pickStandby("binance", "100", [
+      { venue: "bybit", price: "100", at: now, swing: "4" },
+      { venue: "okx", price: "120", at: now, swing: "20" },
+    ], now),
+  ).toBe("okx")
+  expect(
+    pickStandby("binance", "100", [
+      { venue: "bybit", price: "200", at: now, swing: "100" },
+      { venue: "okx", price: "100", at: now, swing: "1" },
+    ], now),
+  ).toBe("okx")
+  expect(
+    pickStandby("binance", "100", [
+      { venue: "bybit", price: "200", at: now, swing: "1" },
+      { venue: "kraken", price: "180", at: now, swing: "50" },
+    ], now),
+  ).toBe("kraken")
+  expect(
+    pickStandby(
+      "okx",
+      "100",
+      [
+        { venue: "binance", price: "110", at: now, swing: "5" },
+        { venue: "bybit", price: "101", at: now, swing: "5" },
+      ],
+      now,
+      "binance",
+    ),
+  ).toBe("binance")
+  expect(pickStandby("binance", "100", [{ venue: "bybit", price: "100", at: now - MOVE_MS - 1, swing: "100" }], now)).toBeNull()
+})
+
+test("binance reconnects only when the budget and the socket allow it", () => {
+  const fresh = { ok: true, reason: "" }
+  expect(recoveryAction({ venue: "bybit", messagesSilentMs: MOVE_MS, budget: fresh, alreadyTried: false })).toEqual({
+    action: "switch",
+    reason: "no price change for 5.0s",
+  })
+  expect(recoveryAction({ venue: "binance", messagesSilentMs: 1_000, budget: fresh, alreadyTried: false }).action).toBe("switch")
+  expect(recoveryAction({ venue: "binance", messagesSilentMs: MOVE_MS, budget: fresh, alreadyTried: false })).toEqual({
+    action: "reconnect",
+    reason: "",
+  })
+  expect(
+    recoveryAction({
+      venue: "binance",
+      messagesSilentMs: MOVE_MS,
+      budget: { ok: false, reason: "12 attempts in 5m" },
+      alreadyTried: false,
+    }).reason,
+  ).toBe("reconnect skipped (12 attempts in 5m)")
+  expect(recoveryAction({ venue: "binance", messagesSilentMs: MOVE_MS, budget: fresh, alreadyTried: true }).reason).toBe(
+    "reconnect produced no move",
+  )
+  expect(switchReason("no price change for 5.0s", [{ venue: "bybit", swing: "18.2" }, { venue: "okx", swing: "0.4" }])).toBe(
+    "no price change for 5.0s; bybit swing $18.20, okx swing $0.40",
+  )
+})
+
+test("twelve binance attempts in five minutes refuse another, and three fast deaths freeze", () => {
+  const now = 110_000
+  const spaced = (count: number) => Array.from({ length: count }, (_, index) => ({ at: index * 10_000, diedAt: index * 10_000 + 2_000 }))
+  expect(allowBinanceConnect(spaced(BINANCE_MAX_ATTEMPTS - 1), now)).toEqual({ ok: true, reason: "" })
+  expect(allowBinanceConnect(spaced(BINANCE_MAX_ATTEMPTS), now)).toEqual({ ok: false, reason: "12 attempts in 5m" })
+  expect(allowBinanceConnect([{ at: now - 4_000, diedAt: now - 3_000 }], now).reason).toBe("last attempt 4s ago")
+  expect(binanceWaitMs([{ at: now - 4_000, diedAt: now - 3_000 }], now)).toBe(6_000)
+  const died = (at: number) => ({ at, diedAt: at + 100 })
+  const fast = [died(0), died(20_000), died(40_000)]
+  expect(allowBinanceConnect(fast, 40_101).reason).toBe("fast failures")
+  expect(allowBinanceConnect(fast, 40_100 + BINANCE_FREEZE_MS).ok).toBe(true)
+  expect(allowBinanceConnect([died(0), { at: 20_000, diedAt: 25_000 }, died(40_000)], 50_000).ok).toBe(true)
+})
+
+test("the switch log keeps five rows and an adopt fills the open one", () => {
+  let log: SwitchEvent[] = []
+  for (let n = 1; n <= 6; n++) {
+    log = pushSwitch(log, { at: n, from: "binance", to: n === 6 ? null : "bybit", reason: `r${n}` })
+  }
+  expect(log.map((row) => row.reason)).toEqual(["r6", "r5", "r4", "r3", "r2"])
+  const filled = fillSwitch(log, "okx")
+  expect(filled[0]).toEqual({ at: 6, from: "binance", to: "okx", reason: "r6" })
+  expect(filled[1]?.to).toBe("bybit")
 })

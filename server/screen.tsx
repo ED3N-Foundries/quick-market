@@ -14,6 +14,7 @@ import {
   marketLines,
   pullFeeds,
   sourceLine,
+  switchLines,
   wideLayout,
   type DashState,
   type MarketStats,
@@ -76,6 +77,11 @@ export function FeedsView({
     >
       <Text>{sourceLine(frame, now)}</Text>
       <Text fg={muted}>{holdLine(frame, now)}</Text>
+      {switchLines(frame.switches, height).map((line, index) => (
+        <Text key={`${index}-${line}`} fg={muted}>
+          {line}
+        </Text>
+      ))}
       {stats
         ? marketLines(stats, frame.venues.find((row) => row.venue === frame.active)?.price ?? frame.anchor, now).map((line) => (
             <Text key={line} fg={muted}>
@@ -196,6 +202,7 @@ function VenueLine({
       <Cell width={12}>{priceText(row.price)}</Cell>
       <Cell width={8} fg={muted}>{age}</Cell>
       {wide ? <Cell width={10} fg={muted}>{gapText(row.gap)}</Cell> : null}
+      {wide ? <Cell width={10} fg={muted}>{swingText(row.swing)}</Cell> : null}
       {wide ? <Text fg={muted}>{row.feed ?? "—"}</Text> : null}
     </box>
   )
@@ -213,6 +220,12 @@ function gapText(gap: string | null): string {
   const amount = Number(gap)
   if (!Number.isFinite(amount)) return gap
   return amount.toFixed(2)
+}
+
+function swingText(swing: string): string {
+  const amount = Number(swing)
+  if (!Number.isFinite(amount)) return swing
+  return `$${amount.toFixed(2)}`
 }
 
 function Text({ children, fg = text }: { children: string; fg?: string }) {

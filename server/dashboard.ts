@@ -2,7 +2,7 @@ import type { PriceSource } from "../shared/market"
 import { quotePair, sourceLabel } from "../shared/source"
 import { dollarGap } from "./blend"
 import { loadEnv } from "./env"
-import { VENUE_ORDER } from "./oracle"
+import { SWITCH_LOG, VENUE_ORDER, type SwitchEvent } from "./oracle"
 import type { FeedFrame, LegRole, VenueRow } from "./feeds"
 
 const VENUES = new Set<string>(VENUE_ORDER)
@@ -148,17 +148,32 @@ export function detailLine(row: VenueRow | null, now: number): string {
   return `${row.venue}  ${quotePair(row.venue)}  ${row.role}  ${row.reason}  ping ${age}  gap ${gap}`
 }
 
+export function switchStamp(at: number): string {
+  return `${new Date(at).toISOString().slice(11, 19)}Z`
+}
+
+export function switchLine(row: SwitchEvent): string {
+  return `${switchStamp(row.at)}  ${row.from} → ${row.to ?? "waiting"}  ${row.reason}`
+}
+
+/** Tall screens show the last five. A short screen keeps the newest row. */
+export function switchLines(rows: readonly SwitchEvent[], height: number): string[] {
+  if (rows.length === 0) return ["switches  none"]
+  const shown = height >= 22 ? rows.slice(0, SWITCH_LOG) : rows.slice(0, 1)
+  return shown.map(switchLine)
+}
+
 export function venueLine(row: VenueRow, selected: boolean, wide: boolean, now: number): string {
   const age = row.at > 0 ? formatAge(Math.max(0, now - row.at)) : "—"
   const head = `${selected ? ">" : " "} ${cell(row.venue, 10)}${cell(row.role, 8)}${cell(showPrice(row.price), 12)}${cell(age, 8)}`
   if (!wide) return head.trimEnd()
-  return `${head}${cell(showGap(row.gap), 10)}${row.feed ?? "—"}`.trimEnd()
+  return `${head}${cell(showGap(row.gap), 10)}${cell(showSwing(row.swing), 10)}${row.feed ?? "—"}`.trimEnd()
 }
 
 export function headLine(wide: boolean): string {
   const head = `  ${cell("venue", 10)}${cell("role", 8)}${cell("price", 12)}${cell("ping", 8)}`
   if (!wide) return head.trimEnd()
-  return `${head}${cell("gap", 10)}feed`
+  return `${head}${cell("gap", 10)}${cell("swing", 10)}feed`
 }
 
 export function renderFeeds(
@@ -167,6 +182,7 @@ export function renderFeeds(
   now: number,
   url: string,
   stats: MarketStats | null = null,
+  height = 24,
 ): string {
   if (!frame) {
     const lines = [`Waiting for the API on ${apiHost(url)}.`, "q closes this dashboard. The API keeps going."]
@@ -177,6 +193,7 @@ export function renderFeeds(
   const lines = [
     sourceLine(frame, now),
     holdLine(frame, now),
+    ...switchLines(frame.switches, height),
     ...(stats ? marketLines(stats, price, now) : []),
     state.quiet ? "api quiet" : "",
     headLine(true),
@@ -245,6 +262,8 @@ export function parseFeedFrame(value: unknown): FeedFrame | null {
   if (typeof value.at !== "number" || !Number.isFinite(value.at)) return null
   const handoff = parseHandoff(value.handoff)
   if (handoff === undefined) return null
+  const switches = parseSwitches(value.switches)
+  if (!switches) return null
   if (!Array.isArray(value.venues) || value.venues.length !== VENUE_ORDER.length) return null
   const venues: VenueRow[] = []
   for (let index = 0; index < VENUE_ORDER.length; index++) {
@@ -259,8 +278,29 @@ export function parseFeedFrame(value: unknown): FeedFrame | null {
     anchor: value.anchor,
     live: value.live,
     handoff,
+    switches,
     venues,
   }
+}
+
+function parseSwitches(value: unknown): SwitchEvent[] | null {
+  if (value == null) return []
+  if (!Array.isArray(value)) return null
+  const rows: SwitchEvent[] = []
+  for (const item of value) {
+    const row = parseSwitch(item)
+    if (!row) return null
+    rows.push(row)
+  }
+  return rows.slice(0, SWITCH_LOG)
+}
+
+function parseSwitch(value: unknown): SwitchEvent | null {
+  if (!isRecord(value) || !isSource(value.from)) return null
+  if (value.to !== null && !isSource(value.to)) return null
+  if (typeof value.at !== "number" || !Number.isFinite(value.at)) return null
+  if (typeof value.reason !== "string" || value.reason.length === 0) return null
+  return { at: value.at, from: value.from, to: value.to, reason: value.reason }
 }
 
 function parseHandoff(value: unknown): FeedFrame["handoff"] | undefined {
@@ -280,6 +320,7 @@ function parseVenue(value: unknown, venue: PriceSource): VenueRow | null {
   if (typeof value.role !== "string" || !ROLES.has(value.role as LegRole)) return null
   if (typeof value.reason !== "string") return null
   if (value.gap !== null && typeof value.gap !== "string") return null
+  if (value.swing != null && typeof value.swing !== "string") return null
   return {
     venue,
     price: value.price,
@@ -289,6 +330,7 @@ function parseVenue(value: unknown, venue: PriceSource): VenueRow | null {
     role: value.role as LegRole,
     reason: value.reason,
     gap: value.gap,
+    swing: typeof value.swing === "string" ? value.swing : "0",
   }
 }
 
@@ -312,6 +354,12 @@ function showGap(gap: string | null): string {
   const amount = Number(gap)
   if (!Number.isFinite(amount)) return gap
   return amount.toFixed(2)
+}
+
+function showSwing(swing: string): string {
+  const amount = Number(swing)
+  if (!Number.isFinite(amount)) return swing
+  return `$${amount.toFixed(2)}`
 }
 
 function cell(value: string, width: number): string {
