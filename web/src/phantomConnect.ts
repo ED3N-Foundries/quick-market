@@ -1,4 +1,6 @@
 import { CHAINS } from "../../shared/chain"
+import type { Lang } from "../../shared/lang"
+import { copy } from "./copy"
 import { isUnrecognizedChain } from "./depositFlow"
 
 export type ConnectKind = "modal" | "deeplink"
@@ -33,15 +35,19 @@ export function loginAction(input: {
 }
 
 /** Sentence for the sign-in row. The session step is the grant, not another Phantom prompt. */
-export function loginStatus(phase: LoginPhase, testnet: boolean): string {
-  if (phase === "phantom") return "Waiting for Phantom"
-  if (phase === "sign") return "Approve the sign-in in Phantom"
-  if (testnet) return "Signed. Adding your balance on Base Sepolia. This can take a bit."
-  return "Confirming sign-in"
+export function loginStatus(phase: LoginPhase, testnet: boolean, lang: Lang = "en"): string {
+  const text = copy(lang)
+  if (phase === "phantom") return text.waitingPhantom
+  if (phase === "sign") return text.approveSignIn
+  if (testnet) return text.signedBalance
+  return text.confirmingSignIn
 }
 
-export function loginSteps(testnet: boolean): readonly [string, string, string] {
-  return testnet ? ["Phantom", "Approve", "Balance"] : ["Phantom", "Approve", "Confirm"]
+export function loginSteps(testnet: boolean, lang: Lang = "en"): readonly [string, string, string] {
+  const text = copy(lang)
+  return testnet
+    ? [text.stepPhantom, text.stepApprove, text.stepBalance]
+    : [text.stepPhantom, text.stepApprove, text.stepConfirm]
 }
 
 export function loginStepState(index: number, phase: LoginPhase): "done" | "now" | "later" {
@@ -51,13 +57,14 @@ export function loginStepState(index: number, phase: LoginPhase): "done" | "now"
   return "later"
 }
 
-export function grantWaitStatus(progress?: { seen: number; needed: number }): string {
-  if (!progress) return "Minting the grant on Base Sepolia. This can take a bit."
+export function grantWaitStatus(progress?: { seen: number; needed: number }, lang: Lang = "en"): string {
+  const text = copy(lang)
+  if (!progress) return text.mintingGrant
   const needed = Math.max(0, Math.floor(progress.needed))
   const seen = Math.min(needed, Math.max(0, Math.floor(progress.seen)))
   const left = needed - seen
-  if (left === 0) return "Confirmations in. Crediting the balance."
-  return left === 1 ? "Waiting on 1 confirmation" : `Waiting on ${left} confirmations`
+  if (left === 0) return text.confirmationsIn
+  return left === 1 ? text.waitingOne : text.waitingMany(left)
 }
 
 /**

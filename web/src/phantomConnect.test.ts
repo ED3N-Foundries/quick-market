@@ -103,6 +103,10 @@ test("login query is removed once", () => {
   expect(new URL(first.clean).searchParams.has("login")).toBe(false)
   expect(new URL(first.clean).searchParams.get("x")).toBe("1")
   expect(takeLoginQuery(first.clean).continueLogin).toBe(false)
+  const kept = takeLoginQuery("https://market.example/?lang=zh-TW&login=1")
+  expect(kept.continueLogin).toBe(true)
+  expect(new URL(kept.clean).searchParams.get("lang")).toBe("zh-TW")
+  expect(new URL(kept.clean).searchParams.has("login")).toBe(false)
 })
 
 test("a Base Sepolia switch failure tells the user to turn on Testnet Mode and does not add the chain", () => {

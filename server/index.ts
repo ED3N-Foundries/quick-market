@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs"
 import { join, normalize, sep } from "node:path"
 import { moneyLabel, requireSepoliaToken, tokenKind, tokenLabel } from "../shared/chain"
+import { parseLang, stampHtml, type Lang } from "../shared/lang"
 import { loadMarket, TICK_MS, type PublicConfig } from "../shared/market"
 import { feeBps, marketMs, MIN_STAKE_MICROS, priceSource, viewMs, windowMs, type PriceSource } from "./config"
 import { takeTick } from "./tick"
@@ -336,24 +337,36 @@ async function handle(req: Request): Promise<Response> {
   }
 
   if (serveUi && req.method === "GET") {
-    const file = await staticFile(url.pathname)
+    const file = await staticFile(url)
     if (file) return file
   }
 
   return json({ error: "Not found" }, 404)
 }
 
-async function staticFile(pathname: string): Promise<Response | null> {
+async function staticFile(url: URL): Promise<Response | null> {
   if (!existsSync(distDir)) return null
+  const pathname = url.pathname
   const rel = pathname === "/" ? "index.html" : pathname.replace(/^\/+/, "")
   const full = normalize(join(distDir, rel))
   const root = normalize(distDir)
   if (full !== root && !full.startsWith(root + sep)) return null
+  const lang = parseLang(url.searchParams.get("lang"))
   const file = Bun.file(full)
-  if (await file.exists()) return new Response(file)
+  if (await file.exists()) return serveAsset(file, full.endsWith(`${sep}index.html`) || pathname === "/", lang)
   const index = Bun.file(join(distDir, "index.html"))
-  if (await index.exists()) return new Response(index)
+  if (await index.exists()) return serveAsset(index, true, lang)
   return null
+}
+
+async function serveAsset(file: Bun.BunFile, html: boolean, lang: Lang | null): Promise<Response> {
+  if (!html || !lang) return new Response(file)
+  return new Response(stampHtml(await file.text(), lang), {
+    headers: {
+      "content-type": "text/html; charset=utf-8",
+      "content-language": lang,
+    },
+  })
 }
 
 const host = process.env.HOST?.trim() || "127.0.0.1"

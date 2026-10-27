@@ -19,6 +19,7 @@ import {
   isTestnetChain,
   parseAmountMicros,
   payoutMicros,
+  formatClock,
   quoteDollar,
   handoffBanner,
   quotePair,
@@ -189,4 +190,19 @@ test("grant timing and labels describe an hourly claim", () => {
   expect(grantSentence(amount, 2 * 60_000)).toBe(
     "Quick Market adds $100 QM USDC to this balance once every 2 minutes. The wallet is not charged, and Phantom is not involved.",
   )
+  const taiwan = grantSentence(amount, hour, "zh-TW")
+  expect(taiwan).toContain("每小時一次")
+  expect(taiwan).not.toContain("once an hour")
+})
+
+test("formatClock follows the timezone and the locale hour cycle", () => {
+  const ms = Date.UTC(2026, 9, 27, 18, 58, 0)
+  const utc = formatClock(ms, "en-US", "UTC")
+  const chicago = formatClock(ms, "en-US", "America/Chicago")
+  expect(utc).toContain("6:58:00")
+  expect(chicago).toContain("1:58:00")
+  expect(utc).not.toBe(chicago)
+  const gb = formatClock(ms, "en-GB", "UTC")
+  expect(gb).toBe("18:58:00")
+  expect(gb).not.toMatch(/AM|PM/)
 })

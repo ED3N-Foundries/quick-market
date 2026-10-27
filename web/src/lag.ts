@@ -1,3 +1,6 @@
+import type { Lang } from "../../shared/lang"
+import { copy } from "./copy"
+
 export const LAG_WINDOW_MS = 15_000
 export const LAG_PROBE_MS = 2_000
 export const LAG_STALE_MS = 5_000
@@ -202,10 +205,15 @@ export function formatLag(ms: number | null): string {
   return `${Math.max(0, Math.round(ms))} ms`
 }
 
-export function lagButtonName(label: string, rttMs: number | null): string {
+export function lagButtonName(label: string, rttMs: number | null, lang: Lang = "en"): string {
+  const ms = rttMs == null || !Number.isFinite(rttMs) ? null : Math.max(0, Math.round(rttMs))
+  if (lang === "zh-TW") {
+    const word = label === "Live" ? "正常" : label === "Slow" ? "偏慢" : "重新連線"
+    return copy(lang).connectionName(word, ms)
+  }
   const state = label.toLowerCase()
-  if (rttMs == null || !Number.isFinite(rttMs)) return `Connection, ${state}`
-  return `Connection, ${state}, ${Math.max(0, Math.round(rttMs))} milliseconds`
+  if (ms == null) return `Connection, ${state}`
+  return `Connection, ${state}, ${ms} milliseconds`
 }
 
 export function readEcho(message: unknown): LagEcho | null {

@@ -4,7 +4,7 @@ import { windowAccepts } from "./config"
 import { getDb, useDatabase } from "./db"
 import { parseMicros } from "./money"
 import { handoffBanner } from "../shared/source"
-import { adoptFeed, advance, board, credit, ensureUser, failFeed, feedStatus, handoffNow, noteAlive, notePrint, placeBuyIn, placeBuyIns, recentSettles, resetRuntime, resumeAtFor, roundDetail, tapePoints, tickerNow, withdraw, youFor, type Print, type Side } from "./rounds"
+import { adoptFeed, advance, board, credit, ensureUser, failFeed, feedStatus, handoffNow, listRounds, noteAlive, notePrint, placeBuyIn, placeBuyIns, recentSettles, resetRuntime, resumeAtFor, roundDetail, tapePoints, tickerNow, withdraw, youFor, type Print, type Side } from "./rounds"
 
 const USDC = 1_000_000
 const T = 10_000_000_000_000
@@ -37,6 +37,25 @@ beforeEach(() => {
   process.env.PRICE_SOURCE = "binance"
   resetRuntime()
   useDatabase(":memory:")
+})
+
+test("history lists a later market ahead of an older round with a higher id", () => {
+  const insert = getDb().query(
+    `INSERT INTO rounds (id, starts_at, ends_at, status, winning_side, resolution)
+     VALUES (?, ?, ?, 'settled', 'up', 'paid')`,
+  )
+  insert.run(500, 1_000, 2_000)
+  insert.run(100, 5_000, 6_000)
+  expect(listRounds(10).map((row) => row.id)).toEqual([100, 500])
+  const who = address(3)
+  const betRow = getDb().query(
+    `INSERT INTO buy_ins (id, round_id, address, side, stake_micros, created_at) VALUES (?, ?, ?, 'up', 1, 0)`,
+  )
+  betRow.run("old", 500, who)
+  betRow.run("new", 100, who)
+  expect(listRounds(10, who, true).map((row) => row.id)).toEqual([100, 500])
+  const index = getDb().query("SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?").get("rounds_closed_starts")
+  expect(index).toEqual({ name: "rounds_closed_starts" })
 })
 
 test("recent settles keep directional markets, oldest first", () => {

@@ -1,3 +1,4 @@
+import type { Lang } from "./lang"
 import type { PriceSource } from "./market"
 
 export type Ticker = { venue: PriceSource; label: string }
@@ -31,14 +32,14 @@ const QUOTES: Record<PriceSource, string> = {
   bitstamp: "BTC/USD",
 }
 
-export function sourceName(source: string): string {
+export function sourceName(source: string, lang: Lang = "en"): string {
   if (source in NAMES) return NAMES[source as PriceSource]
-  return "The price feed"
+  return lang === "zh-TW" ? "報價來源" : "The price feed"
 }
 
-export function sourceLabel(source: string): string {
+export function sourceLabel(source: string, lang: Lang = "en"): string {
   if (source in NAMES) return `${NAMES[source as PriceSource]} ${PAIRS[source as PriceSource]}`
-  return "an unknown feed"
+  return lang === "zh-TW" ? "未知報價" : "an unknown feed"
 }
 
 export function quotePair(source: string): string {
@@ -51,7 +52,10 @@ export function tickerFor(venue: PriceSource): Ticker {
 }
 
 /** Shown on the chart and returned when a buy-in is rejected during the hold. */
-export function handoffBanner(from: string, to: string | null): string {
-  if (!to) return `${sourceName(from)} dropped`
-  return `${sourceName(from)} → ${sourceName(to)}`
+export function handoffBanner(from: string, to: string | null, lang: Lang = "en"): string {
+  if (!to) {
+    const name = sourceName(from, lang)
+    return lang === "zh-TW" ? `${name} 中斷` : `${name} dropped`
+  }
+  return `${sourceName(from, lang)} → ${sourceName(to, lang)}`
 }

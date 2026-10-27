@@ -1,3 +1,6 @@
+import type { Lang } from "../../shared/lang"
+import { copy } from "./copy"
+
 /** Display only. Half-up to cents. The ledger stays in integer micros. */
 export function formatMoney(micros: number, signed = false): string {
   const negative = micros < 0
@@ -222,71 +225,76 @@ export function formatGrantTimer(elapsedMs: number): string {
   return `${minutes}:${seconds.toString().padStart(2, "0")}`
 }
 
-export function formatGrantWait(waitMs: number): string {
+export function formatGrantWait(waitMs: number, lang: Lang = "en"): string {
+  const text = copy(lang)
   const totalSeconds = Math.max(1, Math.ceil(Math.max(0, waitMs) / 1000))
   if (totalSeconds >= 3600) {
     const hours = Math.floor(totalSeconds / 3600)
     const minutes = Math.floor((totalSeconds % 3600) / 60)
-    return minutes ? `${hours}h ${minutes}m` : `${hours}h`
+    return minutes ? text.waitHoursMinutes(hours, minutes) : text.waitHours(hours)
   }
-  if (totalSeconds >= 60) return `${Math.ceil(totalSeconds / 60)}m`
-  return `${totalSeconds}s`
+  if (totalSeconds >= 60) return text.waitMinutes(Math.ceil(totalSeconds / 60))
+  return text.waitSeconds(totalSeconds)
 }
 
-export function grantPace(intervalMs: number): string {
-  if (intervalMs === 3_600_000) return "once an hour"
-  if (intervalMs > 0 && intervalMs % 3_600_000 === 0) {
-    const hours = intervalMs / 3_600_000
-    return `once every ${hours} hours`
-  }
+export function grantPace(intervalMs: number, lang: Lang = "en"): string {
+  const text = copy(lang)
+  if (intervalMs === 3_600_000) return text.paceHour
+  if (intervalMs > 0 && intervalMs % 3_600_000 === 0) return text.paceHours(intervalMs / 3_600_000)
   if (intervalMs > 0 && intervalMs % 60_000 === 0) {
     const minutes = intervalMs / 60_000
-    return minutes === 1 ? "once a minute" : `once every ${minutes} minutes`
+    return minutes === 1 ? text.paceMinute : text.paceMinutes(minutes)
   }
   const seconds = Math.max(1, Math.round(intervalMs / 1000))
-  return `once every ${seconds}s`
+  return text.paceSeconds(seconds)
 }
 
-export function grantButtonLabel(timing: GrantTiming, amountMicros: number): string {
-  if (timing.due) return `Grant ${formatGrantDollars(amountMicros)}`
-  return `Next grant in ${formatGrantWait(timing.waitMs)}`
+export function grantButtonLabel(timing: GrantTiming, amountMicros: number, lang: Lang = "en"): string {
+  const text = copy(lang)
+  if (timing.due) return text.grantButton(formatGrantDollars(amountMicros))
+  return text.nextGrant(formatGrantWait(timing.waitMs, lang))
 }
 
-export function grantStatusLabel(timing: GrantTiming, amountMicros: number): string {
-  if (timing.due) return `Grant ready · ${formatGrantDollars(amountMicros)}`
-  return `Next grant in ${formatGrantWait(timing.waitMs)}`
+export function grantStatusLabel(timing: GrantTiming, amountMicros: number, lang: Lang = "en"): string {
+  const text = copy(lang)
+  if (timing.due) return text.grantReadyAmount(formatGrantDollars(amountMicros))
+  return text.nextGrant(formatGrantWait(timing.waitMs, lang))
 }
 
-export function grantNextLabel(timing: GrantTiming): string {
-  return timing.due ? "Ready" : formatGrantWait(timing.waitMs)
+export function grantNextLabel(timing: GrantTiming, lang: Lang = "en"): string {
+  return timing.due ? copy(lang).ready : formatGrantWait(timing.waitMs, lang)
 }
 
-export function grantSentence(amountMicros: number, intervalMs: number): string {
-  return `Quick Market adds ${formatGrantDollars(amountMicros)} QM USDC to this balance ${grantPace(intervalMs)}. The wallet is not charged, and Phantom is not involved.`
+export function grantSentence(amountMicros: number, intervalMs: number, lang: Lang = "en"): string {
+  return copy(lang).grantSentence(formatGrantDollars(amountMicros), grantPace(intervalMs, lang))
 }
 
-export function chainMenuLabel(chainId: number, chainName = "Base"): string {
-  if (isTestnetChain(chainId)) return "Base Sepolia · Testnet"
+export function chainMenuLabel(chainId: number, chainName = "Base", lang: Lang = "en"): string {
+  if (isTestnetChain(chainId)) return copy(lang).chainTestnetMenu
   return chainName || "Base"
 }
 
-export function chainBadgeText(chainId: number, chainName = "Base"): string {
-  if (isTestnetChain(chainId)) return "Base Sepolia Testnet"
-  if (chainId === 8453) return "Base Mainnet"
+export function chainBadgeText(chainId: number, chainName = "Base", lang: Lang = "en"): string {
+  const text = copy(lang)
+  if (isTestnetChain(chainId)) return text.chainTestnetBadge
+  if (chainId === 8453) return text.chainMainnet
   return chainName || "Base"
 }
 
-export function chainNetworkLabel(chainId: number, chainName = "Base"): string {
-  if (isTestnetChain(chainId)) return "Base Sepolia (Testnet)"
-  if (chainId === 8453) return "Base Mainnet"
+export function chainNetworkLabel(chainId: number, chainName = "Base", lang: Lang = "en"): string {
+  const text = copy(lang)
+  if (isTestnetChain(chainId)) return text.chainTestnetNetwork
+  if (chainId === 8453) return text.chainMainnet
   return chainName || "Base"
 }
 
-export function formatClock(ms: number): string {
-  return new Date(ms).toLocaleTimeString(undefined, {
+/** Local timezone unless `timeZone` is passed. `locale` selects the hour cycle. */
+export function formatClock(ms: number, locale?: string, timeZone?: string): string {
+  return new Date(ms).toLocaleTimeString(locale, {
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",
+    ...(timeZone ? { timeZone } : {}),
   })
 }
 
@@ -309,13 +317,14 @@ export function payoutMicros(stake: number, side: "up" | "down", up: number, dow
 }
 
 /** What one dollar added to `side` gets. A refund is stake back, not a priced quote. */
-export function quoteDollar(side: "up" | "down", up: number, down: number, feeBps: number): string {
+export function quoteDollar(side: "up" | "down", up: number, down: number, feeBps: number, lang: Lang = "en"): string {
+  const text = copy(lang)
   const stake = 1_000_000
   const nextUp = up + (side === "up" ? stake : 0)
   const nextDown = down + (side === "down" ? stake : 0)
   const other = side === "up" ? nextDown : nextUp
-  if (other <= 0) return "$1 back"
-  return `$1 gets ${formatMoney(payoutMicros(stake, side, nextUp, nextDown, feeBps))}`
+  if (other <= 0) return text.quoteBack
+  return text.quoteGets(formatMoney(payoutMicros(stake, side, nextUp, nextDown, feeBps)))
 }
 
 export function moneyShare(side: number, total: number): string {

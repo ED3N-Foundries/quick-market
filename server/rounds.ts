@@ -793,14 +793,14 @@ export function listRounds(limit: number, address?: string | null, mine = false)
          FROM rounds r
          JOIN buy_ins b ON b.round_id = r.id AND b.address = ?
          WHERE r.status != 'open'
-         ORDER BY r.id DESC
+         ORDER BY r.starts_at DESC, r.id DESC
          LIMIT ?`,
       )
       .all(address, capped) as (RoundRow & { my_side: Side; my_stake: number; my_payout: number | null })[]
     return rows.map(mapHistory)
   }
   const rows = getDb()
-    .query("SELECT * FROM rounds WHERE status != 'open' ORDER BY id DESC LIMIT ?")
+    .query("SELECT * FROM rounds WHERE status != 'open' ORDER BY starts_at DESC, id DESC LIMIT ?")
     .all(capped) as RoundRow[]
   return rows.map(mapHistory)
 }

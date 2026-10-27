@@ -127,8 +127,14 @@ function openDatabase(path: string): Database {
     db.exec("ALTER TABLE users ADD COLUMN grant_tx TEXT")
   }
   migrateRoundSource(db)
+  ensureRoundIndexes(db)
   migrateCustody(db)
   return db
+}
+
+/** Closed markets are read by start time. Round ids are not time order across a window change. */
+function ensureRoundIndexes(db: Database) {
+  db.exec("CREATE INDEX IF NOT EXISTS rounds_closed_starts ON rounds(starts_at DESC) WHERE status != 'open'")
 }
 
 function tableNames(db: Database): Set<string> {

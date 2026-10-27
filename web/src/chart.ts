@@ -1,5 +1,5 @@
 import { RENDER_MS } from "../../shared/market"
-import { formatPrice } from "./format"
+import { formatClock, formatPrice } from "./format"
 import { HALF_FLOOR, contentHalf, halfSpan, openPrice, shownHalf, type PricePoint } from "./scale"
 
 export type TapePoint = PricePoint & { text?: string }
@@ -153,6 +153,7 @@ export function mountChart(
     getAim?: () => "up" | "down" | null
     extendLive: () => boolean
     onHead?: (text: string | null) => void
+    getLocale?: () => string
   },
 ): TapeChart {
   let points: TapePoint[] = []
@@ -362,9 +363,10 @@ export function mountChart(
     ctx.fillStyle = "rgba(243,240,232,0.45)"
     ctx.font = "11px ui-sans-serif, system-ui, sans-serif"
     ctx.textAlign = "left"
-    ctx.fillText(clockLabel(viewStart), PAD.l, height - 6)
+    const locale = options.getLocale?.()
+    ctx.fillText(clockLabel(viewStart, locale), PAD.l, height - 6)
     ctx.textAlign = "right"
-    ctx.fillText(clockLabel(viewEnd), PAD.l + plotW, height - 6)
+    ctx.fillText(clockLabel(viewEnd, locale), PAD.l + plotW, height - 6)
   }
 
   return {
@@ -778,6 +780,6 @@ function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: numbe
   ctx.closePath()
 }
 
-function clockLabel(ms: number) {
-  return new Date(ms).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit" })
+function clockLabel(ms: number, locale?: string) {
+  return formatClock(ms, locale)
 }

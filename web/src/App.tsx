@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type PointerEvent as ReactPointerEvent, type RefObject } from "react"
-import { LATE_BUY_IN_ERROR } from "../../shared/buyIn"
+import type { Lang } from "../../shared/lang"
 import { MINT_CONFIRMATIONS } from "../../shared/mint"
 import { mountChart, priceY, type ChartScale, type TapeChart, type TapeSample } from "./chart"
 import { chartMarket, focusPool, followWindow, heldMarket, heldStrike } from "./focus"
@@ -37,6 +37,8 @@ import type { Band, Board, HistoryRound, OpenBuyIn, SettledMessage, Side, TrayRo
 import { readCachedBalance, visibleBalance } from "./balanceCache"
 import { readGrantConfirmations } from "./grantChain"
 import { grantLanded, grantTxUrl } from "./grantWatch"
+import { copy, localize, type Copy } from "./copy"
+import { LanguageSelect, useI18n } from "./i18n"
 import { formatLag, lagButtonName, type LinkStatus } from "./lag"
 import { useMarket } from "./useMarket"
 import { FeedBadge } from "./venues"
@@ -45,6 +47,9 @@ import { grantWaitStatus, loginStatus, loginSteps, loginStepState, SIGN_PROMPT }
 import { useSession } from "./wallet"
 
 export function App() {
+  const { lang, text } = useI18n()
+  const langRef = useRef(lang)
+  langRef.current = lang
   const session = useSession()
   const market = useMarket(session.token, session.signedYou)
   const expireRef = useRef(session.expire)
@@ -182,6 +187,7 @@ export function App() {
         return openBuyInsRef.current.find((bet) => bet.roundId === held.id)?.side ?? null
       },
       extendLive: () => handoffRef.current == null,
+      getLocale: () => langRef.current,
       onHead: (text) => {
         market.priceRef.current = text
       },
@@ -215,8 +221,8 @@ export function App() {
   const focus = focusPool(board, openBuyIns, now)
   const total = (focus?.poolUpMicros ?? 0) + (focus?.poolDownMicros ?? 0)
   const held = openBuyIns.find((bet) => bet.roundId === focus?.id) ?? null
-  const upQuote = focus ? quoteDollar("up", focus.poolUpMicros, focus.poolDownMicros, market.config.feeBps) : "—"
-  const downQuote = focus ? quoteDollar("down", focus.poolUpMicros, focus.poolDownMicros, market.config.feeBps) : "—"
+  const upQuote = focus ? quoteDollar("up", focus.poolUpMicros, focus.poolDownMicros, market.config.feeBps, lang) : "—"
+  const downQuote = focus ? quoteDollar("down", focus.poolUpMicros, focus.poolDownMicros, market.config.feeBps, lang) : "—"
   const figures = useSideBook({
     roundId: focus?.id ?? null,
     upShare: moneyShare(focus?.poolUpMicros ?? 0, total),
@@ -251,10 +257,10 @@ export function App() {
     session.address !== null && session.chainId !== undefined && session.chainId !== market.config.chainId
   const walletTone = wrongChain || session.signing ? "warn" : "ok"
   const loginLabel = session.signing
-    ? "Please wait"
+    ? text.pleaseWait
     : !session.address && session.connectMode === "deeplink"
-      ? "Open in Phantom"
-      : "Sign in"
+      ? text.openInPhantom
+      : text.signIn
 
   async function onWithdraw() {
     if (withdrawing) return
@@ -319,11 +325,11 @@ export function App() {
             priceRef={market.priceRef}
             strike={heldSpan?.strike ?? null}
             pair={quotePair(market.ticker.venue)}
-            pairTitle={market.ticker.label || sourceLabel(market.ticker.venue)}
+            pairTitle={market.ticker.label || sourceLabel(market.ticker.venue, lang)}
             venue={market.ticker.venue}
           />
           <div className="clock-block">
-            <span className="clock-label">{handoff ? "Opens" : heldSpan ? "Settles" : "Buy-in"}</span>
+            <span className="clock-label">{handoff ? text.opens : heldSpan ? text.settles : text.buyIn}</span>
             {handoff?.resumeAt ? (
               <Countdown endsAt={handoff.resumeAt} offsetRef={market.offsetRef} />
             ) : board && !handoff ? (
@@ -336,11 +342,9 @@ export function App() {
           </div>
         </div>
       </header>
-      {session.chainError && <p className="note bad">{session.chainError}</p>}
+      {session.chainError && <p className="note bad">{localize(lang, session.chainError)}</p>}
       {session.pageChain && market.config.treasury && market.config.chainId !== session.pageChain.id && (
-        <p className="note bad">
-          This page is on {session.pageChain.name} and the server is on {market.config.chainName}.
-        </p>
+        <p className="note bad">{text.pageChain(session.pageChain.name, market.config.chainName)}</p>
       )}
 
       <section
@@ -375,11 +379,11 @@ export function App() {
         )}
         {handoff && (
           <p className="handoff-banner">
-            {handoff.to && <span className="handoff-kicker">Switching price source</span>}
-            <span>{handoffBanner(handoff.from, handoff.to)}</span>
+            {handoff.to && <span className="handoff-kicker">{text.switching}</span>}
+            <span>{handoffBanner(handoff.from, handoff.to, lang)}</span>
           </p>
         )}
-        {market.feed === "stale" && !handoff && <p className="feed-flag">Price delayed</p>}
+        {market.feed === "stale" && !handoff && <p className="feed-flag">{text.priceDelayed}</p>}
         {!following && (
           <button
             type="button"
@@ -390,7 +394,7 @@ export function App() {
               setFollowing(true)
             }}
           >
-            Now
+            {text.now}
           </button>
         )}
       </section>
@@ -422,7 +426,7 @@ export function App() {
                       className="wallet-pill"
                       data-open={walletMenuOpen ? "1" : "0"}
                       title={session.address}
-                      aria-label="Wallet menu"
+                      aria-label={text.walletMenu}
                       aria-expanded={walletMenuOpen}
                       aria-haspopup="menu"
                       onClick={() => setWalletMenuOpen((open) => !open)}
@@ -445,7 +449,7 @@ export function App() {
                               session.disconnect()
                             }}
                           >
-                            Disconnect
+                            {text.disconnect}
                           </button>
                         </div>
                       </div>
@@ -469,7 +473,7 @@ export function App() {
                   className="wallet-pill"
                   data-open={walletMenuOpen ? "1" : "0"}
                   title={session.address}
-                  aria-label="Wallet menu"
+                  aria-label={text.walletMenu}
                   aria-expanded={walletMenuOpen}
                   aria-haspopup="menu"
                   onClick={() => setWalletMenuOpen((open) => !open)}
@@ -485,8 +489,8 @@ export function App() {
                   type="button"
                   className="fund-plus"
                   data-grant={grantReady ? "due" : "wait"}
-                  aria-label={grantReady ? "Grant ready" : testnet ? "Grant QM USDC" : "Deposit USDC"}
-                  title={grantReady ? "Grant ready" : testnet ? "Grant" : "Deposit"}
+                  aria-label={grantReady ? text.grantReady : testnet ? text.grantQm : text.depositUsdc}
+                  title={grantReady ? text.grantReady : testnet ? text.grant : text.deposit}
                   onClick={openGrant}
                   disabled={!session.token || grantInFlight}
                 >
@@ -501,11 +505,11 @@ export function App() {
                     <div className="wallet-menu-net">
                       <TokenBadge kind={testnet ? "qm" : "circle"} />
                       <span className="net-badge" data-testnet={isTestnetChain(market.config.chainId) ? "1" : "0"}>
-                        {session.signing ? "Please wait" : chainMenuLabel(market.config.chainId, market.config.chainName)}
+                        {session.signing ? text.pleaseWait : chainMenuLabel(market.config.chainId, market.config.chainName, lang)}
                       </span>
                       {wrongChain && (
                         <button type="button" className="plain net-action" onClick={session.switchChain}>
-                          Switch network
+                          {text.switchNetwork}
                         </button>
                       )}
                     </div>
@@ -519,7 +523,7 @@ export function App() {
                         }}
                         disabled={!you}
                       >
-                        Withdraw
+                        {text.withdraw}
                       </button>
                       <button
                         type="button"
@@ -528,7 +532,7 @@ export function App() {
                           session.disconnect()
                         }}
                       >
-                        Disconnect
+                        {text.disconnect}
                       </button>
                     </div>
                   </div>
@@ -537,7 +541,7 @@ export function App() {
             )}
           </div>
           {session.signing && session.loginPhase && !grantPending && (
-            <WaitNote text={loginStatus(session.loginPhase, testnet)} steps={loginSteps(testnet)} phase={session.loginPhase} />
+            <WaitNote text={loginStatus(session.loginPhase, testnet, lang)} steps={loginSteps(testnet, lang)} phase={session.loginPhase} />
           )}
           {grantPending && (
             <GrantFollow
@@ -549,30 +553,34 @@ export function App() {
               now={now}
             />
           )}
-          {session.connectError && <p className="note bad connect-error">{session.connectError}</p>}
+          {session.connectError && <p className="note bad connect-error">{localize(lang, session.connectError)}</p>}
           {!session.token && session.signError && session.signError !== SIGN_PROMPT && (
-            <p className="note bad connect-error">{session.signError}</p>
+            <p className="note bad connect-error">{localize(lang, session.signError)}</p>
           )}
           {!holdStake && <BalanceFigure micros={shownMicros} />}
           {!holdStake && testnet && market.config.grantIntervalMs > 0 && grantKnown &&
             (grantWait.due ? (
               <button type="button" className="grant-status" onClick={openGrant} disabled={!session.token || grantInFlight}>
-                {grantStatusLabel(grantWait, market.config.grantMicros)}
+                {grantStatusLabel(grantWait, market.config.grantMicros, lang)}
               </button>
             ) : (
-              <p className="grant-status">{grantStatusLabel(grantWait, market.config.grantMicros)}</p>
+              <p className="grant-status">{grantStatusLabel(grantWait, market.config.grantMicros, lang)}</p>
             ))}
           {held && (
             <div className="ticket">
-              <p className={held.side}>{held.side === "up" ? "▲ Up" : "▼ Down"}</p>
-              <p>Amount {formatMoney(held.stakeMicros)}</p>
-              <p>Gets {formatMoney(ticketWin)}</p>
+              <p className={held.side}>{held.side === "up" ? `▲ ${text.up}` : `▼ ${text.down}`}</p>
+              <p>
+                {text.amount} {formatMoney(held.stakeMicros)}
+              </p>
+              <p>
+                {text.gets} {formatMoney(ticketWin)}
+              </p>
             </div>
           )}
           {!holdStake && (
             <>
               <label className="stake-field">
-                <span>Amount</span>
+                <span>{text.amount}</span>
                 <input
                   inputMode="decimal"
                   value={stake}
@@ -593,8 +601,8 @@ export function App() {
               </div>
             </>
           )}
-          {fundError && !fundOpen && <p className="note bad">{fundError}</p>}
-          {market.error && <p className="note bad">{market.error}</p>}
+          {fundError && !fundOpen && <p className="note bad">{localize(lang, fundError)}</p>}
+          {market.error && <p className="note bad">{localize(lang, market.error)}</p>}
         </div>
         <SideCard
           side="down"
@@ -777,24 +785,24 @@ export function App() {
       )}
 
       <footer className="footer">
-        <div className="rules">
-          <p className="periods">
-            Buy-in {market.config.windowSeconds}s · Market {market.config.marketSeconds}s
-          </p>
-          <p>Up finishes above the open. Down finishes below. Push is a tie, and stakes return.</p>
-          <p>If a market never gets a price, it is void and stakes return.</p>
-          <p>If the price feed drops during a market, that market is void and stakes return. The next feed is shown before buy-in opens.</p>
-          <p>
-            {(market.config.feeBps / 100).toFixed(2)}% fee on a paid pool. Price from {market.ticker.label || sourceLabel(market.ticker.venue)}.
-          </p>
+        <div className="footer-bar">
+          <div className="rules">
+            <p className="periods">{text.periods(market.config.windowSeconds, market.config.marketSeconds)}</p>
+            <p>{text.ruleFinish}</p>
+            <p>{text.ruleVoid}</p>
+            <p>{text.ruleDrop}</p>
+            <p>{text.feeLine((market.config.feeBps / 100).toFixed(2), market.ticker.label || sourceLabel(market.ticker.venue, lang))}</p>
+          </div>
+          <ConnectionStatus link={market.link} />
         </div>
-        <ConnectionStatus link={market.link} />
+        <LanguageSelect />
       </footer>
     </div>
   )
 }
 
 function ConnectionStatus({ link }: { link: LinkStatus }) {
+  const { lang, text } = useI18n()
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
   useEffect(() => {
@@ -821,24 +829,24 @@ function ConnectionStatus({ link }: { link: LinkStatus }) {
         data-open={open ? "1" : "0"}
         aria-expanded={open}
         aria-haspopup="dialog"
-        aria-label={lagButtonName(link.label, link.rttMs)}
+        aria-label={lagButtonName(link.label, link.rttMs, lang)}
         onClick={() => setOpen((value) => !value)}
       >
         <span className="connection-dot" data-tone={link.tone} />
       </button>
       {open && (
-        <div className="connection-pop" role="dialog" aria-label="Connection">
-          <p className="connection-label">{link.label}</p>
+        <div className="connection-pop" role="dialog" aria-label={text.connection}>
+          <p className="connection-label">{link.tone === "live" ? text.live : link.tone === "slow" ? text.slow : text.reconnecting}</p>
           <p>
-            <span>Up</span>
+            <span>{text.lagUp}</span>
             <span>{formatLag(link.upMs)}</span>
           </p>
           <p>
-            <span>Down</span>
+            <span>{text.lagDown}</span>
             <span>{formatLag(link.downMs)}</span>
           </p>
           <p>
-            <span>Round trip</span>
+            <span>{text.roundTrip}</span>
             <span>{formatLag(link.rttMs)}</span>
           </p>
         </div>
@@ -919,6 +927,7 @@ function Scrub({
   sample: TapeSample | null
   bands: Band[]
 }) {
+  const { lang, text } = useI18n()
   if (!sample) return null
   const x = xAt(hover.t)
   if (x < scale.plotLeft || x > scale.plotLeft + scale.plotWidth) return null
@@ -931,12 +940,16 @@ function Scrub({
     <>
       <div className="scrub-line" style={{ left: x, top: scale.plotTop, height: scale.plotHeight }} />
       <p className="scrub" style={{ left: cardLeft, top: scale.plotTop + 8 }}>
-        <span>{formatClock(hover.t)}</span>
+        <span>{formatClock(hover.t, lang)}</span>
         <strong>{formatPrice(String(sample.price))}</strong>
-        {sample.previous != null && <span>{formatSigned(sample.price - sample.previous)} from last</span>}
+        {sample.previous != null && (
+          <span>
+            {formatSigned(sample.price - sample.previous)} {text.fromLast}
+          </span>
+        )}
         {fromOpen != null && side && (
           <span className={side === "flat" ? "push" : side}>
-            {side === "flat" ? "= Push" : `${formatSigned(fromOpen)} ${side === "up" ? "Up" : "Down"}`}
+            {side === "flat" ? text.pushMark : `${formatSigned(fromOpen)} ${side === "up" ? text.up : text.down}`}
           </span>
         )}
       </p>
@@ -950,6 +963,7 @@ function pegTop(scale: ChartScale, price: number): number {
 }
 
 function PegPrice({ text, top, right }: { text: string; top: number; right: number }) {
+  const { text: copyText } = useI18n()
   const [flash, setFlash] = useState(() => !window.matchMedia("(prefers-reduced-motion: reduce)").matches)
   useEffect(() => {
     const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches
@@ -962,8 +976,8 @@ function PegPrice({ text, top, right }: { text: string; top: number; right: numb
     return () => window.clearTimeout(id)
   }, [text])
   return (
-    <p className={flash ? "peg flash" : "peg"} style={{ top, right }} aria-label="Locked price">
-      <span>Locked</span>
+    <p className={flash ? "peg flash" : "peg"} style={{ top, right }} aria-label={copyText.lockedPrice}>
+      <span>{copyText.locked}</span>
       <strong>{formatPrice(text)}</strong>
     </p>
   )
@@ -984,13 +998,16 @@ function BetChip({
   top: number
   feeBps: number
 }) {
+  const { text } = useI18n()
   const payout = payoutMicros(bet.stakeMicros, bet.side, band.poolUpMicros, band.poolDownMicros, feeBps)
   return (
     <p className={`chip ${bet.side}`} style={{ left, right, top: top + 52 }}>
       <strong>
-        {bet.side === "up" ? "▲ Up" : "▼ Down"} {formatMoney(bet.stakeMicros)}
+        {bet.side === "up" ? `▲ ${text.up}` : `▼ ${text.down}`} {formatMoney(bet.stakeMicros)}
       </strong>
-      <span>Gets {formatMoney(payout)}</span>
+      <span>
+        {text.gets} {formatMoney(payout)}
+      </span>
     </p>
   )
 }
@@ -1019,8 +1036,9 @@ function BalanceFigure({ micros }: { micros: number | null }) {
 }
 
 function LockMark({ locked }: { locked: boolean }) {
+  const { text } = useI18n()
   return (
-    <span className="lock" data-state={locked ? "locked" : "open"} aria-label={locked ? "Price locked" : "Price locking"}>
+    <span className="lock" data-state={locked ? "locked" : "open"} aria-label={locked ? text.priceLocked : text.priceLocking}>
       <span className="lock-spin" aria-hidden="true" />
       <svg viewBox="0 0 24 24" aria-hidden="true">
         <rect
@@ -1039,10 +1057,11 @@ function LockMark({ locked }: { locked: boolean }) {
   )
 }
 
-function moveWord(side: "up" | "down" | "push"): string {
-  if (side === "up") return "Up"
-  if (side === "down") return "Down"
-  return "Push"
+function moveWord(side: "up" | "down" | "push", lang: Lang): string {
+  const text = copy(lang)
+  if (side === "up") return text.up
+  if (side === "down") return text.down
+  return text.push
 }
 
 function PriceReadout({
@@ -1058,6 +1077,7 @@ function PriceReadout({
   pairTitle: string
   venue: string
 }) {
+  const { lang } = useI18n()
   const priceEl = useRef<HTMLSpanElement>(null)
   const deltaEl = useRef<HTMLSpanElement>(null)
   const wordEl = useRef<HTMLSpanElement>(null)
@@ -1070,14 +1090,14 @@ function PriceReadout({
       const delta = price && strike ? formatDollarMove(price, strike) : null
       if (delta && deltaEl.current && wordEl.current && moveEl.current) {
         deltaEl.current.textContent = delta.text
-        wordEl.current.textContent = moveWord(delta.side)
+        wordEl.current.textContent = moveWord(delta.side, lang)
         moveEl.current.dataset.side = delta.side
       }
       raf = requestAnimationFrame(loop)
     }
     loop()
     return () => cancelAnimationFrame(raf)
-  }, [priceRef, strike])
+  }, [priceRef, strike, lang])
   return (
     <>
       <div className="price-block">
@@ -1105,10 +1125,8 @@ function PriceReadout({
 }
 
 function TokenBadge({ kind }: { kind: "circle" | "qm" }) {
-  const title =
-    kind === "circle"
-      ? "Circle USDC on Base"
-      : "Quick Market USDC on Base Sepolia. Play money, not Circle USDC."
+  const { text } = useI18n()
+  const title = kind === "circle" ? text.circleTitle : text.qmTitle
   return (
     <span className="token-badge" data-kind={kind} title={title}>
       {kind === "circle" ? <CircleMark /> : <QmMark />}
@@ -1195,6 +1213,7 @@ function FundOverlay({
   onClose: () => void
   onFund: (amount: string) => void
 }) {
+  const { lang, text } = useI18n()
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") onClose()
@@ -1204,32 +1223,32 @@ function FundOverlay({
   }, [onClose])
   return (
     <div className="fund-back" onClick={onClose}>
-      <div className="fund-overlay" role="dialog" aria-modal="true" aria-label="Deposit USDC" onClick={(event) => event.stopPropagation()}>
+      <div className="fund-overlay" role="dialog" aria-modal="true" aria-label={text.depositUsdc} onClick={(event) => event.stopPropagation()}>
         <header className="overlay-head">
           <div>
-            <h2>Deposit</h2>
+            <h2>{text.deposit}</h2>
             <TokenBadge kind="circle" />
             <span className="net-badge" data-testnet="0">
-              {chainBadgeText(chainId, chainName)}
+              {chainBadgeText(chainId, chainName, lang)}
             </span>
           </div>
-          <button type="button" className="overlay-close" aria-label="Close" onClick={onClose}>
+          <button type="button" className="overlay-close" aria-label={text.close} onClick={onClose}>
             {"×"}
           </button>
         </header>
         <dl className="overlay-meta">
           <div>
-            <dt>Network</dt>
-            <dd>{chainNetworkLabel(chainId, chainName)}</dd>
+            <dt>{text.network}</dt>
+            <dd>{chainNetworkLabel(chainId, chainName, lang)}</dd>
           </div>
           <div>
-            <dt>From → To</dt>
+            <dt>{text.fromTo}</dt>
             <dd className="route-line">
-              {address ? <AddressWithHover address={address} label={label} /> : <span>Wallet</span>}
+              {address ? <AddressWithHover address={address} label={label} /> : <span>{text.wallet}</span>}
               <span className="route-arrow" aria-hidden="true">
                 →
               </span>
-              {treasury ? <AddressWithHover address={treasury} /> : <span>Treasury</span>}
+              {treasury ? <AddressWithHover address={treasury} /> : <span>{text.treasury}</span>}
             </dd>
           </div>
         </dl>
@@ -1243,25 +1262,25 @@ function FundOverlay({
         </div>
         <div className="fund-custom" data-busy={phase === "idle" ? "0" : "1"}>
           <input
-            aria-label="Fund amount"
+            aria-label={text.fundAmount}
             inputMode="decimal"
-            placeholder="Custom amount"
+            placeholder={text.customAmount}
             value={amount}
             onChange={(event) => onAmount(event.target.value)}
             disabled={disabled}
           />
           <button type="button" className="primary" onClick={() => onFund(amount)} disabled={customDisabled}>
-            {phase === "phantom" ? "Confirm in Phantom…" : phase === "confirming" || phase === "pending" ? "Waiting for 3 confirmations…" : "Deposit"}
+            {phase === "phantom" ? text.confirmPhantom : phase === "confirming" || phase === "pending" ? text.waitingConfirmations : text.deposit}
           </button>
         </div>
-        {phase === "phantom" && <p className="note pending-note">Confirm in Phantom…</p>}
-        {phase === "confirming" && <p className="note pending-note">Waiting for 3 confirmations…</p>}
+        {phase === "phantom" && <p className="note pending-note">{text.confirmPhantom}</p>}
+        {phase === "confirming" && <p className="note pending-note">{text.waitingConfirmations}</p>}
         {phase === "pending" && (
           <p className="note pending-note" title={hash ?? undefined}>
-            Transfer sent. Waiting for the ledger.{hash ? ` ${briefTx(hash)}` : ""}
+            {text.ledgerWait(hash ? briefTx(hash) : "")}
           </p>
         )}
-        {error && <p className="note bad">{error}</p>}
+        {error && <p className="note bad">{localize(lang, error)}</p>}
       </div>
     </div>
   )
@@ -1296,6 +1315,7 @@ function GrantOverlay({
   onClose: () => void
   onGrant: () => void
 }) {
+  const { lang, text } = useI18n()
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") onClose()
@@ -1314,36 +1334,36 @@ function GrantOverlay({
   const timing = grantTiming(grantAt, now, grantIntervalMs)
   const txUrl = txHash ? grantTxUrl(chainId, txHash) : null
   const waiting = granting
-    ? grantWaitStatus(txHash ? { seen: confirmationsSeen, needed: confirmationsNeeded } : undefined)
+    ? grantWaitStatus(txHash ? { seen: confirmationsSeen, needed: confirmationsNeeded } : undefined, lang)
     : null
   return (
     <div className="fund-back" onClick={onClose}>
-      <div className="fund-overlay" role="dialog" aria-modal="true" aria-label="Grant QM USDC" onClick={(event) => event.stopPropagation()}>
+      <div className="fund-overlay" role="dialog" aria-modal="true" aria-label={text.grantAria} onClick={(event) => event.stopPropagation()}>
         <header className="overlay-head">
           <div>
-            <h2>Grant</h2>
+            <h2>{text.grant}</h2>
             <TokenBadge kind="qm" />
             <span className="net-badge" data-testnet="1">
-              {chainBadgeText(chainId, chainName)}
+              {chainBadgeText(chainId, chainName, lang)}
             </span>
           </div>
-          <button type="button" className="overlay-close" aria-label="Close" onClick={onClose}>
+          <button type="button" className="overlay-close" aria-label={text.close} onClick={onClose}>
             {"×"}
           </button>
         </header>
-        <p className="note grant-copy">{grantSentence(grantMicros, grantIntervalMs)}</p>
+        <p className="note grant-copy">{grantSentence(grantMicros, grantIntervalMs, lang)}</p>
         <dl className="overlay-meta">
           <div>
-            <dt>Amount</dt>
+            <dt>{text.amount}</dt>
             <dd>{formatGrantDollars(grantMicros)}</dd>
           </div>
           <div>
-            <dt>Next</dt>
-            <dd>{grantNextLabel(timing)}</dd>
+            <dt>{text.next}</dt>
+            <dd>{grantNextLabel(timing, lang)}</dd>
           </div>
         </dl>
         <button type="button" className="primary grant-submit" onClick={onGrant} disabled={granting || !timing.due}>
-          {granting ? "Granting…" : grantButtonLabel(timing, grantMicros)}
+          {granting ? text.granting : grantButtonLabel(timing, grantMicros, lang)}
         </button>
         {(waiting || txHash) && (
           <div className="grant-progress">
@@ -1359,7 +1379,7 @@ function GrantOverlay({
               ))}
           </div>
         )}
-        {error && <p className="note bad">{error}</p>}
+        {error && <p className="note bad">{localize(lang, error)}</p>}
       </div>
     </div>
   )
@@ -1394,6 +1414,7 @@ function WithdrawOverlay({
   onClose: () => void
   onSubmit: () => void
 }) {
+  const { lang, text } = useI18n()
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") onClose()
@@ -1405,55 +1426,56 @@ function WithdrawOverlay({
   const submitDisabled = pending || parsed === null || parsed > balanceMicros
   return (
     <div className="fund-back" onClick={onClose}>
-      <div className="fund-overlay" role="dialog" aria-modal="true" aria-label={testnet ? "Withdraw QM USDC" : "Withdraw USDC"} onClick={(event) => event.stopPropagation()}>
+      <div className="fund-overlay" role="dialog" aria-modal="true" aria-label={testnet ? text.withdrawQm : text.withdrawUsdc} onClick={(event) => event.stopPropagation()}>
         <header className="overlay-head">
           <div>
-            <h2>Withdraw</h2>
+            <h2>{text.withdraw}</h2>
             <TokenBadge kind={testnet ? "qm" : "circle"} />
             <span className="net-badge" data-testnet={testnet ? "1" : "0"}>
-              {chainBadgeText(chainId, chainName)}
+              {chainBadgeText(chainId, chainName, lang)}
             </span>
           </div>
-          <button type="button" className="overlay-close" aria-label="Close" onClick={onClose}>
+          <button type="button" className="overlay-close" aria-label={text.close} onClick={onClose}>
             {"×"}
           </button>
         </header>
         <dl className="overlay-meta">
           <div>
-            <dt>To wallet</dt>
+            <dt>{text.toWallet}</dt>
             <dd>{address ? <AddressWithHover address={address} label={label} /> : "—"}</dd>
           </div>
           <div>
-            <dt>Spendable</dt>
+            <dt>{text.spendable}</dt>
             <dd>{formatMoney(balanceMicros)}</dd>
           </div>
         </dl>
         <div className="fund-custom">
           <div className="input-with-max">
             <input
-              aria-label="Withdraw amount"
+              aria-label={text.withdrawAmount}
               inputMode="decimal"
-              placeholder="Amount"
+              placeholder={text.amount}
               value={amount}
               onChange={(event) => onAmount(event.target.value)}
               disabled={pending}
             />
             <button type="button" className="max-btn" onClick={onMax} disabled={pending || balanceMicros <= 0}>
-              Max
+              {text.max}
             </button>
           </div>
           <button type="button" className="primary" onClick={onSubmit} disabled={submitDisabled}>
-            {pending ? "Withdrawing…" : "Withdraw"}
+            {pending ? text.withdrawing : text.withdraw}
           </button>
         </div>
-        {testnet && <p className="note">Pays QM USDC to your wallet on Base Sepolia.</p>}
-        {error && <p className="note bad">{error}</p>}
+        {testnet && <p className="note">{text.paysQm}</p>}
+        {error && <p className="note bad">{localize(lang, error)}</p>}
       </div>
     </div>
   )
 }
 
 function Countdown({ endsAt, offsetRef }: { endsAt: number; offsetRef: RefObject<number> }) {
+  const { text } = useI18n()
   const ref = useRef<HTMLSpanElement>(null)
   useEffect(() => {
     let raf = 0
@@ -1476,7 +1498,7 @@ function Countdown({ endsAt, offsetRef }: { endsAt: number; offsetRef: RefObject
       <strong ref={ref} className="clock">
         0.0
       </strong>
-      <span className="clock-unit">s</span>
+      <span className="clock-unit">{text.secondUnit}</span>
     </span>
   )
 }
@@ -1492,20 +1514,21 @@ function SideCard(props: {
   disabled: boolean
   onBet: () => void
 }) {
+  const { text } = useI18n()
   const up = props.side === "up"
   return (
     <article className={up ? "side up" : "side down"}>
-      <p className="side-name">{up ? "▲ Up" : "▼ Down"}</p>
+      <p className="side-name">{up ? `▲ ${text.up}` : `▼ ${text.down}`}</p>
       <div className="side-figures" data-fade={props.fade ? "1" : "0"} key={props.fadeKey}>
         <p className="share">{props.share}</p>
         <p className="pool">
-          {formatMoney(props.pool)} · {props.orders} {props.orders === 1 ? "order" : "orders"}
+          {formatMoney(props.pool)} · {props.orders} {props.orders === 1 ? text.order : text.orders}
         </p>
         <p className="to-win">{props.quote}</p>
       </div>
       <button type="button" disabled={props.disabled} onClick={props.onBet}>
         <span className="arrow" aria-hidden="true">{up ? "▲" : "▼"}</span>
-        <span>{up ? "Buy up" : "Buy down"}</span>
+        <span>{up ? text.buyUp : text.buyDown}</span>
       </button>
     </article>
   )
@@ -1526,13 +1549,14 @@ function GrantFollow({
   chainId: number
   now: number
 }) {
-  if (!txHash) return <WaitNote text={grantWaitStatus()} />
+  const { lang, text } = useI18n()
+  if (!txHash) return <WaitNote text={grantWaitStatus(undefined, lang)} />
   const elapsed = Math.max(0, now - startedAt)
   const txUrl = grantTxUrl(chainId, txHash)
   return (
     <div className="grant-progress">
-      <WaitNote text={grantWaitStatus({ seen, needed })} />
-      <p className="grant-timer" aria-label={`Elapsed time ${formatGrantTimer(elapsed)}`}>
+      <WaitNote text={grantWaitStatus({ seen, needed }, lang)} />
+      <p className="grant-timer" aria-label={text.elapsed(formatGrantTimer(elapsed))}>
         {formatGrantTimer(elapsed)}
       </p>
       {txUrl ? (
@@ -1581,6 +1605,7 @@ function WaitNote({
 }
 
 function History({ token, version, windowMs }: { token: string | null; version: number; windowMs: number }) {
+  const { lang, text } = useI18n()
   const [mine, setMine] = useState(false)
   const [publicRows, setPublicRows] = useState<HistoryRound[]>([])
   const [mineRows, setMineRows] = useState<HistoryRound[]>([])
@@ -1615,7 +1640,7 @@ function History({ token, version, windowMs }: { token: string | null; version: 
   }, [token, mine, version])
 
   const marks = publicRows.slice(0, 3).flatMap((row) => {
-    const mark = historyMark(row)
+    const mark = historyMark(row, text)
     return mark ? [{ id: row.id, ...mark }] : []
   })
 
@@ -1623,8 +1648,8 @@ function History({ token, version, windowMs }: { token: string | null; version: 
     <details className="history">
       <summary>
         <h2>
-          Previous markets
-          <span className="history-count">(last 10)</span>
+          {text.previousMarkets}
+          <span className="history-count">{text.lastTen}</span>
         </h2>
         {marks.length > 0 && (
           <span className="history-marks">
@@ -1638,29 +1663,29 @@ function History({ token, version, windowMs }: { token: string | null; version: 
       </summary>
       <div className="filters" onClick={(event) => event.stopPropagation()}>
         <button type="button" className={!mine ? "on" : ""} onClick={() => setMine(false)}>
-          All
+          {text.all}
         </button>
         <button type="button" className={mine ? "on" : ""} onClick={() => setMine(true)} disabled={!token}>
-          My trades
+          {text.myTrades}
         </button>
       </div>
       {rows.length === 0 ? (
-        <p className="empty">No settled rounds yet.</p>
+        <p className="empty">{text.noRounds}</p>
       ) : (
         <table>
           <thead>
             <tr>
-              <th>Time</th>
-              <th>Result</th>
-              <th>Open</th>
-              <th>Close</th>
-              <th>Up</th>
-              <th>Down</th>
-              <th>Feed</th>
+              <th>{text.time}</th>
+              <th>{text.result}</th>
+              <th>{text.open}</th>
+              <th>{text.closePrice}</th>
+              <th>{text.up}</th>
+              <th>{text.down}</th>
+              <th>{text.feed}</th>
               {mine && (
                 <>
-                  <th>Bought</th>
-                  <th>Back</th>
+                  <th>{text.bought}</th>
+                  <th>{text.back}</th>
                 </>
               )}
             </tr>
@@ -1668,8 +1693,8 @@ function History({ token, version, windowMs }: { token: string | null; version: 
           <tbody>
             {rows.map((row) => (
               <tr key={row.id} onClick={() => setReplay(row)} className={replay?.id === row.id ? "open" : ""}>
-                <td>{formatClock(row.startsAt)}</td>
-                <td className={resultTone(row)}>{resultText(row)}</td>
+                <td>{formatClock(row.startsAt, lang)}</td>
+                <td className={resultTone(row)}>{resultText(row, text)}</td>
                 <td>{row.strike ? formatPrice(row.strike) : "—"}</td>
                 <td>{row.settle ? formatPrice(row.settle) : "—"}</td>
                 <td>{formatMoney(row.poolUpMicros)}</td>
@@ -1702,6 +1727,7 @@ function History({ token, version, windowMs }: { token: string | null; version: 
 type RoundBet = TrayRow & { payoutMicros: number | null }
 
 function PoolRows({ rows, payout }: { rows: TrayRow[]; payout?: (row: TrayRow) => number | null }) {
+  const { text } = useI18n()
   return (
     <>
       {rows.map((row) => {
@@ -1710,7 +1736,7 @@ function PoolRows({ rows, payout }: { rows: TrayRow[]; payout?: (row: TrayRow) =
           return (
             <li key={row.address}>
               <span className="addr">{shortAddress(row.address)}</span>
-              <span className={row.side}>{row.side === "up" ? "▲ Up" : "▼ Down"}</span>
+              <span className={row.side}>{row.side === "up" ? `▲ ${text.up}` : `▼ ${text.down}`}</span>
               <span className="amt">{formatMoney(row.stakeMicros)}</span>
             </li>
           )
@@ -1728,6 +1754,9 @@ function PoolRows({ rows, payout }: { rows: TrayRow[]; payout?: (row: TrayRow) =
 }
 
 function Replay({ row, windowMs, onClose }: { row: HistoryRound; windowMs: number; onClose: () => void }) {
+  const { lang, text } = useI18n()
+  const langRef = useRef(lang)
+  langRef.current = lang
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const [chart, setChart] = useState<TapeChart | null>(null)
   const [buyIns, setBuyIns] = useState<RoundBet[] | null>(null)
@@ -1768,6 +1797,7 @@ function Replay({ row, windowMs, onClose }: { row: HistoryRound; windowMs: numbe
             return { ...strike, at: row.startsAt, openAt: row.startsAt - windowMs }
           },
           extendLive: () => false,
+          getLocale: () => langRef.current,
         })
         spawned.reset(tape.map((point) => ({ t: point.t, price: Number(point.price), text: point.price })))
         setChart(spawned)
@@ -1811,31 +1841,31 @@ function Replay({ row, windowMs, onClose }: { row: HistoryRound; windowMs: numbe
         className="modal"
         role="dialog"
         aria-modal="true"
-        aria-label="Market replay"
+        aria-label={text.replay}
         onClick={(event) => event.stopPropagation()}
       >
         <header>
           <div>
             <div className="replay-title">
-              <h2>{formatClock(row.startsAt)}</h2>
+              <h2>{formatClock(row.startsAt, lang)}</h2>
               <FeedBadge source={row.source} />
             </div>
             <p>
-              {resultText(row)}
+              {resultText(row, text)}
               {row.strike && row.settle ? ` · ${formatPrice(row.strike)} → ${formatPrice(row.settle)}` : ""}
-              {` · Up ${formatMoney(row.poolUpMicros)} · Down ${formatMoney(row.poolDownMicros)}`}
+              {` · ${text.up} ${formatMoney(row.poolUpMicros)} · ${text.down} ${formatMoney(row.poolDownMicros)}`}
             </p>
           </div>
           <button type="button" onClick={onClose}>
-            Close
+            {text.close}
           </button>
         </header>
         <section className="chart-wrap still" onPointerMove={scrub.move} onPointerLeave={scrub.clear}>
           <canvas ref={canvasRef} />
           {chart && <ChartOverlay chart={chart} board={board} openBuyIns={[]} feeBps={0} hover={scrub.hover} />}
         </section>
-        {failed && <p className="empty">Couldn't load this market.</p>}
-        {buyIns && buyIns.length === 0 && <p className="empty">No one in this pool.</p>}
+        {failed && <p className="empty">{text.replayMiss}</p>}
+        {buyIns && buyIns.length === 0 && <p className="empty">{text.emptyPool}</p>}
         {buyIns && buyIns.length > 0 && (
           <div className="detail">
             <ul>
@@ -1849,6 +1879,7 @@ function Replay({ row, windowMs, onClose }: { row: HistoryRound; windowMs: numbe
 }
 
 function LateToast({ onDone }: { onDone: () => void }) {
+  const { text } = useI18n()
   const doneRef = useRef(onDone)
   doneRef.current = onDone
   useEffect(() => {
@@ -1857,12 +1888,13 @@ function LateToast({ onDone }: { onDone: () => void }) {
   }, [])
   return (
     <button type="button" className="toast late" onClick={onDone}>
-      <span>{LATE_BUY_IN_ERROR}</span>
+      <span>{text.lateBuyIn}</span>
     </button>
   )
 }
 
 function ResultToast({ event, address, onDone }: { event: SettledMessage; address: string | null; onDone: () => void }) {
+  const { text } = useI18n()
   const mine = address ? (event.payouts.find((payout) => payout.address === address) ?? null) : null
   const doneRef = useRef(onDone)
   doneRef.current = onDone
@@ -1873,7 +1905,7 @@ function ResultToast({ event, address, onDone }: { event: SettledMessage; addres
   if (!mine) return null
 
   const tone = toastTone(event, mine.stakeMicros, mine.payoutMicros)
-  const title = event.resolution === "void" ? "Void" : tone === "win" ? "You win" : tone === "loss" ? "Lost" : "= Push"
+  const title = event.resolution === "void" ? text.void : tone === "win" ? text.youWin : tone === "loss" ? text.lost : text.pushMark
   const move = event.strike && event.settle ? moveText(event.strike, event.settle) : null
   const figures = formatReturn(mine.stakeMicros, mine.payoutMicros)
   const glyph = mine.side === "up" ? "▲" : "▼"
@@ -1883,7 +1915,7 @@ function ResultToast({ event, address, onDone }: { event: SettledMessage; addres
         <strong>{title}</strong>
         {move && <small>{move}</small>}
         <small>
-          {glyph} Bought {formatMoney(mine.stakeMicros)}
+          {glyph} {text.bought} {formatMoney(mine.stakeMicros)}
         </small>
       </span>
       <b>
@@ -1915,11 +1947,11 @@ function useScrub(chart: TapeChart | null) {
   return { hover, move, clear }
 }
 
-function historyMark(row: HistoryRound): { glyph: string; tone: string; name: string } | null {
-  if (row.status === "void" || row.resolution === "void") return { glyph: "∅", tone: "void", name: "Void" }
-  if (row.winningSide === "push") return { glyph: "=", tone: "push", name: "Push" }
-  if (row.winningSide === "up") return { glyph: "▲", tone: "up", name: "Up" }
-  if (row.winningSide === "down") return { glyph: "▼", tone: "down", name: "Down" }
+function historyMark(row: HistoryRound, text: Copy): { glyph: string; tone: string; name: string } | null {
+  if (row.status === "void" || row.resolution === "void") return { glyph: "∅", tone: "void", name: text.void }
+  if (row.winningSide === "push") return { glyph: "=", tone: "push", name: text.push }
+  if (row.winningSide === "up") return { glyph: "▲", tone: "up", name: text.up }
+  if (row.winningSide === "down") return { glyph: "▼", tone: "down", name: text.down }
   return null
 }
 
@@ -1930,11 +1962,11 @@ function resultTone(row: HistoryRound): string {
   return ""
 }
 
-function resultText(row: HistoryRound): string {
-  if (row.status === "void" || row.resolution === "void") return "Void"
-  if (row.winningSide === "push") return "= Push"
-  if (row.winningSide === "up") return "▲ Up"
-  if (row.winningSide === "down") return "▼ Down"
+function resultText(row: HistoryRound, text: Copy): string {
+  if (row.status === "void" || row.resolution === "void") return text.void
+  if (row.winningSide === "push") return text.pushMark
+  if (row.winningSide === "up") return `▲ ${text.up}`
+  if (row.winningSide === "down") return `▼ ${text.down}`
   return "—"
 }
 
