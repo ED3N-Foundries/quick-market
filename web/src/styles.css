@@ -965,32 +965,29 @@ a.grant-tx:hover { color: var(--text); }
   animation: wait-in 220ms ease;
 }
 .wait-steps {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  row-gap: 8px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
   font-size: 11px;
-  line-height: 1.6;
   letter-spacing: 0.04em;
 }
 .wait-steps > span {
-  display: inline-flex;
+  display: flex;
   align-items: center;
-  gap: 5px;
-  line-height: 1.6;
+  justify-content: center;
+  gap: 6px;
+  min-width: 0;
+  white-space: nowrap;
+  line-height: 1;
   color: var(--muted);
   transition: color 180ms ease;
 }
-.wait-steps > span + span::before {
-  content: "·";
-  margin: 0 6px;
-  color: var(--muted);
-}
 .step-check {
-  display: block;
-  position: relative;
-  width: 13px;
-  height: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
   flex: none;
   border: 1.5px solid currentColor;
   border-radius: 3px;
@@ -1004,14 +1001,11 @@ a.grant-tx:hover { color: var(--text); }
 }
 .wait-steps span[data-state="done"] .step-check::after {
   content: "";
-  position: absolute;
-  left: 3px;
-  top: 1px;
   width: 3px;
   height: 6px;
   border: solid var(--up-ink);
   border-width: 0 1.5px 1.5px 0;
-  transform: rotate(45deg);
+  transform: translateY(-1px) rotate(45deg);
 }
 .wait-steps span[data-state="now"] { color: var(--warn); }
 .wait-steps span[data-state="now"] .step-check { border-color: var(--warn); }
@@ -1029,6 +1023,7 @@ a.grant-tx:hover { color: var(--text); }
 .share-preview { min-height: 2.6em; }
 .note { color: var(--text); margin-bottom: 0; }
 .note.bad { color: var(--down); }
+.connect-error { overflow-wrap: anywhere; }
 .fee { margin-bottom: 0; }
 
 .tray, .history { margin-top: 12px; padding: 14px 16px 8px; }

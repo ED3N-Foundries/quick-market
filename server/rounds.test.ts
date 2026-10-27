@@ -265,7 +265,7 @@ test("a print a few seconds before the close still settles, and a tie is a push"
   expect(youFor(you)?.balanceMicros).toBe(10_000 * USDC)
 })
 
-test("the tray shows the five newest bets and counts everyone", () => {
+test("the live board leaves the tray empty and the detail lists the newest buy-ins", () => {
   const human = address(30)
   grant(human, 20 * USDC)
   notePrint(print("100", T - 20))
@@ -279,8 +279,7 @@ test("the tray shows the five newest bets and counts everyone", () => {
   }
   const card = board(T + 200).join
   const newest = [5, 4, 3, 2, 1].map((index) => address(40 + index))
-  expect(card?.tray.map((row) => row.address)).toEqual(newest)
-  expect(card?.tray.every((row) => !("bot" in row))).toBe(true)
+  expect(card?.tray).toEqual([])
   expect(card?.playersUp).toBe(4)
   expect(card?.playersDown).toBe(3)
   const detail = roundDetail(MARKET_ID)
@@ -322,7 +321,10 @@ test("a bot can bet the next window while a bet is still open", () => {
   notePrint(print("100", T + WINDOW - 20))
   const next = bet({ address: bot, side: "down", stakeMicros: USDC, now: T + WINDOW + 10 })
   expect(next.ok).toBe(true)
-  expect(board(T + WINDOW + 10).join?.tray.some((row) => row.address === bot && row.side === "down")).toBe(true)
+  const join = board(T + WINDOW + 10).join
+  expect(join?.tray).toEqual([])
+  expect(join?.poolDownMicros).toBe(USDC)
+  expect(join?.playersDown).toBe(1)
 })
 
 test("round detail includes the tape and the price held into the open", () => {

@@ -6,6 +6,7 @@ export type LoginAction = "browse" | "connect-and-sign" | "sign" | "done"
 export type LoginPhase = "phantom" | "sign" | "session"
 
 export const LOGIN_QUERY = "login"
+export const SIGN_PROMPT = "Sign in to trade"
 export const TESTNET_MODE = "Turn on Testnet Mode in Phantom: Settings → Developer Settings."
 
 const BROWSE_ORIGIN = "https://phantom.com"
@@ -132,6 +133,130 @@ export function authorizedAccount(granted: readonly string[], shown: string | nu
     if (match) return match
   }
   return accounts[0] ?? null
+}
+
+const SWALLOWED_CONNECT = new Set([
+  "Failed to connect to Phantom.",
+  "Failed to connect to any supported wallet provider",
+])
+
+const GENERIC_FAULT = new Set([
+  ...SWALLOWED_CONNECT,
+  "Failed to connect",
+  "Sign-in failed",
+])
+
+type EthereumRequester = {
+  request(args: { method: string; params?: unknown[] }): Promise<unknown>
+}
+
+/** The injected provider. The SDK connect helper drops the JSON-RPC error from this request. */
+export function phantomEthereumProvider(
+  target: { phantom?: { ethereum?: unknown } } | null | undefined,
+): EthereumRequester | null {
+  const ethereum = target?.phantom?.ethereum
+  if (!ethereum || typeof ethereum !== "object") return null
+  const request = (ethereum as { request?: unknown }).request
+  if (typeof request !== "function") return null
+  return {
+    request: (args) => Reflect.apply(request, ethereum, [args]) as Promise<unknown>,
+  }
+}
+
+export async function requestPhantomAccounts(provider: EthereumRequester): Promise<string[]> {
+  const accounts = await provider.request({ method: "eth_requestAccounts" })
+  if (!Array.isArray(accounts)) return []
+  return accounts.filter((item): item is string => typeof item === "string" && item.length > 0)
+}
+
+/** True when the SDK replaced a provider failure with its own empty connect message. */
+export function swallowedConnectError(error: unknown): boolean {
+  return error instanceof Error && SWALLOWED_CONNECT.has(error.message)
+}
+
+type FaultBits = { message: string; code: number | null; data: string | null }
+
+function readCode(value: unknown): number | null {
+  if (typeof value === "number" && Number.isInteger(value)) return value
+  if (typeof value === "string" && /^-?\d+$/.test(value)) return Number(value)
+  return null
+}
+
+function shortData(value: unknown): string | null {
+  if (value == null || value === "") return null
+  let text = ""
+  if (typeof value === "string") text = value
+  else {
+    try {
+      text = JSON.stringify(value)
+    } catch {
+      return null
+    }
+  }
+  const one = text.replace(/\s+/g, " ").trim()
+  if (!one) return null
+  return one.length > 120 ? `${one.slice(0, 117)}...` : one
+}
+
+function briefMessage(message: string): string {
+  const line = message.split("\n")[0]?.trim() ?? ""
+  if (!line) return "Sign-in failed"
+  return line.length > 180 ? `${line.slice(0, 177)}...` : line
+}
+
+function bitsOf(value: unknown): FaultBits | null {
+  if (typeof value === "string") return { message: value.trim(), code: null, data: null }
+  if (!value || typeof value !== "object") return null
+  const record = value as { code?: unknown; message?: unknown; shortMessage?: unknown; data?: unknown }
+  const code = readCode(record.code)
+  const message =
+    typeof record.message === "string" && record.message.trim()
+      ? record.message.trim()
+      : typeof record.shortMessage === "string"
+        ? record.shortMessage.trim()
+        : ""
+  const data = shortData(record.data)
+  if (!message && code == null && !data) return null
+  return { message, code, data }
+}
+
+function faultChain(error: unknown): FaultBits[] {
+  const seen = new Set<unknown>()
+  const list: unknown[] = []
+  let current: unknown = error
+  while (current && typeof current === "object" && !seen.has(current)) {
+    seen.add(current)
+    list.push(current)
+    current = (current as { cause?: unknown }).cause
+  }
+  if (list.length === 0 && error != null) list.push(error)
+  return list.flatMap((item) => {
+    const bits = bitsOf(item)
+    return bits ? [bits] : []
+  })
+}
+
+function isRejection(bits: FaultBits): boolean {
+  if (bits.code === 4001) return true
+  const lower = bits.message.toLowerCase()
+  return lower.includes("user rejected") || lower.includes("user denied")
+}
+
+/**
+ * A user rejection stays the short sign-in line. Anything else names the call
+ * that failed, plus Phantom's message, code, and data.
+ */
+export function providerFault(error: unknown, source: string): string {
+  const parts = faultChain(error)
+  if (parts.some(isRejection)) return SIGN_PROMPT
+  const specific =
+    [...parts].reverse().find((item) => item.message && !GENERIC_FAULT.has(item.message)) ??
+    parts[parts.length - 1]
+  if (!specific) return `${source}: Sign-in failed`
+  const message = briefMessage(specific.message)
+  const code = specific.code != null ? ` (${specific.code})` : ""
+  const data = specific.data && specific.data !== message ? ` · ${specific.data}` : ""
+  return `${source}: ${message}${code}${data}`
 }
 
 /** Phantom EIP-1193 4100, including viem's wrapper around that code. */

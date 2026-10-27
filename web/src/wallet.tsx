@@ -36,7 +36,11 @@ import {
   loginAction,
   type LoginPhase,
   phantomBrowseUrl,
+  phantomEthereumProvider,
   phantomInjected,
+  providerFault,
+  requestPhantomAccounts,
+  swallowedConnectError,
   switchFault,
   takeLoginQuery,
 } from "./phantomConnect"
@@ -44,8 +48,6 @@ import { bindPhantomSdk, phantomConnector } from "./phantomConnector"
 import type { GrantPending, You } from "./types"
 
 const SESSION_KEY = "qm.session"
-const SIGN_PROMPT = "Sign in to trade"
-const CONNECT_MISSED = "Failed to connect to any supported wallet provider"
 
 function sessionYou(value: unknown): You | null {
   if (!value || typeof value !== "object") return null
@@ -205,16 +207,6 @@ function missedChain(): { code: number; message: string } {
   return { code: 4902, message: "Unrecognized chain ID" }
 }
 
-function signFault(error: unknown): string {
-  const message = error instanceof Error ? error.message : "Sign-in failed"
-  const code = typeof error === "object" && error ? (error as { code?: unknown }).code : undefined
-  const lower = message.toLowerCase()
-  if (code === 4001 || lower.includes("user rejected") || lower.includes("user denied") || message === CONNECT_MISSED) {
-    return SIGN_PROMPT
-  }
-  return message || "Sign-in failed"
-}
-
 function Bridge({ children }: { children: ReactNode }) {
   const expected = read.chain!.id
   const { status } = useAccount()
@@ -370,15 +362,30 @@ function Bridge({ children }: { children: ReactNode }) {
     setSignError(null)
     setConnectError(null)
     void (async () => {
+      let faultSource = "Phantom eth_requestAccounts"
+      const askPhantom = async () => {
+        faultSource = "Phantom eth_requestAccounts"
+        const provider = phantomEthereumProvider(window)
+        if (!provider) throw new Error("Ethereum provider not found on window.phantom.")
+        return requestPhantomAccounts(provider)
+      }
       try {
         const current = sdkRef.current
         if (!current) throw new Error("Phantom is not ready")
         let exact: string | null = null
         if (forceConnect || !current.isConnected()) {
           setLoginPhase("phantom")
-          const result = await connectPhantom({ provider: "injected" })
+          const granted = await askPhantom()
           if (stale()) return
-          exact = authorizedAccount(ethereumAccounts(result.addresses), addressRef.current)
+          let fromSdk: string[] = []
+          try {
+            const result = await connectPhantom({ provider: "injected" })
+            if (stale()) return
+            fromSdk = ethereumAccounts(result.addresses)
+          } catch (error) {
+            if (!swallowedConnectError(error) || granted.length === 0) throw error
+          }
+          exact = authorizedAccount(fromSdk.length > 0 ? fromSdk : granted, addressRef.current)
         } else {
           exact = authorizedAccount(ethereumAccounts(current.getAddresses()), addressRef.current)
         }
@@ -386,13 +393,14 @@ function Bridge({ children }: { children: ReactNode }) {
         let ethereum = liveEthereum()
         if (!exact) {
           setLoginPhase("phantom")
-          const granted = await ethereum.connect()
+          const granted = await askPhantom()
           if (stale()) return
-          exact = authorizedAccount(Array.isArray(granted) ? granted : [], addressRef.current)
+          exact = authorizedAccount(granted, addressRef.current)
         }
         if (!exact) throw new Error("No Ethereum account")
         const signWith = async (account: string) => {
           setLoginPhase("sign")
+          faultSource = "Phantom personal_sign"
           const issued = Date.now()
           const signature = await ethereum.signPersonalMessage(loginMessage(expected, account.toLowerCase(), issued), account)
           return { signature, issued, account }
@@ -403,9 +411,9 @@ function Bridge({ children }: { children: ReactNode }) {
         } catch (error) {
           if (stale() || !isUnauthorized(error)) throw error
           setLoginPhase("phantom")
-          const granted = await ethereum.connect()
+          const granted = await askPhantom()
           if (stale()) return
-          const next = authorizedAccount(Array.isArray(granted) ? granted : [], exact)
+          const next = authorizedAccount(granted, exact)
           if (!next) throw new Error("No Ethereum account")
           ethereum = liveEthereum()
           signed = await signWith(next)
@@ -415,6 +423,7 @@ function Bridge({ children }: { children: ReactNode }) {
         const shown = addressRef.current
         if (shown && shown.toLowerCase() !== lower) return
         setLoginPhase("session")
+        faultSource = "Quick Market"
         const response = await fetch("/api/session", {
           method: "POST",
           headers: { "content-type": "application/json" },
@@ -428,7 +437,7 @@ function Bridge({ children }: { children: ReactNode }) {
           setToken(body.token)
         }
       } catch (error: unknown) {
-        if (!stale()) setSignError(signFault(error))
+        if (!stale()) setSignError(providerFault(error, faultSource))
       } finally {
         if (!stale()) {
           busy.current = false

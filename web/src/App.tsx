@@ -41,7 +41,7 @@ import { formatLag, lagButtonName, type LinkStatus } from "./lag"
 import { useMarket } from "./useMarket"
 import { FeedBadge } from "./venues"
 import { useSideBook } from "./useSideBook"
-import { grantWaitStatus, loginStatus, loginSteps, loginStepState } from "./phantomConnect"
+import { grantWaitStatus, loginStatus, loginSteps, loginStepState, SIGN_PROMPT } from "./phantomConnect"
 import { useSession } from "./wallet"
 
 export function App() {
@@ -550,7 +550,7 @@ export function App() {
             />
           )}
           {session.connectError && <p className="note bad connect-error">{session.connectError}</p>}
-          {!session.token && session.signError && session.signError !== "Sign in to trade" && (
+          {!session.token && session.signError && session.signError !== SIGN_PROMPT && (
             <p className="note bad connect-error">{session.signError}</p>
           )}
           {!holdStake && <BalanceFigure micros={shownMicros} />}
@@ -758,20 +758,6 @@ export function App() {
           onSubmit={() => void onWithdraw()}
         />
       )}
-
-      <details className="tray">
-        <summary>
-          <h2>This pool</h2>
-          <span>{poolLabel(focus)}</span>
-        </summary>
-        {focus && focus.tray.length > 0 ? (
-          <ul>
-            <PoolRows rows={focus.tray} />
-          </ul>
-        ) : (
-          <p className="empty">No one in this pool yet.</p>
-        )}
-      </details>
 
       <History token={session.token} version={market.historyVersion} windowMs={market.config.windowSeconds * 1000} />
       {(market.notices.length > 0 || market.lateNotices.length > 0) && (
@@ -1714,13 +1700,6 @@ function History({ token, version, windowMs }: { token: string | null; version: 
 }
 
 type RoundBet = TrayRow & { payoutMicros: number | null }
-
-function poolLabel(pool: { playersUp: number; playersDown: number } | null): string {
-  if (!pool) return ""
-  const count = pool.playersUp + pool.playersDown
-  if (count === 0) return ""
-  return `${count} playing`
-}
 
 function PoolRows({ rows, payout }: { rows: TrayRow[]; payout?: (row: TrayRow) => number | null }) {
   return (

@@ -10,8 +10,13 @@ import {
   loginStepState,
   loginSteps,
   phantomBrowseUrl,
+  phantomEthereumProvider,
   phantomInjected,
+  providerFault,
+  requestPhantomAccounts,
   shouldAddChain,
+  SIGN_PROMPT,
+  swallowedConnectError,
   switchFault,
   takeLoginQuery,
   TESTNET_MODE,
@@ -112,6 +117,44 @@ test("a Base Sepolia switch failure tells the user to turn on Testnet Mode and d
   expect(switchFault(CHAINS["base-sepolia"].id, { code: 4001, message: "User rejected the request." })).toBe(
     "Switch cancelled",
   )
+})
+
+test("providerFault names Phantom and keeps the unexpected error", () => {
+  expect(providerFault({ code: -32603, message: "Unexpected error" }, "Phantom eth_requestAccounts")).toBe(
+    "Phantom eth_requestAccounts: Unexpected error (-32603)",
+  )
+  const wrapped = new Error("Failed to connect to Phantom.")
+  wrapped.cause = { code: -32603, message: "Unexpected error", data: "rpc down" }
+  expect(providerFault(wrapped, "Phantom eth_requestAccounts")).toBe(
+    "Phantom eth_requestAccounts: Unexpected error (-32603) · rpc down",
+  )
+  expect(providerFault(new Error("Sign-in expired"), "Quick Market")).toBe("Quick Market: Sign-in expired")
+  expect(providerFault({ code: 4001, message: "User rejected the request." }, "Phantom personal_sign")).toBe(SIGN_PROMPT)
+  expect(providerFault(new Error("Failed to connect to any supported wallet provider"), "Phantom eth_requestAccounts")).toBe(
+    "Phantom eth_requestAccounts: Failed to connect to any supported wallet provider",
+  )
+})
+
+test("requestPhantomAccounts reads the injected provider and drops empty entries", async () => {
+  let seen: unknown = null
+  const provider = phantomEthereumProvider({
+    phantom: {
+      ethereum: {
+        request(args: unknown) {
+          seen = args
+          return Promise.resolve(["0xabc", "", 4, "0xdef"])
+        },
+      },
+    },
+  })
+  expect(provider).not.toBeNull()
+  expect(await requestPhantomAccounts(provider!)).toEqual(["0xabc", "0xdef"])
+  expect(seen).toEqual({ method: "eth_requestAccounts" })
+  expect(await requestPhantomAccounts({ request: async () => null })).toEqual([])
+  expect(phantomEthereumProvider(undefined)).toBeNull()
+  expect(phantomEthereumProvider({ phantom: {} })).toBeNull()
+  expect(swallowedConnectError(new Error("Failed to connect to Phantom."))).toBe(true)
+  expect(swallowedConnectError(new Error("Unexpected error"))).toBe(false)
 })
 
 test("isUnauthorized sees Phantom 4100 and a rejection is separate", () => {

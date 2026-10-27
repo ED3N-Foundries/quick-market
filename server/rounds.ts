@@ -289,6 +289,8 @@ function poolSums(roundId: number) {
 
 const POOL_TRAY = 5
 const HISTORY_TRAY = 10
+// Live board skips the tray. Reconnects and round broadcasts no longer resend the current pool.
+const PUBLISH_TRAY = false
 
 function recentBuyIns(roundId: number, limit: number): { address: string; side: Side; stakeMicros: number; payoutMicros: number | null }[] {
   const rows = getDb()
@@ -339,7 +341,7 @@ function cardFor(id: number): PoolCard | null {
   ensureRound(id)
   const row = getRound(id)
   if (!row) return null
-  return { ...toBand(row), ...poolSums(id), tray: trayFor(id) }
+  return { ...toBand(row), ...poolSums(id), tray: PUBLISH_TRAY ? trayFor(id) : [] }
 }
 
 export function board(now = Date.now()): Board {
