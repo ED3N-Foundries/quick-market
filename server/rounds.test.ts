@@ -342,7 +342,7 @@ test("round detail includes the tape and the price held into the open", () => {
   expect(tape.every((point) => point.t <= T + WINDOW + MARKET)).toBe(true)
 })
 
-test("a feed break voids a struck market, refunds the stake, and holds the next window", () => {
+test("a feed break voids open markets, refunds the stake, and resumes the same window after 5s", () => {
   const you = address(21)
   const who = address(22)
   grant(you)
@@ -354,6 +354,7 @@ test("a feed break voids a struck market, refunds the stake, and holds the next 
   notePrint(print("100.00", T + WINDOW - 20))
   advance(T + WINDOW + 5)
   expect(board(T + WINDOW + 5).live?.strike).toBe("100.00")
+  expect(bet({ address: who, side: "down", stakeMicros: 4 * USDC, now: T + WINDOW + 50 }).ok).toBe(true)
   notePrint(print("110.00", T + WINDOW + 1_000))
 
   const at = T + WINDOW + 2_000
@@ -394,14 +395,27 @@ test("a feed break voids a struck market, refunds the stake, and holds the next 
   expect(youFor(who)?.balanceMicros).toBe(10 * USDC)
 
   const resume = resumeAtFor(at)
+  expect(resume - at).toBe(5_000)
   expect(advance(resume - 1).settled).toHaveLength(0)
   expect(board(resume - 1).join).toBeNull()
   expect(handoffNow()?.to).toBe("bybit")
   notePrint(print("110.00", resume - 50))
-  advance(resume)
-  expect(handoffNow()).toBeNull()
-  expect(board(resume).join?.id).toBe(resume / WINDOW)
+  const opened = board(resume)
+  expect(handoffNow()?.to).toBe("bybit")
+  expect(opened.join?.id).toBe(Math.floor(resume / WINDOW))
+  expect(opened.join?.status).toBe("open")
+  expect(opened.join?.strike).toBeNull()
+  expect(opened.join?.poolUpMicros).toBe(0)
+  expect(opened.join?.poolDownMicros).toBe(0)
+  expect(opened.live).toBeNull()
+  expect(getDb().query("SELECT status, strike FROM rounds WHERE id = ?").get(MARKET_ID)).toEqual({ status: "void", strike: "100.00" })
+  expect(getDb().query("SELECT source FROM rounds WHERE id = ?").get(opened.join?.id)).toEqual({ source: "bybit" })
   expect(bet({ address: you, side: "up", stakeMicros: USDC, now: resume + 10 }).ok).toBe(true)
+  expect(board(resume + 10).join?.poolUpMicros).toBe(USDC)
+  expect(board(resume + 10).join?.poolDownMicros).toBe(0)
+  expect(youFor(who)?.balanceMicros).toBe(10 * USDC)
+  advance(resume + 10)
+  expect(handoffNow()).toBeNull()
 })
 
 test("a repeated break does not extend the hold, and a later venue does", () => {
@@ -409,7 +423,7 @@ test("a repeated break does not extend the hold, and a later venue does", () => 
   advance(T + 10)
   failFeed("binance", "bybit", T + 100)
   const first = resumeAtFor(T + 100)
-  expect(first).toBe(T + 20_000)
+  expect(first).toBe(T + 5_100)
   failFeed("binance", "bybit", T + 4_000)
   expect(handoffNow()?.resumeAt).toBe(first)
   failFeed("bybit", "okx", T + 6_000)
@@ -442,7 +456,11 @@ test("betting stays closed until a standby is adopted", () => {
   expect(handoffNow()?.resumeAt).toBe(resume)
   expect(board(resume - 1).join).toBeNull()
   advance(resume)
-  expect(board(resume).join?.id).toBe(resume / WINDOW)
+  expect(handoffNow()).toBeNull()
+  expect(board(resume).join?.id).toBe(Math.floor(resume / WINDOW))
+  expect(board(resume).join?.poolUpMicros).toBe(0)
+  expect(board(resume).live).toBeNull()
+  expect(getDb().query("SELECT source FROM rounds WHERE id = ?").get(Math.floor(resume / WINDOW))).toEqual({ source: "okx" })
 })
 
 test("a quiet book still counts as a live feed", () => {

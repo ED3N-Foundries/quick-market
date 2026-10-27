@@ -1,7 +1,7 @@
 import { LATE_BUY_IN_CODE, LATE_BUY_IN_ERROR } from "../shared/buyIn"
 import { GRANT_FOLLOW_MS, MINT_CONFIRMATIONS } from "../shared/mint"
 import { handoffBanner, tickerFor, type Handoff, type Ticker } from "../shared/source"
-import { clockAt, feeBps, LIVE_MS, marketBounds, MIN_STAKE_MICROS, priceSource, TAPE_MS, windowAccepts, windowMs, type PriceSource } from "./config"
+import { clockAt, feeBps, LIVE_MS, marketBounds, MIN_STAKE_MICROS, priceSource, TAPE_MS, windowAccepts, type PriceSource } from "./config"
 import { getDb } from "./db"
 import { grantWaiting } from "./grantWait"
 import { normalizeAddress } from "./money"
@@ -146,10 +146,12 @@ export function handoffNow(): Handoff | null {
   return handoff
 }
 
-/** The first window boundary at least one betting window after `now`. */
+/** How long buy-ins stay shut after the next price source is known. */
+export const HANDOFF_MS = 5_000
+
+/** The moment the current clock window takes bets again. Open rounds are already voided. */
 export function resumeAtFor(now: number): number {
-  const span = windowMs()
-  return Math.ceil((now + span) / span) * span
+  return now + HANDOFF_MS
 }
 
 function feedHeld(now: number): boolean {
@@ -264,6 +266,28 @@ function ensureRound(id: number): void {
     .run(id, bounds.strikeAt, bounds.settlesAt, ticker.venue)
 }
 
+/** The window id is the clock slot, so a voided buy-in row has to be emptied and reopened. */
+function reviveJoin(now: number): void {
+  const id = clockAt(now).joinId
+  if (id < 0) return
+  const existing = getRound(id)
+  if (!existing || existing.status === "open") return
+  const tx = getDb().transaction(() => {
+    const current = getRound(id)
+    if (!current || current.status === "open") return
+    getDb().query("DELETE FROM buy_ins WHERE round_id = ?").run(id)
+    getDb()
+      .query(
+        `UPDATE rounds
+         SET strike = NULL, settle = NULL, status = 'open', fee_micros = 0, winning_side = NULL, resolution = NULL,
+             pool_up_micros = 0, pool_down_micros = 0, source = ?
+         WHERE id = ? AND status != 'open'`,
+      )
+      .run(ticker.venue, id)
+  })
+  tx()
+}
+
 function poolSums(roundId: number) {
   const rows = getDb()
     .query(
@@ -344,6 +368,15 @@ function cardFor(id: number): PoolCard | null {
   return { ...toBand(row), ...poolSums(id), tray: PUBLISH_TRAY ? trayFor(id) : [] }
 }
 
+/** A voided ride stays in history. It is not the market on screen. */
+function openLive(id: number): PoolCard | null {
+  if (id < 0) return null
+  ensureRound(id)
+  const row = getRound(id)
+  if (!row || row.status !== "open") return null
+  return cardFor(id)
+}
+
 export function board(now = Date.now()): Board {
   const clock = clockAt(now)
   if (feedHeld(now)) {
@@ -357,6 +390,7 @@ export function board(now = Date.now()): Board {
       bands: [],
     }
   }
+  reviveJoin(now)
   if (clock.joinId >= 0) ensureRound(clock.joinId)
   if (clock.liveId >= 0) ensureRound(clock.liveId)
   const rows = getDb()
@@ -368,7 +402,7 @@ export function board(now = Date.now()): Board {
     windowEndsAt: clock.windowEndsAt,
     phase: "buy-in",
     join: clock.joinId < 0 ? null : cardFor(clock.joinId),
-    live: cardFor(clock.liveId),
+    live: openLive(clock.liveId),
     bands: rows.map(toBand),
   }
 }
@@ -476,6 +510,7 @@ export function placeBuyIn(input: {
   now: number
 }): { ok: true; you: You } | { ok: false; error: string; code?: typeof LATE_BUY_IN_CODE } {
   try {
+    if (!feedHeld(input.now)) reviveJoin(input.now)
     const tx = getDb().transaction(() => {
       if (input.side !== "up" && input.side !== "down") throw new BuyInError("Side is invalid")
       if (!Number.isSafeInteger(input.stakeMicros) || input.stakeMicros < MIN_STAKE_MICROS) {
@@ -679,6 +714,8 @@ export function advance(now: number): { settled: SettledEvent[]; broadcastRound:
     return { settled: voided, broadcastRound: broadcastRound || voided.length > 0 }
   }
 
+  reviveJoin(now)
+
   const due = getDb()
     .query("SELECT * FROM rounds WHERE status = 'open' AND ends_at <= ? ORDER BY id ASC")
     .all(now) as RoundRow[]
@@ -820,6 +857,7 @@ export function placeBuyIns(input: {
     throw error
   }
   if (feedStatus(input.now) !== "live") return { ok: false, error: "Price feed is delayed" }
+  reviveJoin(input.now)
   ensureRound(id)
   const round = getRound(id)
   if (!round || round.status !== "open") return { ok: false, error: "Buy-in is closed" }
@@ -935,6 +973,7 @@ export function openBook(now: number): {
       feed: feedStatus(now),
     }
   }
+  reviveJoin(now)
   const clock = clockAt(now)
   let poolUpMicros = 0
   let poolDownMicros = 0

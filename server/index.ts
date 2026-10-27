@@ -376,6 +376,10 @@ Bun.serve({
     })
   },
   websocket: {
+    // Ping about 32s into a 48s idle so a quiet socket stays inside Cloudflare's 100s proxy cut.
+    // The browser answers without page timers. A frozen tab cannot, and the socket closes.
+    idleTimeout: 48,
+    sendPings: true,
     open(ws) {
       hub.add(ws)
       const now = Date.now()

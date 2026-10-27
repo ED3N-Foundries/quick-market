@@ -10,10 +10,15 @@ import {
   lagView,
   noteDown,
   noteEcho,
+  noteHidden,
   noteProbeInbound,
   noteProbeSent,
+  noteWakeProbe,
   probeDue,
   readEcho,
+  silenceMs,
+  supervise,
+  wakeAction,
 } from "./lag"
 
 function echo(
@@ -132,6 +137,82 @@ test("an echo reads the three timestamps", () => {
   })
   expect(readEcho({ type: "tick", serverNow: 1 })).toBeNull()
   expect(readEcho({ type: "lag", t: "5" })).toBeNull()
+})
+
+test("waking replaces a socket that is not open and probes one that went quiet", () => {
+  const fresh = { lastInboundAt: 9_000, openedAt: 0, now: 10_000, connectingSince: 9_000 }
+  expect(wakeAction({ ...fresh, phase: "absent" })).toBe("replace")
+  expect(wakeAction({ ...fresh, phase: "closing" })).toBe("replace")
+  expect(wakeAction({ ...fresh, phase: "closed" })).toBe("replace")
+  expect(wakeAction({ ...fresh, phase: "connecting", connectingSince: null })).toBe("replace")
+  expect(wakeAction({ ...fresh, phase: "connecting" })).toBe("keep")
+  expect(wakeAction({ ...fresh, phase: "connecting", now: 15_000 })).toBe("replace")
+  expect(wakeAction({ ...fresh, phase: "open" })).toBe("keep")
+  expect(wakeAction({ ...fresh, phase: "open", lastInboundAt: 1_000, openedAt: 0, now: 8_000 })).toBe("probe")
+  expect(wakeAction({ phase: "open", lastInboundAt: null, openedAt: 9_500, now: 10_000, connectingSince: null })).toBe("keep")
+  expect(wakeAction({ phase: "open", lastInboundAt: null, openedAt: null, now: 10_000, connectingSince: null })).toBe("probe")
+})
+
+test("time hidden does not count as a missed probe", () => {
+  const hidden = noteHidden(noteProbeSent(createProbe(), 1_000))
+  expect(hidden).toEqual({ sentAt: 0, awaiting: false, misses: 0, wake: false })
+  expect(ageProbe(hidden, 30_000, 0).close).toBe(false)
+  expect(silenceMs(null, null, 5_000)).toBeNull()
+  expect(silenceMs(1_000, 4_000, 5_000)).toBe(4_000)
+})
+
+test("a wake probe replaces a silent socket, and a frame cancels it", () => {
+  const probe = noteWakeProbe(createProbe(), 1_000)
+  const base = {
+    phase: "open" as const,
+    openedAt: 0,
+    connectingSince: null,
+    retryPending: false,
+    probe,
+  }
+  expect(supervise({ ...base, now: 1_500, lastInboundAt: 0 }).action).toBe("keep")
+  expect(supervise({ ...base, now: 2_000, lastInboundAt: 0 }).action).toBe("replace")
+  const heard = supervise({ ...base, now: 2_000, lastInboundAt: 1_200 })
+  expect(heard.action).toBe("keep")
+  expect(heard.probe.awaiting).toBe(false)
+  expect(heard.probe.misses).toBe(0)
+})
+
+test("two missed probes replace the socket, and a scheduled retry is left to fire", () => {
+  let probe = noteProbeSent(createProbe(), 1_000)
+  const step = supervise({
+    phase: "open",
+    now: 3_000,
+    lastInboundAt: 0,
+    openedAt: 0,
+    connectingSince: null,
+    retryPending: false,
+    probe,
+  })
+  expect(step.action).toBe("probe")
+  probe = noteProbeSent(step.probe, 3_000)
+  const missed = supervise({
+    phase: "open",
+    now: 5_000,
+    lastInboundAt: 0,
+    openedAt: 0,
+    connectingSince: null,
+    retryPending: false,
+    probe,
+  })
+  expect(missed.action).toBe("replace")
+
+  const parked = {
+    phase: "absent" as const,
+    now: 1_000,
+    lastInboundAt: null,
+    openedAt: null,
+    connectingSince: null,
+    retryPending: true,
+    probe: createProbe(),
+  }
+  expect(supervise(parked).action).toBe("keep")
+  expect(supervise({ ...parked, phase: "closing", retryPending: false }).action).toBe("replace")
 })
 
 test("the button names the state and the round trip", () => {

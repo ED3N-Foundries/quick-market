@@ -29,7 +29,16 @@ export type Probe = {
   sentAt: number
   awaiting: boolean
   misses: number
+  /** A probe armed because the page just woke. One miss replaces the socket. */
+  wake: boolean
 }
+
+export const WAKE_CONNECT_MS = 5_000
+export const WAKE_PROBE_MS = 1_000
+
+export type SocketPhase = "absent" | "connecting" | "open" | "closing" | "closed"
+
+export type WakeAction = "keep" | "probe" | "replace"
 
 export type LagEcho = {
   t: number
@@ -42,7 +51,41 @@ export function createLag(): LagState {
 }
 
 export function createProbe(): Probe {
-  return { sentAt: 0, awaiting: false, misses: 0 }
+  return { sentAt: 0, awaiting: false, misses: 0, wake: false }
+}
+
+export function socketPhase(readyState: number | null): SocketPhase {
+  if (readyState == null) return "absent"
+  if (readyState === 0) return "connecting"
+  if (readyState === 1) return "open"
+  if (readyState === 2) return "closing"
+  return "closed"
+}
+
+/** What to do when the page becomes visible again, is restored, or the network returns. */
+export function wakeAction(input: {
+  phase: SocketPhase
+  lastInboundAt: number | null
+  openedAt: number | null
+  now: number
+  connectingSince: number | null
+}): WakeAction {
+  if (input.phase === "absent" || input.phase === "closed" || input.phase === "closing") return "replace"
+  if (input.phase === "connecting") {
+    const since = input.connectingSince
+    if (since == null || input.now - since >= WAKE_CONNECT_MS) return "replace"
+    return "keep"
+  }
+  const heard = input.lastInboundAt ?? input.openedAt
+  if (heard != null && input.now - heard < LAG_STALE_MS) return "keep"
+  return "probe"
+}
+
+/** How long since the last frame. Null until the page has opened a socket or heard from one. */
+export function silenceMs(lastInboundAt: number | null, openedAt: number | null, now: number): number | null {
+  const heard = lastInboundAt ?? openedAt
+  if (heard == null) return null
+  return now - heard
 }
 
 export function lagProbe(t: number): string {
@@ -176,11 +219,20 @@ export function readEcho(message: unknown): LagEcho | null {
 }
 
 export function noteProbeSent(probe: Probe, at: number): Probe {
-  return { sentAt: at, awaiting: true, misses: probe.misses }
+  return { sentAt: at, awaiting: true, misses: probe.misses, wake: false }
+}
+
+export function noteWakeProbe(probe: Probe, at: number): Probe {
+  return { sentAt: at, awaiting: true, misses: 0, wake: true }
 }
 
 export function noteProbeInbound(probe: Probe): Probe {
-  return { sentAt: probe.sentAt, awaiting: false, misses: 0 }
+  return { sentAt: probe.sentAt, awaiting: false, misses: 0, wake: false }
+}
+
+/** A hidden or frozen page does not answer on time. That gap is not a miss. */
+export function noteHidden(probe: Probe): Probe {
+  return createProbe()
 }
 
 /** A probe that outlives its interval with no later inbound frame is a miss. Two misses close the socket. */
@@ -188,9 +240,45 @@ export function ageProbe(probe: Probe, now: number, lastInboundAt: number): { pr
   if (!probe.awaiting || now - probe.sentAt < LAG_PROBE_MS) return { probe, close: false }
   const misses = lastInboundAt < probe.sentAt ? probe.misses + 1 : 0
   return {
-    probe: { sentAt: probe.sentAt, awaiting: false, misses },
+    probe: { sentAt: probe.sentAt, awaiting: false, misses, wake: false },
     close: misses >= LAG_MISS_LIMIT,
   }
+}
+
+/** A wake probe that gets no frame within a second means the open socket is dead. */
+export function wakeDeadline(probe: Probe, now: number, lastInboundAt: number): { probe: Probe; replace: boolean } {
+  if (!probe.wake || !probe.awaiting) return { probe, replace: false }
+  if (lastInboundAt >= probe.sentAt) return { probe: noteProbeInbound(probe), replace: false }
+  if (now - probe.sentAt < WAKE_PROBE_MS) return { probe, replace: false }
+  return { probe: { sentAt: probe.sentAt, awaiting: false, misses: probe.misses, wake: false }, replace: true }
+}
+
+/** Foreground watchdog. Hidden time is cleared by noteHidden before this runs. */
+export function supervise(input: {
+  phase: SocketPhase
+  now: number
+  lastInboundAt: number | null
+  openedAt: number | null
+  connectingSince: number | null
+  retryPending: boolean
+  probe: Probe
+}): { probe: Probe; action: WakeAction } {
+  const due = wakeDeadline(input.probe, input.now, input.lastInboundAt ?? 0)
+  if (due.replace) return { probe: due.probe, action: "replace" }
+  const aged = ageProbe(due.probe, input.now, input.lastInboundAt ?? 0)
+  if (aged.close) return { probe: aged.probe, action: "replace" }
+  const probe = aged.probe
+  if (input.phase === "open") {
+    if (probeDue(probe, input.now)) return { probe, action: "probe" }
+    return { probe, action: "keep" }
+  }
+  if (input.phase === "connecting") {
+    const since = input.connectingSince
+    if (since == null || input.now - since >= WAKE_CONNECT_MS) return { probe, action: "replace" }
+    return { probe, action: "keep" }
+  }
+  if (input.phase === "absent" && input.retryPending) return { probe, action: "keep" }
+  return { probe, action: "replace" }
 }
 
 export function probeDue(probe: Probe, now: number): boolean {

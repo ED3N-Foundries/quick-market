@@ -8,17 +8,21 @@ import { applyBuyIn } from "./buyInIntent"
 import type { TapeChart, TapePoint } from "./chart"
 import { createClock, easeClock, noteClock } from "./clock"
 import {
-  ageProbe,
   createLag,
   createProbe,
   lagProbe,
   linkStatus,
   noteDown,
   noteEcho,
+  noteHidden,
   noteProbeInbound,
   noteProbeSent,
-  probeDue,
+  noteWakeProbe,
   readEcho,
+  silenceMs,
+  socketPhase,
+  supervise,
+  wakeAction,
 } from "./lag"
 import { parseAmountMicros } from "./format"
 import { grantLanded } from "./grantWatch"
@@ -54,6 +58,20 @@ const defaultConfig: Config = {
   grantIntervalMs: 0,
 }
 
+function readTape(value: unknown): TapePoint[] | null {
+  if (!Array.isArray(value)) return null
+  const points: TapePoint[] = []
+  for (const item of value) {
+    if (!item || typeof item !== "object") continue
+    const row = item as { t?: unknown; price?: unknown }
+    if (typeof row.t !== "number" || typeof row.price !== "string") continue
+    const price = Number(row.price)
+    if (!Number.isFinite(row.t) || !Number.isFinite(price)) continue
+    points.push({ t: row.t, price, text: row.price })
+  }
+  return points
+}
+
 function headers(token: string | null, json = false): HeadersInit {
   const result: Record<string, string> = {}
   if (json) result["content-type"] = "application/json"
@@ -84,6 +102,10 @@ export function useMarket(token: string | null, seed: You | null = null) {
   const lastInboundRef = useRef<number | null>(null)
   const openedAtRef = useRef<number | null>(null)
   const socketRef = useRef<WebSocket | null>(null)
+  const connectingSinceRef = useRef<number | null>(null)
+  const retryPendingRef = useRef(false)
+  const replaceRef = useRef<() => void>(() => {})
+  const reloadRef = useRef<(opts?: { tape?: boolean }) => Promise<You | null>>(async () => null)
   const priceRef = useRef<string | null>(null)
   const chartRef = useRef<TapeChart | null>(null)
   const tokenRef = useRef(token)
@@ -146,7 +168,7 @@ export function useMarket(token: string | null, seed: You | null = null) {
     chart.push(point.t, point.price, point.text)
   }, [])
 
-  const reload = useCallback(async (): Promise<You | null> => {
+  const reload = useCallback(async (opts?: { tape?: boolean }): Promise<You | null> => {
     const response = await fetch("/api/state", { headers: headers(tokenRef.current) })
     if (response.status === 401) {
       setUnauthorized(true)
@@ -161,10 +183,19 @@ export function useMarket(token: string | null, seed: You | null = null) {
     if (body.ticker) setTicker(body.ticker)
     setHandoff(body.handoff ?? null)
     noteServerNow(body.serverNow)
-    acceptYou(body.you ?? null)
-    markConfirmed(true)
+    const holdYou = Boolean(opts?.tape) && betLock.current
+    if (!holdYou) acceptYou(body.you ?? null)
+    if (opts?.tape && !holdYou) {
+      const points = readTape(body.tape)
+      if (points) {
+        seedRef.current = points
+        if (chartRef.current) applySeed(chartRef.current)
+      }
+    }
+    if (!holdYou) markConfirmed(true)
     return body.you ?? null
-  }, [acceptYou, markConfirmed, noteServerNow])
+  }, [acceptYou, applySeed, markConfirmed, noteServerNow])
+  reloadRef.current = reload
 
   const waitForBalance = useCallback(
     async (minMicros: number) => {
@@ -183,18 +214,26 @@ export function useMarket(token: string | null, seed: You | null = null) {
     const id = window.setInterval(() => {
       const now = Date.now()
       const socket = socketRef.current
-      const aged = ageProbe(probeRef.current, now, lastInboundRef.current ?? 0)
-      probeRef.current = aged.probe
-      if (aged.close && socket && socket.readyState === WebSocket.OPEN) {
-        socket.close()
-      } else if (socket && socket.readyState === WebSocket.OPEN && probeDue(probeRef.current, now)) {
+      const decision = supervise({
+        phase: socketPhase(socket ? socket.readyState : null),
+        now,
+        lastInboundAt: lastInboundRef.current,
+        openedAt: openedAtRef.current,
+        connectingSince: connectingSinceRef.current,
+        retryPending: retryPendingRef.current,
+        probe: probeRef.current,
+      })
+      probeRef.current = decision.probe
+      if (decision.action === "replace") {
+        replaceRef.current()
+      } else if (decision.action === "probe" && socket && socket.readyState === WebSocket.OPEN) {
         const t = Date.now()
         try {
           socket.send(lagProbe(t))
+          probeRef.current = noteProbeSent(probeRef.current, t)
         } catch {
-          // The close handler reconnects.
+          replaceRef.current()
         }
-        probeRef.current = noteProbeSent(probeRef.current, t)
       }
       setPulse((value) => value + 1)
     }, 200)
@@ -274,29 +313,89 @@ export function useMarket(token: string | null, seed: You | null = null) {
     let stopped = false
     let socket: WebSocket | null = null
     let retry = 0
+    let generation = 0
+    let resyncAt = 0
+    let wokeAt = 0
 
-    const connect = () => {
+    const detach = (current: WebSocket) => {
+      current.onopen = null
+      current.onmessage = null
+      current.onclose = null
+      current.onerror = null
+      try {
+        current.close()
+      } catch {
+        // The socket is already closing.
+      }
+    }
+
+    const resync = () => {
+      if (betLock.current) return
+      const hole = silenceMs(lastInboundRef.current, openedAtRef.current, Date.now())
+      const viewMs = Math.max(1_000, configRef.current.viewSeconds * 1000)
+      if (hole == null || hole < viewMs) return
+      const now = Date.now()
+      if (now - resyncAt < 2_000) return
+      resyncAt = now
+      seededRef.current = false
+      void reloadRef
+        .current({ tape: true })
+        .then(() => {
+          if (!seededRef.current && seedRef.current && chartRef.current) applySeed(chartRef.current)
+        })
+        .catch(() => {
+          if (seedRef.current && chartRef.current) applySeed(chartRef.current)
+        })
+    }
+
+    function sendProbe(current: WebSocket, wakeProbe: boolean) {
+      const t = Date.now()
+      try {
+        current.send(lagProbe(t))
+      } catch {
+        connect()
+        return
+      }
+      if (socket !== current) return
+      probeRef.current = wakeProbe ? noteWakeProbe(probeRef.current, t) : noteProbeSent(probeRef.current, t)
+    }
+
+    function connect() {
       if (stopped) return
+      window.clearTimeout(retry)
+      retryPendingRef.current = false
+      generation += 1
+      const gen = generation
+      if (socket) detach(socket)
+      socket = null
+      socketRef.current = null
       lagRef.current = createLag()
       probeRef.current = createProbe()
-      lastInboundRef.current = null
       openedAtRef.current = null
+      connectingSinceRef.current = Date.now()
       const protocol = location.protocol === "https:" ? "wss" : "ws"
-      const current = new WebSocket(`${protocol}://${location.host}/ws`)
+      let current: WebSocket
+      try {
+        current = new WebSocket(`${protocol}://${location.host}/ws`)
+      } catch {
+        retryPendingRef.current = true
+        retry = window.setTimeout(() => {
+          retryPendingRef.current = false
+          connect()
+        }, 400)
+        return
+      }
       socket = current
       socketRef.current = current
       current.onopen = () => {
-        if (socketRef.current !== current) return
+        if (gen !== generation || socket !== current) return
+        resync()
         openedAtRef.current = Date.now()
-        const t = Date.now()
-        try {
-          current.send(lagProbe(t))
-        } catch {
-          // The close handler reconnects.
-        }
-        probeRef.current = noteProbeSent(probeRef.current, t)
+        connectingSinceRef.current = null
+        sendProbe(current, false)
       }
       current.onmessage = (event) => {
+        if (gen !== generation || socket !== current) return
         const arrival = Date.now()
         lastInboundRef.current = arrival
         probeRef.current = noteProbeInbound(probeRef.current)
@@ -329,40 +428,92 @@ export function useMarket(token: string | null, seed: You | null = null) {
           const address = youRef.current?.address ?? null
           const mine = address ? message.payouts.find((payout) => payout.address === address) : null
           const balance = address ? message.balances.find((row) => row.address === address) : null
-          setYou((current) => {
-            if (!current) return current
+          setYou((row) => {
+            if (!row) return row
             const next = {
-              ...current,
-              balanceMicros: balance?.balanceMicros ?? current.balanceMicros,
-              openBuyIns: current.openBuyIns.filter((bet) => bet.roundId !== message.roundId),
+              ...row,
+              balanceMicros: balance?.balanceMicros ?? row.balanceMicros,
+              openBuyIns: row.openBuyIns.filter((bet) => bet.roundId !== message.roundId),
             }
             youEpoch.current += 1
             writeCachedBalance(next)
             return next
           })
           if (mine) {
-            setNotices((current) =>
-              current.some((notice) => notice.roundId === message.roundId) ? current : [...current, message],
-            )
+            setNotices((row) => (row.some((notice) => notice.roundId === message.roundId) ? row : [...row, message]))
           }
           setHistoryVersion((value) => value + 1)
         }
       }
       current.onclose = () => {
-        if (socketRef.current === current) {
+        if (gen !== generation) return
+        if (socket === current) {
+          socket = null
           socketRef.current = null
           openedAtRef.current = null
+          connectingSinceRef.current = null
         }
         if (stopped) return
-        retry = window.setTimeout(connect, 400)
+        retryPendingRef.current = true
+        retry = window.setTimeout(() => {
+          retryPendingRef.current = false
+          connect()
+        }, 400)
       }
     }
 
+    function wake() {
+      if (stopped) return
+      const now = Date.now()
+      if (now - wokeAt < 50) return
+      wokeAt = now
+      probeRef.current = noteHidden(probeRef.current)
+      setPulse((value) => value + 1)
+      const action = wakeAction({
+        phase: socketPhase(socket ? socket.readyState : null),
+        lastInboundAt: lastInboundRef.current,
+        openedAt: openedAtRef.current,
+        now,
+        connectingSince: connectingSinceRef.current,
+      })
+      if (action === "replace") {
+        connect()
+        return
+      }
+      const hole = silenceMs(lastInboundRef.current, openedAtRef.current, now)
+      const viewMs = Math.max(1_000, configRef.current.viewSeconds * 1000)
+      if (hole != null && hole >= viewMs) resync()
+      if (action === "probe" && socket && socket.readyState === WebSocket.OPEN) sendProbe(socket, true)
+    }
+
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") {
+        probeRef.current = noteHidden(probeRef.current)
+        return
+      }
+      wake()
+    }
+    const onResume: EventListener = () => wake()
+
+    replaceRef.current = connect
+    document.addEventListener("visibilitychange", onVisibility)
+    window.addEventListener("pageshow", wake)
+    window.addEventListener("online", wake)
+    ;(document as EventTarget).addEventListener("resume", onResume)
     connect()
     return () => {
       stopped = true
+      generation += 1
       window.clearTimeout(retry)
-      socket?.close()
+      retryPendingRef.current = false
+      replaceRef.current = () => {}
+      document.removeEventListener("visibilitychange", onVisibility)
+      window.removeEventListener("pageshow", wake)
+      window.removeEventListener("online", wake)
+      ;(document as EventTarget).removeEventListener("resume", onResume)
+      if (socket) detach(socket)
+      socketRef.current = null
+      connectingSinceRef.current = null
     }
   }, [pushTick, noteServerNow])
 
