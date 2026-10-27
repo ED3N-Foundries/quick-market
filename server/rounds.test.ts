@@ -8,8 +8,8 @@ import { adoptFeed, advance, board, credit, ensureUser, failFeed, feedStatus, ha
 
 const USDC = 1_000_000
 const T = 10_000_000_000_000
-const WINDOW = 5_000
-const MARKET = 5_000
+const WINDOW = 10_000
+const MARKET = 10_000
 const MARKET_ID = T / WINDOW
 
 function print(price: string, at: number): Print {
@@ -30,8 +30,8 @@ function bet(input: { address: string; side: Side; stakeMicros: number; now: num
 }
 
 beforeEach(() => {
-  process.env.WINDOW_SECONDS = "5"
-  process.env.MARKET_SECONDS = "5"
+  process.env.WINDOW_SECONDS = "10"
+  process.env.MARKET_SECONDS = "10"
   process.env.BOT_COUNT = "0"
   process.env.FEE_BPS = "25"
   process.env.PRICE_SOURCE = "binance"
@@ -409,7 +409,7 @@ test("a repeated break does not extend the hold, and a later venue does", () => 
   advance(T + 10)
   failFeed("binance", "bybit", T + 100)
   const first = resumeAtFor(T + 100)
-  expect(first).toBe(T + 10_000)
+  expect(first).toBe(T + 20_000)
   failFeed("binance", "bybit", T + 4_000)
   expect(handoffNow()?.resumeAt).toBe(first)
   failFeed("bybit", "okx", T + 6_000)

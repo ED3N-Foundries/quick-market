@@ -401,7 +401,7 @@ export function App() {
           share={figures.book.upShare}
           pool={figures.book.upPool}
           quote={figures.book.upQuote}
-          players={figures.book.upPlayers}
+          orders={figures.book.upPlayers}
           fade={figures.fade}
           fadeKey={figures.gen}
           disabled={!canBet}
@@ -601,7 +601,7 @@ export function App() {
           share={figures.book.downShare}
           pool={figures.book.downPool}
           quote={figures.book.downQuote}
-          players={figures.book.downPlayers}
+          orders={figures.book.downPlayers}
           fade={figures.fade}
           fadeKey={figures.gen}
           disabled={!canBet}
@@ -1486,7 +1486,7 @@ function SideCard(props: {
   share: string
   pool: number
   quote: string
-  players: number
+  orders: number
   fade: boolean
   fadeKey: number
   disabled: boolean
@@ -1499,7 +1499,7 @@ function SideCard(props: {
       <div className="side-figures" data-fade={props.fade ? "1" : "0"} key={props.fadeKey}>
         <p className="share">{props.share}</p>
         <p className="pool">
-          {formatMoney(props.pool)} · {props.players} {props.players === 1 ? "player" : "players"}
+          {formatMoney(props.pool)} · {props.orders} {props.orders === 1 ? "order" : "orders"}
         </p>
         <p className="to-win">{props.quote}</p>
       </div>

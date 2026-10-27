@@ -37,8 +37,8 @@ function configuredChain(): ChainConfig {
 const pageChain = configuredChain()
 
 const defaultConfig: Config = {
-  windowSeconds: 5,
-  marketSeconds: 5,
+  windowSeconds: 10,
+  marketSeconds: 10,
   viewSeconds: 5,
   feeBps: 0,
   minStakeMicros: 1_000_000,

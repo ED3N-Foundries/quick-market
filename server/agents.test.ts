@@ -10,7 +10,7 @@ import { openSession } from "./session"
 
 const USDC = 1_000_000
 const T = 10_000_000_000_000
-const WINDOW = 5_000
+const WINDOW = 10_000
 
 function print(price: string, at: number): Print {
   return { price, exchangeTs: at, receivedAt: at, source: "binance" }
@@ -34,8 +34,8 @@ function bot(n: number, micros: number) {
 }
 
 beforeEach(() => {
-  process.env.WINDOW_SECONDS = "5"
-  process.env.MARKET_SECONDS = "5"
+  process.env.WINDOW_SECONDS = "10"
+  process.env.MARKET_SECONDS = "10"
   process.env.FEE_BPS = "0"
   process.env.CHAIN = "base-sepolia"
   process.env.AGENT_SECRET = "test-secret"

@@ -61,8 +61,8 @@ type _market = Assert<Equal<z.infer<typeof marketSchema>, MarketPreferences>>
 
 const hardcoded: MarketPreferences = {
   chain: "base-sepolia",
-  windowSeconds: 5,
-  marketSeconds: 5,
+  windowSeconds: 10,
+  marketSeconds: 10,
   viewSeconds: 5,
   feeBps: 0,
   priceSource: "binance",
