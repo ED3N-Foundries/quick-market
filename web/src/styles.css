@@ -1121,47 +1121,83 @@ tr.open td { color: var(--text); }
 .modal header p { margin: 4px 0 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .modal .chart-wrap { height: 300px; }
 
-.toasts {
+.app .toasts {
   position: fixed;
   left: 50%;
-  bottom: 16px;
+  bottom: 20px;
   z-index: 40;
   transform: translateX(-50%);
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  width: min(440px, calc(100% - 24px));
+  gap: 10px;
+  width: min(560px, calc(100% - 32px));
   pointer-events: none;
 }
-.toast {
+.app .toast {
   pointer-events: auto;
   display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 16px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
   width: 100%;
-  padding: 14px 16px;
+  padding: 28px 32px;
   border: 0;
-  border-radius: 14px;
+  border-radius: 22px;
   text-align: left;
 }
-.toast span { display: flex; flex-direction: column; gap: 2px; }
-.toast strong { font-size: 18px; letter-spacing: 0.02em; }
-.toast small { font-size: 12px; opacity: 0.8; font-variant-numeric: tabular-nums; }
-.toast b { font-size: 26px; font-variant-numeric: tabular-nums; letter-spacing: -0.03em; white-space: nowrap; }
-.toast b .profit { font-size: 15px; margin-left: 2px; }
-.toast.win { background: var(--win); color: var(--win-ink); }
-.toast.loss {
+.app .toast strong {
+  font-size: clamp(28px, 8vw, 34px);
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  line-height: 1.05;
+}
+.app .toast b {
+  font-size: clamp(40px, 12vw, 64px);
+  font-weight: 560;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.045em;
+  line-height: 0.95;
+  white-space: nowrap;
+}
+@media (max-width: 420px) {
+  .app .toast { padding: 22px 20px; }
+}
+.app .toast.settling {
+  background: var(--raise-2);
+  color: var(--text);
+}
+.app .toast-shimmer {
+  display: block;
+  width: 96px;
+  height: 3px;
+  margin-top: 6px;
+  border-radius: 99px;
+  background: linear-gradient(90deg, transparent, rgba(243, 240, 232, 0.75), transparent);
+  background-size: 200% 100%;
+  animation: toast-shimmer 1.2s ease-in-out infinite;
+}
+@keyframes toast-shimmer {
+  from { background-position: 100% 0; }
+  to { background-position: -100% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .app .toast-shimmer { animation: none; background: rgba(243, 240, 232, 0.35); }
+}
+.app .toast.result.credit { background: var(--win); color: var(--win-ink); }
+.app .toast.result.credit b { color: var(--up); }
+.app .toast.result.debit {
   background: var(--loss);
   color: var(--loss-ink);
   border: 1px solid var(--loss-line);
 }
-.toast.push { background: var(--push); color: var(--push-ink); }
-.toast.void { background: var(--warn); color: #1c1403; }
-.toast.late {
+.app .toast.result.debit b { color: var(--down); }
+.app .toast.result.push { background: var(--raise-2); color: var(--text); }
+.app .toast.result.push b { color: var(--push); }
+.app .toast.result.void { background: var(--warn); color: #1c1403; }
+.app .toast.late {
   background: var(--warn);
   color: #1c1403;
-  font-size: 15px;
+  font-size: 18px;
   line-height: 1.35;
 }
 

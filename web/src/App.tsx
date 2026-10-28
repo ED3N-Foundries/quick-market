@@ -12,7 +12,6 @@ import {
   formatMoney,
   formatReturn,
   formatPrice,
-  formatPriceDelta,
   formatSigned,
   formatGrantDollars,
   formatGrantTimer,
@@ -33,7 +32,8 @@ import {
   sourceLabel,
   walletDisplayLabel,
 } from "./format"
-import type { Band, Board, HistoryRound, OpenBuyIn, SettledMessage, Side, TrayRow } from "./types"
+import { RESULT_MS, SETTLING_MS, type MarketNotice } from "./resultNotice"
+import type { Band, Board, HistoryRound, OpenBuyIn, Side, TrayRow } from "./types"
 import { readCachedBalance, visibleBalance } from "./balanceCache"
 import { readGrantConfirmations } from "./grantChain"
 import { grantLanded, grantTxUrl } from "./grantWatch"
@@ -770,13 +770,8 @@ export function App() {
       <History token={session.token} version={market.historyVersion} windowMs={market.config.windowSeconds * 1000} />
       {(market.notices.length > 0 || market.lateNotices.length > 0) && (
         <div className="toasts">
-          {market.notices.map((event) => (
-            <ResultToast
-              key={event.roundId}
-              event={event}
-              address={market.address}
-              onDone={() => market.dismissNotice(event.roundId)}
-            />
+          {market.notices.map((notice) => (
+            <ResultToast key={notice.roundId} notice={notice} onDone={() => market.dismissNotice(notice.roundId)} />
           ))}
           {market.lateNotices.map((id) => (
             <LateToast key={id} onDone={() => market.dismissLate(id)} />
@@ -1893,35 +1888,34 @@ function LateToast({ onDone }: { onDone: () => void }) {
   )
 }
 
-function ResultToast({ event, address, onDone }: { event: SettledMessage; address: string | null; onDone: () => void }) {
+function ResultToast({ notice, onDone }: { notice: MarketNotice; onDone: () => void }) {
   const { text } = useI18n()
-  const mine = address ? (event.payouts.find((payout) => payout.address === address) ?? null) : null
   const doneRef = useRef(onDone)
   doneRef.current = onDone
+  const kind = notice.kind
+  const started = notice.kind === "settling" ? notice.openedAt : notice.shownAt
   useEffect(() => {
-    const id = window.setTimeout(() => doneRef.current(), 4_500)
+    const wait = kind === "settling" ? SETTLING_MS : RESULT_MS
+    const left = Math.max(0, wait - (Date.now() - started))
+    const id = window.setTimeout(() => doneRef.current(), left)
     return () => window.clearTimeout(id)
-  }, [])
-  if (!mine) return null
+  }, [kind, started])
 
-  const tone = toastTone(event, mine.stakeMicros, mine.payoutMicros)
-  const title = event.resolution === "void" ? text.void : tone === "win" ? text.youWin : tone === "loss" ? text.lost : text.pushMark
-  const move = event.strike && event.settle ? moveText(event.strike, event.settle) : null
-  const figures = formatReturn(mine.stakeMicros, mine.payoutMicros)
-  const glyph = mine.side === "up" ? "▲" : "▼"
+  if (notice.kind === "settling") {
+    return (
+      <button type="button" className="toast settling" onClick={onDone}>
+        <strong>{text.settling}</strong>
+        <span className="toast-shimmer" aria-hidden="true" />
+      </button>
+    )
+  }
+
+  const title =
+    notice.tone === "credit" ? text.credited : notice.tone === "debit" ? text.deducted : notice.tone === "void" ? text.void : text.push
   return (
-    <button type="button" className={`toast ${tone}`} onClick={onDone}>
-      <span>
-        <strong>{title}</strong>
-        {move && <small>{move}</small>}
-        <small>
-          {glyph} {text.bought} {formatMoney(mine.stakeMicros)}
-        </small>
-      </span>
-      <b>
-        {figures.back}
-        {figures.profit && <span className="profit"> ({figures.profit})</span>}
-      </b>
+    <button type="button" className={`toast result ${notice.tone}`} onClick={onDone}>
+      <strong>{title}</strong>
+      <b>{formatMoney(notice.amountMicros)}</b>
     </button>
   )
 }
@@ -1986,20 +1980,4 @@ function BackAmount({ stake, payout }: { stake: number; payout: number }) {
   )
 }
 
-function toastTone(event: SettledMessage, stake: number, payout: number): string {
-  if (event.resolution === "void") return "void"
-  if (payout > stake) return "win"
-  if (payout === 0) return "loss"
-  return "push"
-}
 
-function moveText(strike: string, settle: string): string | null {
-  const delta = formatPriceDelta(settle, strike)
-  if (!delta) return null
-  const from = formatPrice(strike)
-  const to = formatPrice(settle)
-  if (delta.side === "push") return `${from} = ${to} ($0.00)`
-  const glyph = delta.side === "up" ? "▲" : "▼"
-  const sign = delta.side === "up" ? "+" : "−"
-  return `${from} ${glyph} ${to} (${sign}$${delta.text.slice(1)})`
-}

@@ -28,6 +28,7 @@ import { parseAmountMicros } from "./format"
 import { grantLanded } from "./grantWatch"
 import type { Handoff, Ticker } from "../../shared/source"
 import { tickerFor } from "../../shared/source"
+import { dismissRound, dueBuyIns, emptyNotices, settleNotice, tickNotices } from "./resultNotice"
 import type { Board, Config, SettledMessage, Side, You } from "./types"
 
 function configuredChain(): ChainConfig {
@@ -89,7 +90,7 @@ export function useMarket(token: string | null, seed: You | null = null) {
   const [error, setError] = useState<string | null>(null)
   const [pending, setPending] = useState(false)
   const [historyVersion, setHistoryVersion] = useState(0)
-  const [notices, setNotices] = useState<SettledMessage[]>([])
+  const [noticeState, setNoticeState] = useState(emptyNotices)
   const [lateNotices, setLateNotices] = useState<number[]>([])
   const [pulse, setPulse] = useState(0)
   const [unauthorized, setUnauthorized] = useState(false)
@@ -110,6 +111,7 @@ export function useMarket(token: string | null, seed: You | null = null) {
   const chartRef = useRef<TapeChart | null>(null)
   const tokenRef = useRef(token)
   const youRef = useRef<You | null>(null)
+  const boardRef = useRef<Board | null>(null)
   const configRef = useRef(config)
   const seedRef = useRef<TapePoint[] | null>(null)
   const bufferRef = useRef<TapePoint[]>([])
@@ -120,6 +122,7 @@ export function useMarket(token: string | null, seed: You | null = null) {
   const youEpoch = useRef(0)
   tokenRef.current = token
   youRef.current = you
+  boardRef.current = board
   configRef.current = config
 
   const applySeed = useCallback((chart: TapeChart) => {
@@ -243,8 +246,12 @@ export function useMarket(token: string | null, seed: You | null = null) {
   useEffect(() => {
     let raf = 0
     const loop = () => {
-      clockRef.current = easeClock(clockRef.current, Date.now())
+      const wallNow = Date.now()
+      clockRef.current = easeClock(clockRef.current, wallNow)
       offsetRef.current = clockRef.current.offset
+      const clockNow = wallNow + offsetRef.current
+      const bets = dueBuyIns(boardRef.current, youRef.current?.openBuyIns ?? [])
+      setNoticeState((state) => tickNotices(state, bets, clockNow, wallNow))
       raf = requestAnimationFrame(loop)
     }
     raf = requestAnimationFrame(loop)
@@ -426,7 +433,6 @@ export function useMarket(token: string | null, seed: You | null = null) {
           setHandoff(message.handoff ?? null)
         } else if (message.type === "settled") {
           const address = youRef.current?.address ?? null
-          const mine = address ? message.payouts.find((payout) => payout.address === address) : null
           const balance = address ? message.balances.find((row) => row.address === address) : null
           setYou((row) => {
             if (!row) return row
@@ -439,9 +445,7 @@ export function useMarket(token: string | null, seed: You | null = null) {
             writeCachedBalance(next)
             return next
           })
-          if (mine) {
-            setNotices((row) => (row.some((notice) => notice.roundId === message.roundId) ? row : [...row, message]))
-          }
+          if (address) setNoticeState((state) => settleNotice(state, message, address, arrival))
           setHistoryVersion((value) => value + 1)
         }
       }
@@ -713,10 +717,10 @@ export function useMarket(token: string | null, seed: You | null = null) {
     setError,
     pending,
     historyVersion,
-    notices,
+    notices: noticeState.cards,
     lateNotices,
     dismissNotice: useCallback((roundId: number) => {
-      setNotices((current) => current.filter((notice) => notice.roundId !== roundId))
+      setNoticeState((state) => dismissRound(state, roundId))
     }, []),
     dismissLate: useCallback((id: number) => {
       setLateNotices((current) => current.filter((notice) => notice !== id))

@@ -80,8 +80,9 @@ export type Copy = {
   replayMiss: string
   emptyPool: string
   void: string
-  youWin: string
-  lost: string
+  settling: string
+  credited: string
+  deducted: string
   elapsed: (timer: string) => string
   periods: (windowSeconds: number, marketSeconds: number) => string
   ruleFinish: string
@@ -210,8 +211,9 @@ const en: Copy = {
   replayMiss: "Couldn't load this market.",
   emptyPool: "No one in this pool.",
   void: "Void",
-  youWin: "You win",
-  lost: "Lost",
+  settling: "Settling market…",
+  credited: "Credited",
+  deducted: "Deducted",
   elapsed: (timer) => `Elapsed time ${timer}`,
   periods: (windowSeconds, marketSeconds) => `Buy-in ${windowSeconds}s · Market ${marketSeconds}s`,
   ruleFinish: "Up finishes above the open. Down finishes below. Push is a tie, and stakes return.",
@@ -341,8 +343,9 @@ const zhTW: Copy = {
   replayMiss: "無法載入這場。",
   emptyPool: "這個池子沒有人。",
   void: "作廢",
-  youWin: "你贏了",
-  lost: "輸了",
+  settling: "市場結算中…",
+  credited: "已入帳",
+  deducted: "已扣款",
   elapsed: (timer) => `已經過 ${timer}`,
   periods: (windowSeconds, marketSeconds) => `下注 ${windowSeconds} 秒 · 市場 ${marketSeconds} 秒`,
   ruleFinish: "收盤高於開盤為上漲。收盤低於開盤為下跌。平手退回本金。",
