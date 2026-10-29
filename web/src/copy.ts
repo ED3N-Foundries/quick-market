@@ -83,7 +83,6 @@ export type Copy = {
   settling: string
   credited: string
   deducted: string
-  stakeReturned: string
   elapsed: (timer: string) => string
   periods: (windowSeconds: number, marketSeconds: number) => string
   ruleFinish: string
@@ -215,7 +214,6 @@ const en: Copy = {
   settling: "Settling market…",
   credited: "Credited",
   deducted: "Deducted",
-  stakeReturned: "stake returned",
   elapsed: (timer) => `Elapsed time ${timer}`,
   periods: (windowSeconds, marketSeconds) => `Buy-in ${windowSeconds}s · Market ${marketSeconds}s`,
   ruleFinish: "Up finishes above the open. Down finishes below. Push is a tie, and stakes return.",
@@ -348,7 +346,6 @@ const zhTW: Copy = {
   settling: "市場結算中…",
   credited: "已入帳",
   deducted: "已扣款",
-  stakeReturned: "本金已退回",
   elapsed: (timer) => `已經過 ${timer}`,
   periods: (windowSeconds, marketSeconds) => `下注 ${windowSeconds} 秒 · 市場 ${marketSeconds} 秒`,
   ruleFinish: "收盤高於開盤為上漲。收盤低於開盤為下跌。平手退回本金。",

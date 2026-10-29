@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useSyncExternalStore, type PointerEvent as ReactPointerEvent, type RefObject } from "react"
+import { Children, isValidElement, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react"
 import type { Lang } from "../../shared/lang"
 import { MINT_CONFIRMATIONS } from "../../shared/mint"
 import { mountChart, priceY, type ChartScale, type TapeChart, type TapeSample } from "./chart"
@@ -32,6 +32,7 @@ import {
   sourceLabel,
   walletDisplayLabel,
 } from "./format"
+import { placePricePops, pricePopText, type PlacedPop, type PopRect } from "./pricePop"
 import { RESULT_MS, SETTLING_MS, type MarketNotice } from "./resultNotice"
 import type { Band, Board, HistoryRound, OpenBuyIn, Side, TrayRow } from "./types"
 import { readCachedBalance, visibleBalance } from "./balanceCache"
@@ -205,6 +206,7 @@ export function App() {
     }
   }, [market.bindChart, market.offsetRef])
 
+  const balanceMark = useRef<HTMLParagraphElement>(null)
   const board = market.board
   const you = market.you
   const cached = session.token && session.address ? readCachedBalance(session.address) : null
@@ -559,7 +561,7 @@ export function App() {
           {!session.token && session.signError && session.signError !== SIGN_PROMPT && (
             <p className="note bad connect-error">{localize(lang, session.signError)}</p>
           )}
-          {!holdStake && <BalanceFigure micros={shownMicros} />}
+          <BalanceFigure micros={shownMicros} markRef={balanceMark} />
           {!holdStake && testnet && market.config.grantIntervalMs > 0 && grantKnown &&
             (grantWait.due ? (
               <button type="button" className="grant-status" onClick={openGrant} disabled={!session.token || grantInFlight}>
@@ -771,14 +773,14 @@ export function App() {
 
       <History token={session.token} version={market.historyVersion} windowMs={market.config.windowSeconds * 1000} />
       {(market.notices.length > 0 || market.lateNotices.length > 0) && (
-        <div className="toasts">
+        <PricePops anchorRef={balanceMark}>
           {market.notices.map((notice) => (
-            <ResultToast key={notice.roundId} notice={notice} onDone={() => market.dismissNotice(notice.roundId)} />
+            <ResultPop key={notice.roundId} notice={notice} onDone={() => market.dismissNotice(notice.roundId)} />
           ))}
           {market.lateNotices.map((id) => (
-            <LateToast key={id} onDone={() => market.dismissLate(id)} />
+            <LatePop key={id} onDone={() => market.dismissLate(id)} />
           ))}
-        </div>
+        </PricePops>
       )}
 
       <footer className="footer">
@@ -1009,7 +1011,7 @@ function BetChip({
   )
 }
 
-function BalanceFigure({ micros }: { micros: number | null }) {
+function BalanceFigure({ micros, markRef }: { micros: number | null; markRef: RefObject<HTMLParagraphElement | null> }) {
   const [shown, setShown] = useState<number | null>(micros)
   const [dir, setDir] = useState<"" | "debit">("")
   const drawn = useRef<number | null>(micros)
@@ -1048,7 +1050,7 @@ function BalanceFigure({ micros }: { micros: number | null }) {
   }, [micros])
 
   return (
-    <p className="balance" data-dir={dir}>
+    <p ref={markRef} className="balance" data-dir={dir}>
       {shown == null ? "$—" : formatMoney(shown)}
     </p>
   )
@@ -1897,8 +1899,101 @@ function Replay({ row, windowMs, onClose }: { row: HistoryRound; windowMs: numbe
   )
 }
 
-/** Matches the toast-out duration in styles.css. */
-const TOAST_LEAVE_MS = 240
+/** Matches the pop-out duration in styles.css. */
+const POP_LEAVE_MS = 240
+
+function domRect(node: HTMLElement): PopRect {
+  const rect = node.getBoundingClientRect()
+  return {
+    left: rect.left,
+    top: rect.top,
+    right: rect.right,
+    bottom: rect.bottom,
+    width: rect.width,
+    height: rect.height,
+  }
+}
+
+function PricePops({
+  anchorRef,
+  children,
+}: {
+  anchorRef: RefObject<HTMLParagraphElement | null>
+  children: ReactNode
+}) {
+  const rootRef = useRef<HTMLDivElement>(null)
+  const [places, setPlaces] = useState<PlacedPop[] | null>(null)
+  const items = Children.toArray(children)
+  useLayoutEffect(() => {
+    let frame = 0
+    const measure = () => {
+      const balance = anchorRef.current
+      const root = rootRef.current
+      if (!balance || !root || balance.getBoundingClientRect().width === 0) return
+      const nodes = [...root.querySelectorAll<HTMLElement>(".price-pop")]
+      if (nodes.length === 0) return
+      const view = window.visualViewport
+      const next = placePricePops(
+        domRect(balance),
+        nodes.map((node) => ({ width: node.offsetWidth, height: node.offsetHeight })),
+        { width: view?.width ?? window.innerWidth, height: view?.height ?? window.innerHeight },
+      )
+      setPlaces((current) => (samePlaces(current, next) ? current : next))
+    }
+    const kick = () => {
+      cancelAnimationFrame(frame)
+      frame = requestAnimationFrame(measure)
+    }
+    kick()
+    const observer = new ResizeObserver(kick)
+    let node: HTMLElement | null = anchorRef.current
+    for (let depth = 0; depth < 4 && node; depth += 1) {
+      observer.observe(node)
+      node = node.parentElement
+    }
+    for (const node of rootRef.current?.querySelectorAll<HTMLElement>(".price-pop") ?? []) observer.observe(node)
+    window.addEventListener("resize", kick)
+    window.addEventListener("scroll", kick, true)
+    const view = window.visualViewport
+    view?.addEventListener("resize", kick)
+    view?.addEventListener("scroll", kick)
+    return () => {
+      cancelAnimationFrame(frame)
+      observer.disconnect()
+      window.removeEventListener("resize", kick)
+      window.removeEventListener("scroll", kick, true)
+      view?.removeEventListener("resize", kick)
+      view?.removeEventListener("scroll", kick)
+    }
+  }, [items.length, anchorRef])
+  return (
+    <div ref={rootRef} className="price-pops">
+      {items.map((child, index) => {
+        const place = places?.[index]
+        const key = isValidElement(child) ? child.key : index
+        return (
+          <div
+            key={key}
+            className="price-pop-slot"
+            data-ready={place ? "1" : "0"}
+            data-side={place?.side ?? "below"}
+            style={place ? { left: place.left, top: place.top } : undefined}
+          >
+            {child}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function samePlaces(current: PlacedPop[] | null, next: PlacedPop[]): boolean {
+  if (!current || current.length !== next.length) return false
+  return current.every((place, index) => {
+    const other = next[index]
+    return !!other && place.side === other.side && Math.round(place.left) === Math.round(other.left) && Math.round(place.top) === Math.round(other.top)
+  })
+}
 
 function useToastLeave(waitMs: number, startedAt: number, onDone: () => void) {
   const [leaving, setLeaving] = useState(false)
@@ -1924,56 +2019,59 @@ function useToastLeave(waitMs: number, startedAt: number, onDone: () => void) {
 
   useEffect(() => {
     if (!leaving) return
-    const id = window.setTimeout(() => doneRef.current(), TOAST_LEAVE_MS)
+    const id = window.setTimeout(() => doneRef.current(), POP_LEAVE_MS)
     return () => window.clearTimeout(id)
   }, [leaving])
 
   return { leaving, close: () => closeRef.current() }
 }
 
-function LateToast({ onDone }: { onDone: () => void }) {
+function LatePop({ onDone }: { onDone: () => void }) {
   const { text } = useI18n()
   const started = useRef(Date.now()).current
   const { leaving, close } = useToastLeave(RESULT_MS, started, onDone)
   return (
-    <button type="button" className={leaving ? "toast late leaving" : "toast late"} onClick={close}>
-      <span className="toast-copy">{text.lateBuyIn}</span>
+    <button type="button" className={leaving ? "price-pop late leaving" : "price-pop late"} onClick={close}>
+      {text.lateBuyIn}
     </button>
   )
 }
 
-function ResultToast({ notice, onDone }: { notice: MarketNotice; onDone: () => void }) {
+function popClass(notice: MarketNotice): string {
+  if (notice.kind === "settling") return "settling"
+  if (notice.tone === "debit") return "debit"
+  if (notice.signed) return "credit"
+  if (notice.tone === "void") return "void"
+  return "push"
+}
+
+function ResultPop({ notice, onDone }: { notice: MarketNotice; onDone: () => void }) {
   const { text } = useI18n()
   const kind = notice.kind
   const started = notice.kind === "settling" ? notice.openedAt : notice.shownAt
   const wait = kind === "settling" ? SETTLING_MS : RESULT_MS
   const { leaving, close } = useToastLeave(wait, started, onDone)
-  const tone = notice.kind === "result" ? notice.tone : ""
-  const title =
-    tone === "credit" ? text.credited : tone === "debit" ? text.deducted : tone === "void" ? text.void : text.push
-  const className = [
-    "toast",
-    notice.kind === "settling" ? "settling" : `result ${tone}`,
-    leaving ? "leaving" : "",
-  ]
-    .filter(Boolean)
-    .join(" ")
-
+  const tone = popClass(notice)
+  const figure = notice.kind === "result" ? pricePopText(notice.tone, notice.amountMicros, notice.signed) : null
+  const label =
+    notice.kind === "settling"
+      ? text.settling
+      : notice.tone === "credit"
+        ? text.credited
+        : notice.tone === "debit"
+          ? text.deducted
+          : notice.tone === "void"
+            ? text.void
+            : text.push
   return (
-    <button type="button" className={className} onClick={close}>
-      <span key={notice.kind === "settling" ? "settling" : tone} className="toast-copy">
-        {notice.kind === "settling" ? (
-          <>
-            <strong>{text.settling}</strong>
-            <span className="toast-shimmer" aria-hidden="true" />
-          </>
-        ) : (
-          <>
-            <strong>{title}</strong>
-            <b>{formatMoney(notice.amountMicros, notice.signed)}</b>
-            {notice.stakeReturned && <span className="toast-sub">{text.stakeReturned}</span>}
-          </>
-        )}
+    <button
+      type="button"
+      className={leaving ? `price-pop ${tone} leaving` : `price-pop ${tone}`}
+      aria-label={figure ? `${label} ${figure}` : label}
+      onClick={close}
+    >
+      <span key={notice.kind === "settling" ? "settling" : tone} className="price-pop-figure">
+        {figure ?? text.settling}
       </span>
     </button>
   )
