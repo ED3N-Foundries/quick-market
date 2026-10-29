@@ -60,7 +60,7 @@ test("an unbetted user stays on the betting window while a market is live", () =
   expect(focusPool(next, [], 16_000)?.id).toBe(3)
 })
 
-test("a held market scrolls two viewports and the bet window does not", () => {
+test("a held market is the ride from strike to settlement, and the bet window is not", () => {
   const market = card(band(2, 10_000, "101"))
   const betting = board({
     blockStart: 20_000,
@@ -73,9 +73,8 @@ test("a held market scrolls two viewports and the bet window does not", () => {
   })
   const bet = [{ roundId: 2, side: "down" as const, stakeMicros: 1_000_000 }]
   expect(followWindow(betting, [], 21_000)).toEqual({ start: 20_000, end: 25_000 })
-  expect(followWindow(betting, bet, 15_000)).toEqual({ start: 10_000, end: 15_000 })
-  expect(followWindow(betting, bet, 24_999)).toEqual({ start: 19_999, end: 24_999 })
-  expect(24_999 - 15_000).toBe(5_000 * 2 - 1)
+  expect(followWindow(betting, bet, 15_000)).toEqual({ start: 15_000, end: 25_000 })
+  expect(followWindow(betting, bet, 24_999)).toEqual({ start: 15_000, end: 25_000 })
 })
 
 test("an unstruck board still shows the betting window", () => {
@@ -94,18 +93,18 @@ test("the follow view stays one window wide and always contains now", () => {
   }
 })
 
-test("an open bet keeps one view wide and still focuses that market", () => {
+test("an open bet shows its market once struck and still focuses it", () => {
   const current = board()
   const bet = [{ roundId: 1, side: "up" as const, stakeMicros: 1_000_000 }]
   expect(heldMarket(current, bet, 12_000)?.id).toBe(1)
-  expect(followWindow(current, bet, 12_000)).toEqual({ start: 7_000, end: 12_000 })
+  expect(followWindow(current, bet, 12_000)).toEqual({ start: 5_000, end: 15_000 })
   expect(focusPool(current, bet, 12_000)?.id).toBe(1)
   expect(followWindow(current, bet, 15_000)).toEqual({ start: 10_000, end: 15_000 })
   expect(followWindow(current, bet, 15_250)).toEqual({ start: 15_000, end: 20_000 })
   expect(heldMarket(current, bet, 15_000)).toBeNull()
 })
 
-test("a struck market scrolls one view wide until it settles", () => {
+test("a struck market stays on its own span until it settles", () => {
   const live = card(band(2, 10_000, "101"))
   const current = board({
     blockStart: 10_000,
@@ -118,10 +117,9 @@ test("a struck market scrolls one view wide until it settles", () => {
   const bet = [{ roundId: 2, side: "down" as const, stakeMicros: 1_000_000 }]
   expect(chartMarket(current, [], 16_000)).toBeNull()
   expect(followWindow(current, [], 16_000)).toEqual({ start: 15_000, end: 20_000 })
-  expect(followWindow(current, bet, 16_000)).toEqual({ start: 11_000, end: 16_000 })
-  expect(followWindow(current, bet, 21_000)).toEqual({ start: 16_000, end: 21_000 })
+  expect(followWindow(current, bet, 16_000)).toEqual({ start: 15_000, end: 25_000 })
+  expect(followWindow(current, bet, 21_000)).toEqual({ start: 15_000, end: 25_000 })
   expect(heldMarket(current, bet, 21_000)?.id).toBe(2)
-  expect(followWindow(current, bet, 21_000).end - followWindow(current, bet, 21_000).start).toBe(5_000)
 })
 
 test("a bet waiting for its open does not borrow the other market's strike", () => {
@@ -147,8 +145,7 @@ test("two open bets stay on the one that settles first", () => {
     { roundId: 1, side: "up" as const, stakeMicros: 1 },
   ]
   expect(heldMarket(current, bets, 12_000)?.id).toBe(1)
-  expect(followWindow(current, bets, 12_000)).toEqual({ start: 7_000, end: 12_000 })
-  expect(followWindow(current, bets, 12_000).end - followWindow(current, bets, 12_000).start).toBe(5_000)
+  expect(followWindow(current, bets, 12_000)).toEqual({ start: 5_000, end: 15_000 })
 })
 
 test("a delay-sized miss stays on the server join id", () => {

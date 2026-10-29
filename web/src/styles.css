@@ -19,6 +19,7 @@
   --loss-ink: #f3f0e8;
   --loss-line: rgba(243, 240, 232, 0.28);
   --warn: #e2b340;
+  --warn-ink: #1c1404;
   font-family: ui-sans-serif, system-ui, sans-serif;
   font-synthesis: none;
   background: var(--bg);
@@ -1137,15 +1138,16 @@ tr.open td { color: var(--text); }
 .price-pop-slot[data-side="right"] { --pop-in-x: -10px; --pop-in-y: 0px; --pop-out-x: 10px; --pop-out-y: 0px; }
 .price-pop-slot[data-side="left"] { --pop-in-x: 10px; --pop-in-y: 0px; --pop-out-x: -10px; --pop-out-y: 0px; }
 .app button.price-pop {
+  --pop-fill: var(--warn);
   display: block;
   width: max-content;
   max-width: min(260px, calc(100vw - 16px));
   margin: 0;
   padding: 6px 10px;
-  border: 1px solid var(--line);
+  border: 1px solid color-mix(in srgb, var(--pop-fill) 55%, white);
   border-radius: 999px;
-  background: var(--raise);
-  color: var(--text);
+  background: var(--pop-fill);
+  color: var(--warn-ink);
   font-size: 16px;
   font-weight: 650;
   font-variant-numeric: tabular-nums;
@@ -1155,8 +1157,17 @@ tr.open td { color: var(--text); }
   white-space: nowrap;
   pointer-events: auto;
   cursor: pointer;
-  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.45);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--pop-fill) 40%, transparent),
+    0 0 16px color-mix(in srgb, var(--pop-fill) 75%, transparent),
+    0 10px 24px rgba(0, 0, 0, 0.45);
 }
+.app button.price-pop.credit { --pop-fill: var(--up); color: var(--up-ink); }
+.app button.price-pop.debit { --pop-fill: var(--down); color: var(--down-ink); }
+.app button.price-pop.push { --pop-fill: var(--push); color: var(--push-ink); }
+.app button.price-pop.void,
+.app button.price-pop.late,
+.app button.price-pop.settling { --pop-fill: var(--warn); color: var(--warn-ink); }
 .price-pop-slot[data-ready="1"] .price-pop {
   animation: pop-in 280ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
@@ -1176,13 +1187,8 @@ tr.open td { color: var(--text); }
   from { opacity: 0; }
   to { opacity: 1; }
 }
-.app button.price-pop.credit { color: var(--up); }
-.app button.price-pop.debit { color: var(--down); }
-.app button.price-pop.push { color: var(--push); }
-.app button.price-pop.void { color: var(--warn); }
 .app button.price-pop.late {
   border-radius: 14px;
-  color: var(--warn);
   font-size: 13px;
   font-weight: 560;
   line-height: 1.35;

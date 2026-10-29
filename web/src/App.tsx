@@ -61,7 +61,6 @@ export function App() {
   const chartRef = useRef<TapeChart | null>(null)
   const walletMenuRef = useRef<HTMLSpanElement>(null)
   const viewRef = useRef({ follow: true, start: 0, end: 0 })
-  const viewSecondsRef = useRef(market.config.viewSeconds)
   const handoffRef = useRef(market.handoff)
   const boardRef = useRef(market.board)
   const openBuyInsRef = useRef<OpenBuyIn[]>([])
@@ -86,7 +85,6 @@ export function App() {
   const scrub = useScrub(chart)
   boardRef.current = market.board
   openBuyInsRef.current = market.you?.openBuyIns ?? []
-  viewSecondsRef.current = market.config.viewSeconds
   const handoff = market.handoff
   handoffRef.current = handoff
 
@@ -164,12 +162,18 @@ export function App() {
     if (!canvas) return
     const next = mountChart(canvas, {
       getNow: () => Date.now() + market.offsetRef.current,
-      getView: () => viewRef.current,
+      getView: () => {
+        const board = boardRef.current
+        if (board && chartMarket(board, openBuyInsRef.current, Date.now() + market.offsetRef.current)) {
+          return { follow: true, start: 0, end: 0 }
+        }
+        return viewRef.current
+      },
       getClock: () => {
         const board = boardRef.current
         if (!board) return null
         const now = Date.now() + market.offsetRef.current
-        const frame = followWindow(board, openBuyInsRef.current, now, (viewSecondsRef.current || 5) * 1000)
+        const frame = followWindow(board, openBuyInsRef.current, now)
         return { blockStart: frame.start, blockEnd: frame.end }
       },
       getStrike: () => {
@@ -221,6 +225,12 @@ export function App() {
     const id = window.setTimeout(() => setWindowTick(board.windowEndsAt), left)
     return () => window.clearTimeout(id)
   }, [board, market.offsetRef])
+  const rideChart = board ? chartMarket(board, openBuyIns, now) : null
+  useEffect(() => {
+    if (!rideChart) return
+    viewRef.current = { follow: true, start: 0, end: 0 }
+    setFollowing(true)
+  }, [rideChart])
   const heldSpan = board ? heldMarket(board, openBuyIns, now) : null
   const focus = focusPool(board, openBuyIns, now)
   const total = (focus?.poolUpMicros ?? 0) + (focus?.poolDownMicros ?? 0)
@@ -294,6 +304,8 @@ export function App() {
 
   function onPointerDown(event: ReactPointerEvent<HTMLElement>) {
     if (handoffRef.current) return
+    const riding = boardRef.current
+    if (riding && chartMarket(riding, openBuyInsRef.current, Date.now() + market.offsetRef.current)) return
     const current = chartRef.current?.getScale()
     if (!current || event.button !== 0) return
     scrub.clear()
@@ -388,7 +400,7 @@ export function App() {
           </p>
         )}
         {market.feed === "stale" && !handoff && <p className="feed-flag">{text.priceDelayed}</p>}
-        {!following && (
+        {!following && !rideChart && (
           <button
             type="button"
             className="now-jump"

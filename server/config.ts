@@ -18,7 +18,7 @@ export function marketMs(): number {
   return marketPreferences.marketSeconds * 1000
 }
 
-/** Width of the scrolling chart while a buy-in is riding. */
+/** Quiet-socket gap, in ms, before the client reloads the tape. */
 export function viewMs(): number {
   return marketPreferences.viewSeconds * 1000
 }

@@ -1,5 +1,5 @@
 import { RENDER_MS } from "../../shared/market"
-import { buyInSession, marketScroll } from "./buyInChart"
+import { buyInSession } from "./buyInChart"
 import type { Band, Board, OpenBuyIn, PoolCard } from "./types"
 
 function findMarket(board: Board, id: number): Band | null {
@@ -25,9 +25,9 @@ function isResolving(market: Band | null, now: number): market is Band {
   return !!market?.strike && now >= market.strikeAt && now < market.settlesAt
 }
 
-/** The market the rolling chart is centered on.
+/** The market on the chart from its strike through settlement.
  *  Only a bet you are riding, after its strike and before it settles.
- *  An unbetted user stays on the betting window, and an unstruck bet does not roll it.
+ *  An unbetted user stays on the betting window, and an unstruck bet does not switch it.
  */
 export function chartMarket(board: Board, openBuyIns: OpenBuyIn[], now: number): Band | null {
   const held = heldMarket(board, openBuyIns, now)
@@ -35,12 +35,12 @@ export function chartMarket(board: Board, openBuyIns: OpenBuyIn[], now: number):
   return null
 }
 
-/** Follow span for the chart. The market chart scrolls one view wide with now
- *  on the right edge. The bet chart stays the fixed slice that contains now.
- *  A held bet does not change the width.
+/** Follow span for the chart. A struck bet is that market, strike on the left
+ *  and settlement on the right. Otherwise the betting window that contains now.
  */
-export function followWindow(board: Board, openBuyIns: OpenBuyIn[], now: number, viewMs = 5_000): { start: number; end: number } {
-  if (chartMarket(board, openBuyIns, now)) return marketScroll(now, viewMs)
+export function followWindow(board: Board, openBuyIns: OpenBuyIn[], now: number): { start: number; end: number } {
+  const market = chartMarket(board, openBuyIns, now)
+  if (market) return { start: market.strikeAt, end: market.settlesAt }
   return buyInWindow(board, now)
 }
 
