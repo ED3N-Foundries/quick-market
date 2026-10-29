@@ -35,6 +35,7 @@ import {
 import { RESULT_MS, SETTLING_MS, type MarketNotice } from "./resultNotice"
 import type { Band, Board, HistoryRound, OpenBuyIn, Side, TrayRow } from "./types"
 import { readCachedBalance, visibleBalance } from "./balanceCache"
+import { BALANCE_MS, balanceStep } from "./balanceMotion"
 import { readGrantConfirmations } from "./grantChain"
 import { grantLanded, grantTxUrl } from "./grantWatch"
 import { copy, localize, type Copy } from "./copy"
@@ -42,6 +43,7 @@ import { LanguageSelect, useI18n } from "./i18n"
 import { formatLag, lagButtonName, type LinkStatus } from "./lag"
 import { useMarket } from "./useMarket"
 import { FeedBadge } from "./venues"
+import { prefersReducedMotion } from "./sideFigures"
 import { useSideBook } from "./useSideBook"
 import { grantWaitStatus, loginStatus, loginSteps, loginStepState, SIGN_PROMPT } from "./phantomConnect"
 import { useSession } from "./wallet"
@@ -1008,24 +1010,46 @@ function BetChip({
 }
 
 function BalanceFigure({ micros }: { micros: number | null }) {
-  const [dir, setDir] = useState<"" | "credit" | "debit">("")
-  const prevRef = useRef<number | null>(micros)
+  const [shown, setShown] = useState<number | null>(micros)
+  const [dir, setDir] = useState<"" | "debit">("")
+  const drawn = useRef<number | null>(micros)
 
   useEffect(() => {
-    const previous = prevRef.current
-    prevRef.current = micros
-    if (micros == null || previous == null || previous === micros) {
-      if (micros == null) setDir("")
-      return
+    let frame = 0
+    let settle = 0
+    const from = drawn.current
+    const stop = () => {
+      if (frame) cancelAnimationFrame(frame)
+      if (settle) window.clearTimeout(settle)
     }
-    setDir(micros > previous ? "credit" : "debit")
-    const clearDir = window.setTimeout(() => setDir(""), 730)
-    return () => window.clearTimeout(clearDir)
+    if (micros == null || from == null || from === micros || prefersReducedMotion()) {
+      drawn.current = micros
+      setShown(micros)
+      setDir("")
+      return stop
+    }
+    const down = micros < from
+    setDir(down ? "debit" : "")
+    const start = performance.now()
+    const tick = (now: number) => {
+      const next = balanceStep(from, micros, (now - start) / BALANCE_MS)
+      drawn.current = next
+      setShown(next)
+      if ((now - start) < BALANCE_MS) {
+        frame = requestAnimationFrame(tick)
+        return
+      }
+      drawn.current = micros
+      setShown(micros)
+      if (down) settle = window.setTimeout(() => setDir(""), 200)
+    }
+    frame = requestAnimationFrame(tick)
+    return stop
   }, [micros])
 
   return (
     <p className="balance" data-dir={dir}>
-      {micros == null ? "$—" : formatMoney(micros)}
+      {shown == null ? "$—" : formatMoney(shown)}
     </p>
   )
 }
@@ -1873,49 +1897,83 @@ function Replay({ row, windowMs, onClose }: { row: HistoryRound; windowMs: numbe
   )
 }
 
-function LateToast({ onDone }: { onDone: () => void }) {
-  const { text } = useI18n()
+/** Matches the toast-out duration in styles.css. */
+const TOAST_LEAVE_MS = 240
+
+function useToastLeave(waitMs: number, startedAt: number, onDone: () => void) {
+  const [leaving, setLeaving] = useState(false)
   const doneRef = useRef(onDone)
   doneRef.current = onDone
+  const closed = useRef(false)
+  const closeRef = useRef(() => {})
+  closeRef.current = () => {
+    if (closed.current) return
+    closed.current = true
+    if (prefersReducedMotion()) {
+      requestAnimationFrame(() => doneRef.current())
+      return
+    }
+    setLeaving(true)
+  }
+
   useEffect(() => {
-    const id = window.setTimeout(() => doneRef.current(), 4_500)
+    const left = Math.max(0, waitMs - (Date.now() - startedAt))
+    const id = window.setTimeout(() => closeRef.current(), left)
     return () => window.clearTimeout(id)
-  }, [])
+  }, [waitMs, startedAt])
+
+  useEffect(() => {
+    if (!leaving) return
+    const id = window.setTimeout(() => doneRef.current(), TOAST_LEAVE_MS)
+    return () => window.clearTimeout(id)
+  }, [leaving])
+
+  return { leaving, close: () => closeRef.current() }
+}
+
+function LateToast({ onDone }: { onDone: () => void }) {
+  const { text } = useI18n()
+  const started = useRef(Date.now()).current
+  const { leaving, close } = useToastLeave(RESULT_MS, started, onDone)
   return (
-    <button type="button" className="toast late" onClick={onDone}>
-      <span>{text.lateBuyIn}</span>
+    <button type="button" className={leaving ? "toast late leaving" : "toast late"} onClick={close}>
+      <span className="toast-copy">{text.lateBuyIn}</span>
     </button>
   )
 }
 
 function ResultToast({ notice, onDone }: { notice: MarketNotice; onDone: () => void }) {
   const { text } = useI18n()
-  const doneRef = useRef(onDone)
-  doneRef.current = onDone
   const kind = notice.kind
   const started = notice.kind === "settling" ? notice.openedAt : notice.shownAt
-  useEffect(() => {
-    const wait = kind === "settling" ? SETTLING_MS : RESULT_MS
-    const left = Math.max(0, wait - (Date.now() - started))
-    const id = window.setTimeout(() => doneRef.current(), left)
-    return () => window.clearTimeout(id)
-  }, [kind, started])
-
-  if (notice.kind === "settling") {
-    return (
-      <button type="button" className="toast settling" onClick={onDone}>
-        <strong>{text.settling}</strong>
-        <span className="toast-shimmer" aria-hidden="true" />
-      </button>
-    )
-  }
-
+  const wait = kind === "settling" ? SETTLING_MS : RESULT_MS
+  const { leaving, close } = useToastLeave(wait, started, onDone)
+  const tone = notice.kind === "result" ? notice.tone : ""
   const title =
-    notice.tone === "credit" ? text.credited : notice.tone === "debit" ? text.deducted : notice.tone === "void" ? text.void : text.push
+    tone === "credit" ? text.credited : tone === "debit" ? text.deducted : tone === "void" ? text.void : text.push
+  const className = [
+    "toast",
+    notice.kind === "settling" ? "settling" : `result ${tone}`,
+    leaving ? "leaving" : "",
+  ]
+    .filter(Boolean)
+    .join(" ")
+
   return (
-    <button type="button" className={`toast result ${notice.tone}`} onClick={onDone}>
-      <strong>{title}</strong>
-      <b>{formatMoney(notice.amountMicros)}</b>
+    <button type="button" className={className} onClick={close}>
+      <span key={notice.kind === "settling" ? "settling" : tone} className="toast-copy">
+        {notice.kind === "settling" ? (
+          <>
+            <strong>{text.settling}</strong>
+            <span className="toast-shimmer" aria-hidden="true" />
+          </>
+        ) : (
+          <>
+            <strong>{title}</strong>
+            <b>{formatMoney(notice.amountMicros)}</b>
+          </>
+        )}
+      </span>
     </button>
   )
 }
