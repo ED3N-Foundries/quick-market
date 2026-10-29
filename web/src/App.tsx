@@ -1970,7 +1970,8 @@ function ResultToast({ notice, onDone }: { notice: MarketNotice; onDone: () => v
         ) : (
           <>
             <strong>{title}</strong>
-            <b>{formatMoney(notice.amountMicros)}</b>
+            <b>{formatMoney(notice.amountMicros, notice.signed)}</b>
+            {notice.stakeReturned && <span className="toast-sub">{text.stakeReturned}</span>}
           </>
         )}
       </span>

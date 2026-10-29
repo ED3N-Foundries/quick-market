@@ -5,6 +5,7 @@ import {
   emptyNotices,
   resultAmount,
   resultTone,
+  stakeCameBack,
   settleNotice,
   SETTLING_MS,
   tickNotices,
@@ -73,7 +74,15 @@ test("a result replaces the settling card and a fast result never shows the load
   const opened = tickNotices(emptyNotices(), bets, 20_000, 50_000)
   const replaced = settleNotice(opened, message(), "me", 51_000)
   expect(replaced.cards).toEqual([
-    { kind: "result", roundId: 1, tone: "credit", amountMicros: 18_500_000, shownAt: 51_000 },
+    {
+      kind: "result",
+      roundId: 1,
+      tone: "credit",
+      amountMicros: 8_500_000,
+      signed: true,
+      stakeReturned: true,
+      shownAt: 51_000,
+    },
   ])
   const lateTick = tickNotices(replaced, bets, 22_000, 52_000)
   expect(lateTick).toBe(replaced)
@@ -108,16 +117,22 @@ test("a settling card drops after the wait, and a late result still shows", () =
     "me",
     70_000,
   )
-  expect(late.cards).toEqual([{ kind: "result", roundId: 1, tone: "debit", amountMicros: 10_000_000, shownAt: 70_000 }])
+  expect(late.cards).toEqual([
+    { kind: "result", roundId: 1, tone: "debit", amountMicros: 10_000_000, signed: false, stakeReturned: false, shownAt: 70_000 },
+  ])
 })
 
-test("push and void show the stake, a credit shows the payout, and someone else is ignored", () => {
+test("a win shows the gain, and push, void, and a loss show the stake", () => {
   expect(resultTone("void", null, 10_000_000)).toBe("void")
   expect(resultTone("refund", "push", 10_000_000)).toBe("push")
   expect(resultTone("paid", "up", 18_500_000)).toBe("credit")
-  expect(resultAmount("credit", 10_000_000, 18_500_000)).toBe(18_500_000)
+  expect(resultAmount("credit", 10_000_000, 18_500_000)).toBe(8_500_000)
+  expect(resultAmount("credit", 10_000_000, 10_000_000)).toBe(10_000_000)
   expect(resultAmount("debit", 10_000_000, 0)).toBe(10_000_000)
   expect(resultAmount("push", 10_000_000, 10_000_000)).toBe(10_000_000)
+  expect(stakeCameBack(10_000_000, 18_500_000)).toBe(true)
+  expect(stakeCameBack(10_000_000, 10_000_000)).toBe(true)
+  expect(stakeCameBack(10_000_000, 0)).toBe(false)
   const state = emptyNotices()
   expect(
     settleNotice(
@@ -131,7 +146,7 @@ test("push and void show the stake, a credit shows the payout, and someone else 
       "me",
       1,
     ).cards[0],
-  ).toMatchObject({ tone: "void", amountMicros: 10_000_000 })
+  ).toMatchObject({ tone: "void", amountMicros: 10_000_000, signed: false, stakeReturned: true })
   expect(
     settleNotice(
       state,
@@ -143,7 +158,7 @@ test("push and void show the stake, a credit shows the payout, and someone else 
       "me",
       1,
     ).cards[0],
-  ).toMatchObject({ tone: "push", amountMicros: 10_000_000 })
+  ).toMatchObject({ tone: "push", amountMicros: 10_000_000, signed: false, stakeReturned: true })
   expect(settleNotice(state, message(), "other", 1)).toBe(state)
 })
 

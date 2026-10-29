@@ -9,7 +9,17 @@ export type ResultTone = "credit" | "debit" | "push" | "void"
 
 export type MarketNotice =
   | { kind: "settling"; roundId: number; side: Side; stakeMicros: number; openedAt: number }
-  | { kind: "result"; roundId: number; tone: ResultTone; amountMicros: number; shownAt: number }
+  | {
+      kind: "result"
+      roundId: number
+      tone: ResultTone
+      /** Gain on a win, with a plus. Stake on a loss, push, void, or a stake-only refund. */
+      amountMicros: number
+      signed: boolean
+      /** The stake came back as well as any gain. */
+      stakeReturned: boolean
+      shownAt: number
+    }
 
 export type NoticeState = {
   cards: MarketNotice[]
@@ -48,9 +58,15 @@ export function resultTone(resolution: string, winningSide: string | null, payou
   return "credit"
 }
 
-/** Credited shows the payout. Deducted, push, and void show the stake. */
+/** A win shows the gain. A loss, push, void, or stake-only refund shows the stake. */
 export function resultAmount(tone: ResultTone, stakeMicros: number, payoutMicros: number): number {
+  if (tone === "credit" && payoutMicros > stakeMicros) return payoutMicros - stakeMicros
   return tone === "credit" ? payoutMicros : stakeMicros
+}
+
+/** True when the whole stake came back, whether or not there was also a gain. */
+export function stakeCameBack(stakeMicros: number, payoutMicros: number): boolean {
+  return stakeMicros > 0 && payoutMicros >= stakeMicros
 }
 
 function seenWith(seen: readonly number[], roundId: number): number[] {
@@ -96,6 +112,8 @@ export function settleNotice(state: NoticeState, message: SettledMessage, addres
     roundId: message.roundId,
     tone,
     amountMicros: resultAmount(tone, mine.stakeMicros, mine.payoutMicros),
+    signed: tone === "credit" && mine.payoutMicros > mine.stakeMicros,
+    stakeReturned: stakeCameBack(mine.stakeMicros, mine.payoutMicros),
     shownAt: wallNow,
   }
   const cards = existing
