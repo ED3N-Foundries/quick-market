@@ -1,5 +1,5 @@
 import { RENDER_MS } from "../../shared/market"
-import { buyInSession } from "./buyInChart"
+import { buyInSession, rideWindow } from "./buyInChart"
 import type { Band, Board, OpenBuyIn, PoolCard } from "./types"
 
 function findMarket(board: Board, id: number): Band | null {
@@ -35,12 +35,18 @@ export function chartMarket(board: Board, openBuyIns: OpenBuyIn[], now: number):
   return null
 }
 
-/** Follow span for the chart. A struck bet is that market, strike on the left
- *  and settlement on the right. Otherwise the betting window that contains now.
+/** Follow span for the chart. A struck bet walks across one view from the strike,
+ *  then rides with now on the right until settlement. Otherwise the betting
+ *  window that contains now.
  */
-export function followWindow(board: Board, openBuyIns: OpenBuyIn[], now: number): { start: number; end: number } {
+export function followWindow(
+  board: Board,
+  openBuyIns: OpenBuyIn[],
+  now: number,
+  viewMs = 5_000,
+): { start: number; end: number } {
   const market = chartMarket(board, openBuyIns, now)
-  if (market) return { start: market.strikeAt, end: market.settlesAt }
+  if (market) return rideWindow(market, now, viewMs)
   return buyInWindow(board, now)
 }
 

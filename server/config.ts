@@ -18,7 +18,7 @@ export function marketMs(): number {
   return marketPreferences.marketSeconds * 1000
 }
 
-/** Quiet-socket gap, in ms, before the client reloads the tape. */
+/** Ride-chart width, in ms. The client also reloads the tape after a quiet socket of this length. */
 export function viewMs(): number {
   return marketPreferences.viewSeconds * 1000
 }

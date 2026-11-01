@@ -61,6 +61,7 @@ export function App() {
   const chartRef = useRef<TapeChart | null>(null)
   const walletMenuRef = useRef<HTMLSpanElement>(null)
   const viewRef = useRef({ follow: true, start: 0, end: 0 })
+  const viewSecondsRef = useRef(market.config.viewSeconds)
   const handoffRef = useRef(market.handoff)
   const boardRef = useRef(market.board)
   const openBuyInsRef = useRef<OpenBuyIn[]>([])
@@ -85,6 +86,7 @@ export function App() {
   const scrub = useScrub(chart)
   boardRef.current = market.board
   openBuyInsRef.current = market.you?.openBuyIns ?? []
+  viewSecondsRef.current = market.config.viewSeconds
   const handoff = market.handoff
   handoffRef.current = handoff
 
@@ -173,7 +175,7 @@ export function App() {
         const board = boardRef.current
         if (!board) return null
         const now = Date.now() + market.offsetRef.current
-        const frame = followWindow(board, openBuyInsRef.current, now)
+        const frame = followWindow(board, openBuyInsRef.current, now, (viewSecondsRef.current || 5) * 1000)
         return { blockStart: frame.start, blockEnd: frame.end }
       },
       getStrike: () => {
