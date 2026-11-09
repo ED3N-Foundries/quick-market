@@ -1025,6 +1025,7 @@ a.grant-tx:hover { color: var(--text); }
 .share-preview { min-height: 2.6em; }
 .note { color: var(--text); margin-bottom: 0; }
 .note.bad { color: var(--down); }
+.note.warn { color: var(--warn); }
 .connect-error { overflow-wrap: anywhere; }
 .fee { margin-bottom: 0; }
 

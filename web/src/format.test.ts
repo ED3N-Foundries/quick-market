@@ -194,6 +194,14 @@ test("grant timing and labels describe an hourly claim", () => {
   const taiwan = grantSentence(amount, hour, "zh-TW")
   expect(taiwan).toContain("每小時一次")
   expect(taiwan).not.toContain("once an hour")
+  expect(isTestnetChain(0, "near-testnet")).toBe(true)
+  expect(chainMenuLabel(0, "NEAR Testnet", "en", "near-testnet")).toBe("NEAR Testnet")
+  expect(chainBadgeText(0, "NEAR Testnet", "en", "near-testnet")).toBe("NEAR Testnet")
+  expect(chainNetworkLabel(0, "NEAR Testnet", "en", "near-testnet")).toBe("NEAR Testnet")
+  expect(grantSentence(amount, hour, "en", "near-testnet")).toBe(
+    "Quick Market adds $100 QM to this balance once an hour on NEAR Testnet. The wallet is not charged, and no wallet popup is involved.",
+  )
+  expect(grantSentence(amount, hour, "zh-TW", "near-testnet")).toContain("NEAR 測試網")
 })
 
 test("the testnet brief states the live grant cadence", () => {

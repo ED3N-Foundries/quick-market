@@ -1,5 +1,6 @@
 import { LATE_BUY_IN_ERROR } from "../../shared/buyIn"
 import type { Lang } from "../../shared/lang"
+import type { ReportPhrases } from "../../shared/near"
 
 export type Copy = {
   language: string
@@ -16,6 +17,7 @@ export type Copy = {
   disconnect: string
   grantReady: string
   grantQm: string
+  grantNear: string
   depositUsdc: string
   grant: string
   deposit: string
@@ -39,6 +41,8 @@ export type Copy = {
   pushMark: string
   circleTitle: string
   qmTitle: string
+  nearTitle: string
+  nearBadge: string
   close: string
   network: string
   fromTo: string
@@ -56,6 +60,7 @@ export type Copy = {
   granting: string
   next: string
   withdrawQm: string
+  withdrawNear: string
   withdrawUsdc: string
   toWallet: string
   spendable: string
@@ -63,6 +68,7 @@ export type Copy = {
   max: string
   withdrawing: string
   paysQm: string
+  paysNear: string
   secondUnit: string
   previousMarkets: string
   lastTen: string
@@ -117,6 +123,7 @@ export type Copy = {
   briefMinute: string
   briefMinutes: (minutes: number) => string
   briefGrant: (amount: string, pace: string) => string
+  grantSentenceNear: (amount: string, pace: string) => string
   ready: string
   waitHours: (hours: number) => string
   waitHoursMinutes: (hours: number, minutes: number) => string
@@ -127,16 +134,24 @@ export type Copy = {
   chainTestnetMenu: string
   chainTestnetBadge: string
   chainTestnetNetwork: string
+  chainNearMenu: string
+  chainNearBadge: string
+  chainNearNetwork: string
   chainMainnet: string
   waitingPhantom: string
   approveSignIn: string
   signedBalance: string
+  signedBalanceNear: string
   confirmingSignIn: string
   stepPhantom: string
   stepApprove: string
   stepBalance: string
   stepConfirm: string
   mintingGrant: string
+  mintingGrantNear: string
+  approveNear: string
+  waitingNear: string
+  nearReport: ReportPhrases
   confirmationsIn: string
   waitingOne: string
   waitingMany: (left: number) => string
@@ -157,6 +172,7 @@ const en: Copy = {
   disconnect: "Disconnect",
   grantReady: "Grant ready",
   grantQm: "Grant QM USDC",
+  grantNear: "Grant QM",
   depositUsdc: "Deposit USDC",
   grant: "Grant",
   deposit: "Deposit",
@@ -180,6 +196,8 @@ const en: Copy = {
   pushMark: "= Push",
   circleTitle: "Circle USDC on Base",
   qmTitle: "Quick Market USDC on Base Sepolia. Play money, not Circle USDC.",
+  nearTitle: "Quick Market on NEAR Testnet. Play money, not NEAR and not USDC.",
+  nearBadge: "QM",
   close: "Close",
   network: "Network",
   fromTo: "From → To",
@@ -197,6 +215,7 @@ const en: Copy = {
   granting: "Granting…",
   next: "Next",
   withdrawQm: "Withdraw QM USDC",
+  withdrawNear: "Withdraw QM",
   withdrawUsdc: "Withdraw USDC",
   toWallet: "To wallet",
   spendable: "Spendable",
@@ -204,6 +223,7 @@ const en: Copy = {
   max: "Max",
   withdrawing: "Withdrawing…",
   paysQm: "Pays QM USDC to your wallet on Base Sepolia.",
+  paysNear: "Pays QM to your NEAR account.",
   secondUnit: "s",
   previousMarkets: "Previous markets",
   lastTen: "(last 10)",
@@ -259,6 +279,8 @@ const en: Copy = {
   briefMinute: "every minute",
   briefMinutes: (minutes) => `every ${minutes} minutes`,
   briefGrant: (amount, pace) => `You receive ${amount} ${pace}.`,
+  grantSentenceNear: (amount, pace) =>
+    `Quick Market adds ${amount} QM to this balance ${pace} on NEAR Testnet. The wallet is not charged, and no wallet popup is involved.`,
   ready: "Ready",
   waitHours: (hours) => `${hours}h`,
   waitHoursMinutes: (hours, minutes) => `${hours}h ${minutes}m`,
@@ -269,16 +291,33 @@ const en: Copy = {
   chainTestnetMenu: "Base Sepolia · Testnet",
   chainTestnetBadge: "Base Sepolia Testnet",
   chainTestnetNetwork: "Base Sepolia (Testnet)",
+  chainNearMenu: "NEAR Testnet",
+  chainNearBadge: "NEAR Testnet",
+  chainNearNetwork: "NEAR Testnet",
   chainMainnet: "Base Mainnet",
   waitingPhantom: "Waiting for Phantom",
   approveSignIn: "Approve the sign-in in Phantom",
   signedBalance: "Signed. Adding your balance on Base Sepolia. This can take a bit.",
+  signedBalanceNear: "Signed. Adding your balance on NEAR Testnet. This can take a bit.",
   confirmingSignIn: "Confirming sign-in",
   stepPhantom: "Phantom",
   stepApprove: "Approve",
   stepBalance: "Balance",
   stepConfirm: "Confirm",
   mintingGrant: "Minting the grant on Base Sepolia. This can take a bit.",
+  mintingGrantNear: "Minting the grant on NEAR Testnet. This can take a bit.",
+  approveNear: "Approve the sign-in in your NEAR wallet",
+  waitingNear: "Waiting for your NEAR wallet",
+  nearReport: {
+    treasury: (account) => `near-testnet treasury ${account}`,
+    near: (have, need) => `NEAR ${have} (need ${need})`,
+    qm: (have, need) => `QM ${have} (need ${need})`,
+    treasuryReady: "treasury ready",
+    agentsReady: "agents ready",
+    agentsCount: (ready, total) => `agents ${ready}/${total}`,
+    agentNear: (account, have, need) => `${account} NEAR ${have} (need ${need})`,
+    agentMissing: (account) => `${account} missing`,
+  },
   confirmationsIn: "Confirmations in. Crediting the balance.",
   waitingOne: "Waiting on 1 confirmation",
   waitingMany: (left) => `Waiting on ${left} confirmations`,
@@ -299,6 +338,7 @@ const zhTW: Copy = {
   disconnect: "中斷連線",
   grantReady: "可以領取",
   grantQm: "領取 QM USDC",
+  grantNear: "領取 QM",
   depositUsdc: "存入 USDC",
   grant: "領取",
   deposit: "存入",
@@ -322,6 +362,8 @@ const zhTW: Copy = {
   pushMark: "＝ 平手",
   circleTitle: "Circle USDC（Base）",
   qmTitle: "Quick Market USDC（Base Sepolia）。這是遊戲代幣，不是 Circle USDC。",
+  nearTitle: "Quick Market（NEAR 測試網）。這是遊戲代幣，不是 NEAR，也不是 USDC。",
+  nearBadge: "QM",
   close: "關閉",
   network: "網路",
   fromTo: "從 → 到",
@@ -339,6 +381,7 @@ const zhTW: Copy = {
   granting: "領取中…",
   next: "下次",
   withdrawQm: "提領 QM USDC",
+  withdrawNear: "提領 QM",
   withdrawUsdc: "提領 USDC",
   toWallet: "到錢包",
   spendable: "可用餘額",
@@ -346,6 +389,7 @@ const zhTW: Copy = {
   max: "最大",
   withdrawing: "提領中…",
   paysQm: "將 QM USDC 匯到你在 Base Sepolia 的錢包。",
+  paysNear: "將 QM 匯到你的 NEAR 帳戶。",
   secondUnit: "秒",
   previousMarkets: "先前的市場",
   lastTen: "（最近 10 筆）",
@@ -401,6 +445,8 @@ const zhTW: Copy = {
   briefMinute: "每分鐘",
   briefMinutes: (minutes) => `每 ${minutes} 分鐘`,
   briefGrant: (amount, pace) => `${pace}撥款 ${amount}。`,
+  grantSentenceNear: (amount, pace) =>
+    `Quick Market ${pace}，在 NEAR 測試網把 ${amount} QM 加進這個餘額。不會向錢包扣款，也不會跳出錢包視窗。`,
   ready: "可領取",
   waitHours: (hours) => `${hours} 小時`,
   waitHoursMinutes: (hours, minutes) => `${hours} 小時 ${minutes} 分`,
@@ -411,16 +457,33 @@ const zhTW: Copy = {
   chainTestnetMenu: "Base Sepolia · 測試網",
   chainTestnetBadge: "Base Sepolia 測試網",
   chainTestnetNetwork: "Base Sepolia（測試網）",
+  chainNearMenu: "NEAR 測試網",
+  chainNearBadge: "NEAR 測試網",
+  chainNearNetwork: "NEAR 測試網",
   chainMainnet: "Base 主網",
   waitingPhantom: "正在等待 Phantom",
   approveSignIn: "請在 Phantom 核准登入",
   signedBalance: "已簽名。正在把餘額加到 Base Sepolia。可能需要一點時間。",
+  signedBalanceNear: "已簽名。正在把餘額加到 NEAR 測試網。可能需要一點時間。",
   confirmingSignIn: "正在確認登入",
   stepPhantom: "Phantom",
   stepApprove: "核准",
   stepBalance: "餘額",
   stepConfirm: "確認",
   mintingGrant: "正在 Base Sepolia 鑄造撥款。可能需要一點時間。",
+  mintingGrantNear: "正在 NEAR 測試網鑄造撥款。可能需要一點時間。",
+  approveNear: "請在 NEAR 錢包核准登入",
+  waitingNear: "正在等待 NEAR 錢包",
+  nearReport: {
+    treasury: (account) => `near-testnet 金庫 ${account}`,
+    near: (have, need) => `NEAR ${have}（需要 ${need}）`,
+    qm: (have, need) => `QM ${have}（需要 ${need}）`,
+    treasuryReady: "金庫就緒",
+    agentsReady: "代理就緒",
+    agentsCount: (ready, total) => `代理 ${ready}/${total}`,
+    agentNear: (account, have, need) => `${account} NEAR ${have}（需要 ${need}）`,
+    agentMissing: (account) => `${account} 尚未建立`,
+  },
   confirmationsIn: "確認已完成。正在入帳。",
   waitingOne: "還差 1 次確認",
   waitingMany: (left) => `還差 ${left} 次確認`,

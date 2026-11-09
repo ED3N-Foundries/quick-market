@@ -13,6 +13,12 @@ test("Base ignores USDC_ADDRESS and Sepolia keeps Circle until an override is se
   expect(tokenLabel(chainFromEnv("base"))).toBe("USDC")
   expect(tokenKind(chainFromEnv("base-sepolia", quick))).toBe("qm")
   expect(tokenLabel(chainFromEnv("base-sepolia", quick))).toBe("QM USDC")
+  expect(chainFromEnv("near-testnet", quick).usdc).toBe(CHAINS["near-testnet"].usdc)
+  expect(chainFromEnv("near-testnet").family).toBe("near")
+  expect(chainFromEnv("near-testnet").gasToken).toBe("NEAR")
+  expect(tokenLabel(chainFromEnv("near-testnet"))).toBe("QM")
+  expect(moneyLabel(chainFromEnv("near-testnet"))).toBe("quick-market")
+  expect(() => chainFromEnv("nope")).toThrow("near-testnet")
 })
 
 test("Sepolia refuses Circle and a bad USDC_ADDRESS, and the server refuses to start on Circle", () => {

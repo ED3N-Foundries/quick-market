@@ -6,7 +6,6 @@ export const priceSources = ["binance", "bybit", "okx", "coinbase", "kraken", "b
 
 export type PriceSource = (typeof priceSources)[number]
 
-/** Product knobs. The hardcoded object wins over the same names in `.env`. */
 export type MarketPreferences = {
   chain: ChainKey
   windowSeconds: number
@@ -30,6 +29,7 @@ export type PublicConfig = {
   minStakeMicros: number
   source: PriceSource
   chainId: number
+  chainKey: ChainKey
   chainName: string
   usdc: string
   treasury: string
@@ -44,7 +44,7 @@ const seconds = z.int().min(1).max(120)
 const positive = z.int().positive()
 
 export const marketSchema = z.strictObject({
-  chain: z.enum(["base", "base-sepolia"]),
+  chain: z.enum(["base", "base-sepolia", "near-testnet"]),
   windowSeconds: seconds,
   marketSeconds: seconds,
   viewSeconds: seconds,
@@ -59,8 +59,8 @@ export const marketSchema = z.strictObject({
 
 type _market = Assert<Equal<z.infer<typeof marketSchema>, MarketPreferences>>
 
-const hardcoded: MarketPreferences = {
-  chain: "base-sepolia",
+const defaults: MarketPreferences = {
+  chain: "near-testnet",
   windowSeconds: 10,
   marketSeconds: 10,
   viewSeconds: 5,
@@ -72,8 +72,6 @@ const hardcoded: MarketPreferences = {
   grantMicros: 100_000_000,
   grantIntervalMs: 120_000,
 }
-
-export const marketPreferences: MarketPreferences = marketSchema.parse(hardcoded)
 
 /** How often a browser is sent a price. The stored tape is finer than this. */
 export const TICK_MS = 100
@@ -102,7 +100,7 @@ const optionalSeconds = z.preprocess(unset, z.coerce.number().int().min(1).max(1
 const optionalPositive = z.preprocess(unset, z.coerce.number().int().positive().optional())
 
 const preferenceEnv = z.object({
-  CHAIN: z.preprocess(unset, z.enum(["base", "base-sepolia"]).optional()),
+  CHAIN: z.preprocess(unset, z.enum(["base", "base-sepolia", "near-testnet"]).optional()),
   WINDOW_SECONDS: optionalSeconds,
   MARKET_SECONDS: optionalSeconds,
   VIEW_SECONDS: optionalSeconds,
@@ -114,10 +112,11 @@ const preferenceEnv = z.object({
 
 function ambientPreferences(): PreferenceEnv {
   const proc = (globalThis as { process?: { env?: PreferenceEnv } }).process
-  return proc?.env ?? {}
+  const meta = (import.meta as ImportMeta & { env?: PreferenceEnv }).env
+  return { ...meta, ...proc?.env }
 }
 
-/** Coerce preference keys from env, reject invalid ones, then apply the hardcoded object. */
+/** Environment values override product defaults; invalid explicit values fail at startup. */
 export function loadMarket(env: PreferenceEnv = ambientPreferences()): MarketPreferences {
   const declared = preferenceEnv.parse({
     CHAIN: env.CHAIN,
@@ -130,16 +129,18 @@ export function loadMarket(env: PreferenceEnv = ambientPreferences()): MarketPre
     GRANT_INTERVAL_MS: env.GRANT_INTERVAL_MS,
   })
   return marketSchema.parse({
-    ...{
-      chain: declared.CHAIN,
-      windowSeconds: declared.WINDOW_SECONDS,
-      marketSeconds: declared.MARKET_SECONDS,
-      viewSeconds: declared.VIEW_SECONDS,
-      feeBps: declared.FEE_BPS,
-      priceSource: declared.PRICE_SOURCE,
-      grantMicros: declared.GRANT_MICROS,
-      grantIntervalMs: declared.GRANT_INTERVAL_MS,
-    },
-    ...hardcoded,
+    chain: declared.CHAIN ?? defaults.chain,
+    windowSeconds: declared.WINDOW_SECONDS ?? defaults.windowSeconds,
+    marketSeconds: declared.MARKET_SECONDS ?? defaults.marketSeconds,
+    viewSeconds: declared.VIEW_SECONDS ?? defaults.viewSeconds,
+    feeBps: declared.FEE_BPS ?? defaults.feeBps,
+    priceSource: declared.PRICE_SOURCE ?? defaults.priceSource,
+    minStakeMicros: defaults.minStakeMicros,
+    liveMs: defaults.liveMs,
+    tapeMs: defaults.tapeMs,
+    grantMicros: declared.GRANT_MICROS ?? defaults.grantMicros,
+    grantIntervalMs: declared.GRANT_INTERVAL_MS ?? defaults.grantIntervalMs,
   })
 }
+
+export const marketPreferences: MarketPreferences = loadMarket()

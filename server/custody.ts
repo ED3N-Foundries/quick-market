@@ -14,6 +14,7 @@ import { base, baseSepolia } from "viem/chains"
 import type { ChainConfig } from "../shared/chain"
 import { mintReceiptWait } from "../shared/mint"
 import { mintAbi, usdcAbi } from "../shared/usdc"
+import { activeChainKey } from "./activeChain"
 import { getDb } from "./db"
 import { configuredChain, loadEnv } from "./env"
 import { normalizeAddress } from "./money"
@@ -183,11 +184,11 @@ export function applyDeposit(input: {
   const run = getDb().transaction(() => {
     const inserted = getDb()
       .query(
-        `INSERT INTO deposits (tx_hash, log_index, address, amount_micros, created_at)
-         VALUES (?, ?, ?, ?, ?)
+        `INSERT INTO deposits (chain_key, tx_hash, log_index, address, amount_micros, created_at)
+         VALUES (?, ?, ?, ?, ?, ?)
          ON CONFLICT DO NOTHING`,
       )
-      .run(txHash, input.logIndex, from, input.amountMicros, now)
+      .run(activeChainKey(), txHash, input.logIndex, from, input.amountMicros, now)
     if (inserted.changes === 0) return false
     const added = credit(from, input.amountMicros)
     if (!added.ok) throw new Error(added.error)
@@ -230,10 +231,10 @@ async function requestWithdrawLocked(
       if (!held.ok) throw new Error(held.error)
       getDb()
         .query(
-          `INSERT INTO withdrawals (id, address, amount_micros, tx_hash, raw_tx, status, created_at)
-           VALUES (?, ?, ?, ?, ?, 'pending', ?)`,
+          `INSERT INTO withdrawals (chain_key, id, address, amount_micros, tx_hash, raw_tx, status, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)`,
         )
-        .run(id, address, amountMicros, hash, raw, Date.now())
+        .run(activeChainKey(), id, address, amountMicros, hash, raw, Date.now())
     })
     tx()
   } catch (error) {
@@ -249,8 +250,8 @@ async function requestWithdrawLocked(
 
 export async function resumeWithdrawals() {
   const rows = getDb()
-    .query("SELECT id FROM withdrawals WHERE status = 'pending' ORDER BY created_at ASC")
-    .all() as { id: string }[]
+    .query("SELECT id FROM withdrawals WHERE chain_key = ? AND status = 'pending' ORDER BY created_at ASC")
+    .all(activeChainKey()) as { id: string }[]
   for (const row of rows) {
     await enqueue(async () => {
       const { publicClient, walletClient } = clients()
@@ -277,7 +278,9 @@ async function finishWithdraw(
       refundRow(row)
       return { ok: false, error: "Withdraw reverted", you: youFor(row.address) ?? undefined }
     }
-    getDb().query("UPDATE withdrawals SET status = 'sent' WHERE id = ? AND status = 'pending'").run(id)
+    getDb()
+      .query("UPDATE withdrawals SET status = 'sent' WHERE chain_key = ? AND id = ? AND status = 'pending'")
+      .run(activeChainKey(), id)
     return { ok: true, you: you()!, txHash: hash }
   } catch (error) {
     console.error(error)
@@ -303,13 +306,15 @@ function refundRow(row: WithdrawRow) {
     if (!current || current.status !== "pending") return
     const added = credit(row.address, row.amount_micros)
     if (!added.ok) throw new Error(added.error)
-    getDb().query("UPDATE withdrawals SET status = 'refunded' WHERE id = ? AND status = 'pending'").run(row.id)
+    getDb()
+      .query("UPDATE withdrawals SET status = 'refunded' WHERE chain_key = ? AND id = ? AND status = 'pending'")
+      .run(activeChainKey(), row.id)
   })
   tx()
 }
 
 function withdrawRow(id: string): WithdrawRow | null {
-  return (getDb().query("SELECT * FROM withdrawals WHERE id = ?").get(id) as WithdrawRow | null) ?? null
+  return (getDb().query("SELECT * FROM withdrawals WHERE chain_key = ? AND id = ?").get(activeChainKey(), id) as WithdrawRow | null) ?? null
 }
 
 type BurnRow = {
@@ -328,18 +333,20 @@ export function holdBurn(address: string, amountMicros: number): { ok: true; id:
   const id = crypto.randomUUID()
   try {
     const tx = getDb().transaction(() => {
-      const row = getDb().query("SELECT balance_micros, is_bot FROM users WHERE address = ?").get(who) as
+      const row = getDb().query("SELECT balance_micros, is_bot FROM users WHERE chain_key = ? AND address = ?").get(activeChainKey(), who) as
         | { balance_micros: number; is_bot: number }
         | null
       if (!row || row.is_bot !== 1) throw new Error("Not a bot")
       if (amountMicros > row.balance_micros) throw new Error("Insufficient balance")
-      getDb().query("UPDATE users SET balance_micros = balance_micros - ? WHERE address = ?").run(amountMicros, who)
+      getDb()
+        .query("UPDATE users SET balance_micros = balance_micros - ? WHERE chain_key = ? AND address = ?")
+        .run(amountMicros, activeChainKey(), who)
       getDb()
         .query(
-          `INSERT INTO burns (id, address, amount_micros, tx_hash, raw_tx, status, created_at)
-           VALUES (?, ?, ?, NULL, NULL, 'pending', ?)`,
+          `INSERT INTO burns (chain_key, id, address, amount_micros, tx_hash, raw_tx, status, created_at)
+           VALUES (?, ?, ?, ?, NULL, NULL, 'pending', ?)`,
         )
-        .run(id, who, amountMicros, Date.now())
+        .run(activeChainKey(), id, who, amountMicros, Date.now())
     })
     tx()
   } catch (error) {
@@ -356,17 +363,21 @@ export function refundBurn(id: string) {
     if (!row || row.status !== "pending") return
     const added = credit(row.address, row.amount_micros)
     if (!added.ok) throw new Error(added.error)
-    getDb().query("UPDATE burns SET status = 'refunded' WHERE id = ? AND status = 'pending'").run(id)
+    getDb()
+      .query("UPDATE burns SET status = 'refunded' WHERE chain_key = ? AND id = ? AND status = 'pending'")
+      .run(activeChainKey(), id)
   })
   tx()
 }
 
 export function markBurned(id: string, txHash: string) {
-  getDb().query("UPDATE burns SET status = 'burned', tx_hash = ? WHERE id = ? AND status = 'pending'").run(txHash, id)
+  getDb()
+    .query("UPDATE burns SET status = 'burned', tx_hash = ? WHERE chain_key = ? AND id = ? AND status = 'pending'")
+    .run(txHash, activeChainKey(), id)
 }
 
 function burnRow(id: string): BurnRow | null {
-  return (getDb().query("SELECT * FROM burns WHERE id = ?").get(id) as BurnRow | null) ?? null
+  return (getDb().query("SELECT * FROM burns WHERE chain_key = ? AND id = ?").get(activeChainKey(), id) as BurnRow | null) ?? null
 }
 
 export async function submitBurn(id: string): Promise<{ ok: true; txHash: string } | { ok: false; error: string }> {
@@ -376,7 +387,9 @@ export async function submitBurn(id: string): Promise<{ ok: true; txHash: string
     try {
       const raw = await signedTransfer(DEAD, BigInt(row.amount_micros))
       const hash = keccak256(raw)
-      getDb().query("UPDATE burns SET raw_tx = ?, tx_hash = ? WHERE id = ? AND status = 'pending'").run(raw, hash, id)
+      getDb()
+        .query("UPDATE burns SET raw_tx = ?, tx_hash = ? WHERE chain_key = ? AND id = ? AND status = 'pending'")
+        .run(raw, hash, activeChainKey(), id)
     } catch (error) {
       if (!(error instanceof TreasuryShort)) console.error(error)
       refundBurn(id)
@@ -399,8 +412,8 @@ export function requestBurn(
 
 export async function resumeBurns() {
   const rows = getDb()
-    .query("SELECT id, raw_tx, created_at FROM burns WHERE status = 'pending' ORDER BY created_at ASC")
-    .all() as { id: string; raw_tx: string | null; created_at: number }[]
+    .query("SELECT id, raw_tx, created_at FROM burns WHERE chain_key = ? AND status = 'pending' ORDER BY created_at ASC")
+    .all(activeChainKey()) as { id: string; raw_tx: string | null; created_at: number }[]
   for (const row of rows) {
     if (!row.raw_tx) {
       if (Date.now() - row.created_at > 120_000) refundBurn(row.id)
@@ -499,8 +512,12 @@ export async function pollDeposits(
   }
 }
 
+function cursorKey(): string {
+  return `${activeChainKey()}:deposit_block`
+}
+
 function readCursor(): bigint | null {
-  const row = getDb().query("SELECT value FROM meta WHERE key = 'deposit_block'").get() as { value: string } | null
+  const row = getDb().query("SELECT value FROM meta WHERE key = ?").get(cursorKey()) as { value: string } | null
   if (!row) return null
   return BigInt(row.value)
 }
@@ -508,8 +525,8 @@ function readCursor(): bigint | null {
 function writeCursor(block: bigint) {
   getDb()
     .query(
-      `INSERT INTO meta (key, value) VALUES ('deposit_block', ?)
+      `INSERT INTO meta (key, value) VALUES (?, ?)
        ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
     )
-    .run(block.toString())
+    .run(cursorKey(), block.toString())
 }

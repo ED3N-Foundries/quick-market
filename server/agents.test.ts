@@ -2,6 +2,7 @@ import { beforeEach, expect, test } from "bun:test"
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts"
 import { chainFromEnv } from "../shared/chain"
 import { botEnrollMessage, loginMessage } from "../shared/login"
+import { marketPreferences } from "../shared/market"
 import { enrollBot, resurrectBot } from "./agents"
 import { holdBurn, refundBurn } from "./custody"
 import { getDb, useDatabase } from "./db"
@@ -26,14 +27,15 @@ function bot(n: number, micros: number) {
     const result = credit(who, micros)
     if (!result.ok) throw new Error(result.error)
   } else {
-    getDb().query("INSERT INTO users (address, balance_micros, created_at, is_bot) VALUES (?, 0, ?, 1)").run(who, 1)
+    getDb().query("INSERT INTO users (chain_key, address, balance_micros, created_at, is_bot) VALUES ('base-sepolia', ?, 0, ?, 1)").run(who, 1)
     return who
   }
-  getDb().query("UPDATE users SET is_bot = 1 WHERE address = ?").run(who)
+  getDb().query("UPDATE users SET is_bot = 1 WHERE chain_key = 'base-sepolia' AND address = ?").run(who)
   return who
 }
 
 beforeEach(() => {
+  marketPreferences.chain = "base-sepolia"
   process.env.WINDOW_SECONDS = "10"
   process.env.MARKET_SECONDS = "10"
   process.env.FEE_BPS = "0"

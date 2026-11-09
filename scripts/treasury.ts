@@ -5,12 +5,16 @@ import { createPublicClient, http, parseAbiItem, type Address } from "viem"
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts"
 import { base, baseSepolia } from "viem/chains"
 import { CHAINS, chainFromEnv, type ChainConfig, type ChainKey } from "../shared/chain"
+import { formatQm, formatYocto, isImplicitAccount } from "../shared/near"
+import { accountFromSecret, generateNearSecret } from "../shared/nearKey"
 import { loadMarket, marketPreferences } from "../shared/market"
 import { usdcAbi } from "../shared/usdc"
 import { tuneDatabase } from "../server/db"
 import { loadEnv } from "../server/env"
+import { envFilePath } from "../server/envFile"
+import { readNearBalance, readTokenBalance } from "../server/near"
 
-const ENV_PATH = join(process.cwd(), ".env")
+const ENV_PATH = envFilePath(marketPreferences.chain)
 const EXAMPLE_PATH = join(process.cwd(), ".env.example")
 const NAME = "TREASURY_PRIVATE_KEY"
 const GAS_FLOOR = 50_000_000_000_000n
@@ -20,12 +24,14 @@ const transferEvent = parseAbiItem("event Transfer(address indexed from, address
 const EXPLORERS: Record<ChainKey, { api: string; site: string }> = {
   base: { api: "https://base.blockscout.com", site: "https://base.blockscout.com" },
   "base-sepolia": { api: "https://base-sepolia.blockscout.com", site: "https://base-sepolia.blockscout.com" },
+  "near-testnet": { api: "https://api-testnet.nearblocks.io", site: "https://testnet.nearblocks.io" },
 }
 
 // Publicnode serves this span. Wider filtered eth_getLogs calls ask for an archive token.
 const HISTORY_RPC: Record<ChainKey, string> = {
   base: "https://base-rpc.publicnode.com",
   "base-sepolia": "https://base-sepolia-rpc.publicnode.com",
+  "near-testnet": "https://rpc.testnet.near.org",
 }
 
 export type TreasuryPlan =
@@ -145,6 +151,75 @@ function fillTreasuryLine(source: string, key: `0x${string}`): string {
   }
   const body = source.length === 0 || source.endsWith("\n") ? source : `${source}\n`
   return `${body}${NAME}=${key}\n`
+}
+
+function fillSecretLine(source: string, secret: string): string {
+  const lines = source.split(/\r?\n/)
+  let replaced = false
+  const next = lines.map((line) => {
+    if (replaced || !line.startsWith(`${NAME}=`)) return line
+    if (line.slice(NAME.length + 1).trim() !== "") return line
+    replaced = true
+    return `${NAME}=${secret}`
+  })
+  if (replaced) {
+    const joined = next.join("\n")
+    return joined.endsWith("\n") ? joined : `${joined}\n`
+  }
+  const body = source.length === 0 || source.endsWith("\n") ? source : `${source}\n`
+  return `${body}${NAME}=${secret}\n`
+}
+
+export async function planNearTreasury(
+  source: string,
+  envKey: string | undefined,
+  generated: string,
+): Promise<
+  | { action: "invalid" }
+  | { action: "refuse" | "keep"; account: string }
+  | { action: "write"; text: string; account: string }
+> {
+  const fileRaw = firstValue(source)
+  const envRaw = envKey?.trim() ?? ""
+  if (envRaw && envRaw !== fileRaw) {
+    const account = await accountFromSecret(envRaw)
+    if (!account || !isImplicitAccount(account)) return { action: "invalid" }
+    return { action: "refuse", account }
+  }
+  if (fileRaw) {
+    const account = await accountFromSecret(fileRaw)
+    if (!account || !isImplicitAccount(account)) return { action: "invalid" }
+    return { action: "keep", account }
+  }
+  const account = await accountFromSecret(generated)
+  if (!account || !isImplicitAccount(account)) return { action: "invalid" }
+  return { action: "write", text: fillSecretLine(source, generated), account }
+}
+
+async function runNearTreasury(source: string) {
+  const generated = await generateNearSecret()
+  const decision = await planNearTreasury(source, process.env.TREASURY_PRIVATE_KEY, generated.secretKey)
+  if (decision.action === "invalid") {
+    console.error("TREASURY_PRIVATE_KEY must be an ed25519 NEAR secret key")
+    process.exit(1)
+  }
+  if (decision.action === "write") {
+    writeFileSync(ENV_PATH, decision.text, { mode: 0o600 })
+    chmodSync(ENV_PATH, 0o600)
+    console.log("wrote TREASURY_PRIVATE_KEY to .env")
+  } else if (decision.action === "refuse") {
+    console.log("TREASURY_PRIVATE_KEY is already set. .env was not changed.")
+  }
+  console.log(`treasury ${decision.account}`)
+  console.log("This account needs testnet NEAR from the faucet before it can pay gas.")
+  try {
+    const balance = await readNearBalance(decision.account)
+    console.log(`NEAR ${formatYocto(balance.yocto)}`)
+    const token = loadEnv().tokenAccount.trim()
+    if (token) console.log(`QM ${formatQm(await readTokenBalance(token, decision.account))}`)
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : error)
+  }
 }
 
 export function planTreasury(source: string, envKey: string | undefined, generated: `0x${string}`): TreasuryPlan {
@@ -491,46 +566,54 @@ function ledgerFile(): string {
   return loadEnv().dbPath
 }
 
-function one(db: Database, sql: string): number {
-  const row = db.query(sql).get() as { n: number | bigint } | null
+function one(db: Database, sql: string, chain?: ChainKey): number {
+  const query = db.query(sql)
+  const row = (chain === undefined ? query.get() : query.get(chain)) as { n: number | bigint } | null
   if (!row) throw new Error("ledger query returned nothing")
   return asNumber(row.n)
 }
 
-// Read-only. Opening the server database runs the custody migration and zeros balances.
 export function readLedger(path: string): LedgerView {
   if (!existsSync(path)) return { path, missing: true }
   let db: Database | null = null
   try {
     db = new Database(path, { readonly: true })
     tuneDatabase(db, { readonly: true })
-    const spendableMicros = one(db, "SELECT COALESCE(SUM(balance_micros), 0) AS n FROM users")
+    const scoped = (db.query("PRAGMA table_info(users)").all() as { name: string }[]).some((column) => column.name === "chain_key")
+    const chain = scoped ? marketPreferences.chain : undefined
+    const where = scoped ? " WHERE chain_key = ?" : ""
+    const spendableMicros = one(db, `SELECT COALESCE(SUM(balance_micros), 0) AS n FROM users${where}`, chain)
     const openStakeMicros = one(
       db,
-      `SELECT COALESCE(SUM(b.stake_micros), 0) AS n
-       FROM buy_ins b JOIN rounds r ON r.id = b.round_id
-       WHERE r.status = 'open'`,
+      scoped
+        ? `SELECT COALESCE(SUM(b.stake_micros), 0) AS n
+           FROM buy_ins b JOIN rounds r ON r.chain_key = b.chain_key AND r.id = b.round_id
+           WHERE b.chain_key = ? AND r.status = 'open'`
+        : `SELECT COALESCE(SUM(b.stake_micros), 0) AS n
+           FROM buy_ins b JOIN rounds r ON r.id = b.round_id
+           WHERE r.status = 'open'`,
+      chain,
     )
-    const pendingMicros = one(db, "SELECT COALESCE(SUM(amount_micros), 0) AS n FROM withdrawals WHERE status = 'pending'")
-    const pendingCount = one(db, "SELECT COUNT(*) AS n FROM withdrawals WHERE status = 'pending'")
-    const users = one(db, "SELECT COUNT(*) AS n FROM users")
-    const deposits = one(db, "SELECT COUNT(*) AS n FROM deposits")
-    const withdrawals = one(db, "SELECT COUNT(*) AS n FROM withdrawals")
-    const feeMicros = one(db, "SELECT COALESCE(SUM(fee_micros), 0) AS n FROM rounds")
+    const pendingMicros = one(db, `SELECT COALESCE(SUM(amount_micros), 0) AS n FROM withdrawals${scoped ? " WHERE chain_key = ? AND status = 'pending'" : " WHERE status = 'pending'"}`, chain)
+    const pendingCount = one(db, `SELECT COUNT(*) AS n FROM withdrawals${scoped ? " WHERE chain_key = ? AND status = 'pending'" : " WHERE status = 'pending'"}`, chain)
+    const users = one(db, `SELECT COUNT(*) AS n FROM users${where}`, chain)
+    const deposits = one(db, `SELECT COUNT(*) AS n FROM deposits${where}`, chain)
+    const withdrawals = one(db, `SELECT COUNT(*) AS n FROM withdrawals${where}`, chain)
+    const feeMicros = one(db, `SELECT COALESCE(SUM(fee_micros), 0) AS n FROM rounds${where}`, chain)
     const rows = db
       .query(
         `SELECT direction, kind, address, amount_micros, tx_hash, status, created_at
          FROM (
            SELECT 'in' AS direction, 'deposit' AS kind, address, amount_micros, tx_hash, 'credited' AS status, created_at
-           FROM deposits
+           FROM deposits${where}
            UNION ALL
            SELECT 'out', 'withdraw', address, amount_micros, tx_hash, status, created_at
-           FROM withdrawals
+           FROM withdrawals${where}
          )
          ORDER BY created_at DESC
          LIMIT 10`,
       )
-      .all() as {
+      .all(...(scoped ? [marketPreferences.chain, marketPreferences.chain] : [])) as {
       direction: string
       kind: string
       address: string
@@ -712,7 +795,8 @@ function viemChain(config: ChainConfig) {
 }
 
 function chainsFor(configured: ChainConfig): ChainConfig[] {
-  return [configured, ...Object.values(CHAINS).filter((chain) => chain.key !== configured.key)]
+  const evm = Object.values(CHAINS).filter((chain) => chain.family === "evm")
+  return [configured, ...evm.filter((chain) => chain.key !== configured.key)]
 }
 
 async function loadChain(config: ChainConfig, address: Address, rpc: string, configured: boolean): Promise<ChainFunds> {
@@ -866,6 +950,10 @@ async function main() {
     process.exit(1)
   }
   const source = loadSource()
+  if (marketPreferences.chain === "near-testnet") {
+    await runNearTreasury(source)
+    return
+  }
   const decision = planTreasury(source, process.env.TREASURY_PRIVATE_KEY, generatePrivateKey())
   if (decision.action === "invalid") {
     console.error("TREASURY_PRIVATE_KEY must be a 32-byte hex string")

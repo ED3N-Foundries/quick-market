@@ -2,7 +2,7 @@ import { expect, test } from "bun:test"
 import { feeBps, windowMs } from "../server/config"
 import { loadMarket } from "./market"
 
-test("hardcoded preferences replace a valid env declaration", () => {
+test("environment preferences replace defaults and NEAR is the default chain", () => {
   const loaded = loadMarket({
     WINDOW_SECONDS: "12",
     MARKET_SECONDS: "30",
@@ -13,14 +13,16 @@ test("hardcoded preferences replace a valid env declaration", () => {
     GRANT_MICROS: "1",
     GRANT_INTERVAL_MS: "1",
   })
-  expect(loaded.windowSeconds).toBe(10)
-  expect(loaded.marketSeconds).toBe(10)
-  expect(loaded.viewSeconds).toBe(5)
-  expect(loaded.feeBps).toBe(0)
-  expect(loaded.priceSource).toBe("binance")
-  expect(loaded.chain).toBe("base-sepolia")
-  expect(loaded.grantMicros).toBe(100_000_000)
-  expect(loaded.grantIntervalMs).toBe(120_000)
+  expect(loaded.windowSeconds).toBe(12)
+  expect(loaded.marketSeconds).toBe(30)
+  expect(loaded.viewSeconds).toBe(15)
+  expect(loaded.feeBps).toBe(25)
+  expect(loaded.priceSource).toBe("coinbase")
+  expect(loaded.chain).toBe("base")
+  expect(loadMarket({}).chain).toBe("near-testnet")
+  expect(loadMarket({ CHAIN: "near-testnet" }).chain).toBe("near-testnet")
+  expect(loaded.grantMicros).toBe(1)
+  expect(loaded.grantIntervalMs).toBe(1)
 })
 
 test("a blank preference is ignored and an invalid one throws", () => {
@@ -29,7 +31,7 @@ test("a blank preference is ignored and an invalid one throws", () => {
   expect(() => loadMarket({ PRICE_SOURCE: "gemini" })).toThrow("PRICE_SOURCE")
 })
 
-test("window length stays on the schema after a later env write", () => {
+test("loaded preferences do not change after a later env write", () => {
   const previous = process.env.WINDOW_SECONDS
   process.env.WINDOW_SECONDS = "99"
   expect(windowMs()).toBe(10_000)

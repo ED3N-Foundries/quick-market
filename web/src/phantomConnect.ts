@@ -35,8 +35,13 @@ export function loginAction(input: {
 }
 
 /** Sentence for the sign-in row. The session step is the grant, not another Phantom prompt. */
-export function loginStatus(phase: LoginPhase, testnet: boolean, lang: Lang = "en"): string {
+export function loginStatus(phase: LoginPhase, testnet: boolean, lang: Lang = "en", chainKey?: string): string {
   const text = copy(lang)
+  if (chainKey === "near-testnet") {
+    if (phase === "phantom") return text.waitingNear
+    if (phase === "sign") return text.approveNear
+    return text.signedBalanceNear
+  }
   if (phase === "phantom") return text.waitingPhantom
   if (phase === "sign") return text.approveSignIn
   if (testnet) return text.signedBalance
@@ -57,9 +62,9 @@ export function loginStepState(index: number, phase: LoginPhase): "done" | "now"
   return "later"
 }
 
-export function grantWaitStatus(progress?: { seen: number; needed: number }, lang: Lang = "en"): string {
+export function grantWaitStatus(progress?: { seen: number; needed: number }, lang: Lang = "en", chainKey?: string): string {
   const text = copy(lang)
-  if (!progress) return text.mintingGrant
+  if (!progress) return chainKey === "near-testnet" ? text.mintingGrantNear : text.mintingGrant
   const needed = Math.max(0, Math.floor(progress.needed))
   const seen = Math.min(needed, Math.max(0, Math.floor(progress.seen)))
   const left = needed - seen

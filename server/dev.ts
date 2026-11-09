@@ -4,7 +4,7 @@ import { loadEnv } from "./env"
 loadMarket()
 const runtime = loadEnv()
 
-const server = Bun.spawn(["bun", "--hot", "server/index.ts"], {
+const server = Bun.spawn(["bun", "--hot", "scripts/launch.ts", "server"], {
   stdout: "inherit",
   stderr: "inherit",
   stdin: "inherit",

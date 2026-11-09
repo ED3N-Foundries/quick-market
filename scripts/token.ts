@@ -2,13 +2,18 @@ import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { createPublicClient, createWalletClient, http, type Abi, type Address, type Hex } from "viem"
 import { baseSepolia } from "viem/chains"
+import { formatYocto } from "../shared/near"
+import { accountFromSecret, generateNearSecret } from "../shared/nearKey"
 import { loadMarket, marketPreferences } from "../shared/market"
 import { mintToTreasury, treasuryAccount } from "../server/custody"
 import { getDb } from "../server/db"
 import { loadEnv } from "../server/env"
+import { envFilePath } from "../server/envFile"
+import { sendNearActions } from "../server/near"
+import { encodeDeploy, encodeFunctionCall, encodeTransfer, jsonArgs } from "../server/nearTx"
 import { cutoverAmount } from "../server/grant"
 
-const ENV_PATH = join(process.cwd(), ".env")
+const ENV_PATH = envFilePath(marketPreferences.chain)
 const EXAMPLE_PATH = join(process.cwd(), ".env.example")
 
 async function main() {
@@ -17,6 +22,10 @@ async function main() {
   } catch (error) {
     console.error(error instanceof Error ? error.message : error)
     process.exit(1)
+  }
+  if (marketPreferences.chain === "near-testnet") {
+    await deployNear()
+    return
   }
   if (marketPreferences.chain === "base") {
     console.error("CHAIN=base uses Circle USDC. Refusing to deploy quick-market USDC.")
@@ -63,8 +72,10 @@ async function main() {
 
 async function backLedger(token: Address) {
   process.env.USDC_ADDRESS = token
-  const row = getDb().query("SELECT value FROM meta WHERE key = 'qm_usdc_v1'").get() as { value: string } | null
-  const sumRow = getDb().query("SELECT COALESCE(SUM(balance_micros), 0) AS total FROM users").get() as {
+  const chain = marketPreferences.chain
+  const metaKey = `${chain}:qm_usdc_v1`
+  const row = getDb().query("SELECT value FROM meta WHERE key = ?").get(metaKey) as { value: string } | null
+  const sumRow = getDb().query("SELECT COALESCE(SUM(balance_micros), 0) AS total FROM users WHERE chain_key = ?").get(chain) as {
     total: number | bigint | null
   }
   const total = sumRow.total === null ? 0 : typeof sumRow.total === "bigint" ? Number(sumRow.total) : sumRow.total
@@ -74,8 +85,63 @@ async function backLedger(token: Address) {
     return
   }
   if (amount > 0) await mintToTreasury(amount)
-  getDb().query("INSERT INTO meta (key, value) VALUES ('qm_usdc_v1', ?)").run(String(amount))
+  getDb().query("INSERT INTO meta (key, value) VALUES (?, ?)").run(metaKey, String(amount))
   console.log(`backed ${amount} micros of existing balances with quick-market USDC`)
+}
+
+async function deployNear() {
+  const env = loadEnv()
+  const existing = env.tokenAccount.trim()
+  if (existing) {
+    console.log(`TOKEN_ACCOUNT is already ${existing}. Not deploying.`)
+    return
+  }
+  const wasmPath = join(process.cwd(), "contracts/near/res/quick_market.wasm")
+  if (!existsSync(wasmPath)) {
+    console.error("Build the NEAR contract first:")
+    console.error("  rustup target add wasm32-unknown-unknown")
+    console.error("  cargo build --manifest-path contracts/near/Cargo.toml --target wasm32-unknown-unknown --release")
+    console.error("  mkdir -p contracts/near/res && cp target/wasm32-unknown-unknown/release/quick_market.wasm contracts/near/res/quick_market.wasm")
+    process.exit(1)
+  }
+  const treasuryKey = env.treasuryPrivateKey
+  const treasury = await accountFromSecret(treasuryKey)
+  if (!treasury) {
+    console.error("TREASURY_PRIVATE_KEY must be an ed25519 NEAR secret key")
+    process.exit(1)
+  }
+  const contract = await generateNearSecret()
+  const code = new Uint8Array(readFileSync(wasmPath))
+  const stake = BigInt(code.length) * 10_000_000_000_000_000_000n + 200_000_000_000_000_000_000_000n
+  console.log(`contract account ${contract.account}`)
+  console.log(`funding ${formatYocto(stake)} NEAR for code storage`)
+  await sendNearActions({
+    signerId: treasury,
+    secretKey: treasuryKey,
+    receiverId: contract.account,
+    actions: [encodeTransfer(stake)],
+  })
+  await sendNearActions({
+    signerId: contract.account,
+    secretKey: contract.secretKey,
+    receiverId: contract.account,
+    actions: [
+      encodeDeploy(code),
+      encodeFunctionCall("new", jsonArgs({ minter: treasury }), 80_000_000_000_000n, 0n),
+    ],
+  })
+  writeEnvLine("TOKEN_ACCOUNT", contract.account)
+  writeEnvLine("TOKEN_PRIVATE_KEY", contract.secretKey)
+  console.log(`TOKEN_ACCOUNT ${contract.account}`)
+}
+
+function writeEnvLine(name: string, value: string) {
+  const text = existsSync(ENV_PATH) ? readFileSync(ENV_PATH, "utf8") : readFileSync(EXAMPLE_PATH, "utf8")
+  const line = `${name}=${value}`
+  const pattern = new RegExp(`^${name}=.*$`, "m")
+  const next = pattern.test(text) ? text.replace(pattern, line) : `${text.replace(/\n?$/, "\n")}${line}\n`
+  writeFileSync(ENV_PATH, next, { mode: 0o600 })
+  chmodSync(ENV_PATH, 0o600)
 }
 
 function writeAddress(address: string) {

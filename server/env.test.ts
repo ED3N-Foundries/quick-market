@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test"
-import { loadEnv } from "./env"
+import { generateNearSecret } from "../shared/nearKey"
+import { loadEnv, parseTokenAccount, parseTreasuryKey } from "./env"
 
 const hex = "ab".repeat(32)
 
@@ -12,6 +13,17 @@ test("a missing treasury key stays empty and a bare hex key is normalized", () =
 
 test("a malformed treasury key is rejected", () => {
   expect(() => loadEnv({ TREASURY_PRIVATE_KEY: "nope" })).toThrow("32-byte")
+})
+
+test("a NEAR launch accepts an ed25519 secret and rejects an EVM key", async () => {
+  const made = await generateNearSecret()
+  expect(parseTreasuryKey("", "near-testnet")).toBe("")
+  expect(parseTreasuryKey(made.secretKey, "near-testnet")).toBe(made.secretKey)
+  expect(() => parseTreasuryKey(`0x${"ab".repeat(32)}`, "near-testnet")).toThrow("ed25519")
+  expect(() => parseTreasuryKey("nope", "near-testnet")).toThrow("ed25519")
+  expect(parseTokenAccount("")).toBe("")
+  expect(parseTokenAccount(made.account)).toBe(made.account)
+  expect(() => parseTokenAccount("not an account")).toThrow("TOKEN_ACCOUNT")
 })
 
 test("deployment defaults fill blank process settings", () => {

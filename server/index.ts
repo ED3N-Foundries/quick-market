@@ -1,14 +1,12 @@
 import { existsSync } from "node:fs"
 import { join, normalize, sep } from "node:path"
-import { moneyLabel, requireSepoliaToken, tokenKind, tokenLabel } from "../shared/chain"
 import { parseLang, stampHtml, type Lang } from "../shared/lang"
 import { loadMarket, TICK_MS, type PublicConfig } from "../shared/market"
 import { feeBps, marketMs, MIN_STAKE_MICROS, priceSource, viewMs, windowMs, type PriceSource } from "./config"
 import { takeTick } from "./tick"
 import { configuredChain, loadEnv } from "./env"
 import { handleAgents } from "./agents"
-import { mintToTreasury, requestWithdraw, startCustody, treasuryAddress } from "./custody"
-import { getDb } from "./db"
+import { startChainRuntime, type ChainRuntime } from "./chainRuntime"
 import { MINT_CONFIRMATIONS } from "../shared/mint"
 import { grantOnSignIn, grantSettings, noteGrantTx, settleGrantRequest, startGrant } from "./grant"
 import { hub } from "./hub"
@@ -19,31 +17,35 @@ import { oracleView, startOracle } from "./oracle"
 import { adoptFeed, advance, board, failFeed, feedStatus, handoffNow, listRounds, noteAlive, notePrint, placeBuyIn, roundDetail, tapePoints, tickerNow, youFor } from "./rounds"
 import { agentAuthorized, endSession, openSession, readSession } from "./session"
 
+let activeChain: ChainRuntime
 let chain: ReturnType<typeof configuredChain>
-try {
-  loadMarket()
-  chain = configuredChain()
-  requireSepoliaToken(chain)
-  grantSettings()
-} catch (error) {
-  console.error(error instanceof Error ? error.message : error)
-  process.exit(1)
-}
-
 let treasury: string
-try {
-  treasury = treasuryAddress()
-} catch (error) {
-  console.error(error instanceof Error ? error.message : error)
-  process.exit(1)
-}
 
 const port = loadEnv().port
 const distDir = join(import.meta.dir, "..", "dist")
 const serveUi = loadEnv().nodeEnv === "production"
 
-getDb()
-startCustody()
+async function bootServer() {
+  loadMarket()
+  activeChain = await startChainRuntime()
+  chain = activeChain.chain
+  treasury = activeChain.treasury
+}
+
+try {
+  await bootServer()
+} catch (error) {
+  console.error(error instanceof Error ? error.message : error)
+  process.exit(1)
+}
+
+function grantsOpen(): boolean {
+  return activeChain.grantsOpen
+}
+
+function mintTreasury(amount: number, onHash?: (hash: string) => void): Promise<void> {
+  return activeChain.mint(amount, onHash)
+}
 
 let pending: { price: string; exchangeTs: number; source: PriceSource } | null = null
 let lastTickAt = 0
@@ -132,7 +134,7 @@ async function readJson(req: Request) {
 }
 
 function publicConfig(): PublicConfig {
-  const grant = chain.key === "base-sepolia" ? grantSettings() : { amount: 0, intervalMs: 0 }
+  const grant = grantsOpen() ? grantSettings() : { amount: 0, intervalMs: 0 }
   return {
     windowSeconds: windowMs() / 1000,
     marketSeconds: marketMs() / 1000,
@@ -141,12 +143,13 @@ function publicConfig(): PublicConfig {
     minStakeMicros: MIN_STAKE_MICROS,
     source: priceSource(),
     chainId: chain.id,
+    chainKey: chain.key,
     chainName: chain.name,
-    usdc: chain.usdc,
+    usdc: activeChain.token,
     treasury,
-    moneyLabel: moneyLabel(chain),
-    tokenKind: tokenKind(chain),
-    tokenLabel: tokenLabel(chain),
+    moneyLabel: activeChain.moneyLabel,
+    tokenKind: activeChain.tokenKind,
+    tokenLabel: activeChain.tokenLabel,
     grantMicros: grant.amount,
     grantIntervalMs: grant.intervalMs,
   }
@@ -155,7 +158,9 @@ function publicConfig(): PublicConfig {
 async function handle(req: Request): Promise<Response> {
   const url = new URL(req.url)
 
-  if (req.method === "GET" && url.pathname === "/api/health") return json({ ok: true, source: priceSource() })
+  if (req.method === "GET" && url.pathname === "/api/health") {
+    return json({ ok: true, source: priceSource(), chain: chain.key, treasury: activeChain.treasuryReport() })
+  }
 
   if (req.method === "GET" && url.pathname === "/api/feeds") {
     const now = Date.now()
@@ -195,9 +200,11 @@ async function handle(req: Request): Promise<Response> {
       issued,
       now: Date.now(),
       botSecret: body?.botSecret,
+      nonce: body?.nonce,
+      publicKey: body?.publicKey,
     })
     if (!result.ok) return json({ error: result.error }, 400)
-    if (chain.key === "base-sepolia" && grantOnSignIn(result.you.grantAt)) {
+    if (grantsOpen() && grantOnSignIn(result.you.grantAt)) {
       const settings = grantSettings()
       const started = startGrant({
         address: result.you.address,
@@ -205,7 +212,7 @@ async function handle(req: Request): Promise<Response> {
         chainKey: chain.key,
         amount: settings.amount,
         intervalMs: settings.intervalMs,
-        mint: (amount) => mintToTreasury(amount, (hash) => noteGrantTx(result.you.address, hash)),
+        mint: (amount) => mintTreasury(amount, (hash) => noteGrantTx(result.you.address, hash, chain.key)),
       })
       if (started.claimed) {
         void started.done.catch((error) => {
@@ -222,7 +229,7 @@ async function handle(req: Request): Promise<Response> {
   }
 
   if (req.method === "POST" && url.pathname === "/api/grant") {
-    if (chain.key !== "base-sepolia") return json({ error: "Grants are only on testnet." }, 400)
+    if (!grantsOpen()) return json({ error: "Grants are only on testnet." }, 400)
     const session = readSession(req)
     if (!session.address) return json({ error: "Sign in to receive a grant." }, 401)
     const address = session.address
@@ -244,8 +251,8 @@ async function handle(req: Request): Promise<Response> {
       amount: settings.amount,
       intervalMs: settings.intervalMs,
       mint: (amount) =>
-        mintToTreasury(amount, (hash) => {
-          noteGrantTx(address, hash)
+        mintTreasury(amount, (hash) => {
+          noteGrantTx(address, hash, chain.key)
           reportHash(hash)
         }),
     })
@@ -294,14 +301,14 @@ async function handle(req: Request): Promise<Response> {
     const body = await readJson(req)
     const amount = parseMicros(body?.amount)
     if (amount === null) return json({ error: "Amount is invalid" }, 400)
-    const result = await requestWithdraw(session.address, amount)
+    const result = await activeChain.withdraw(session.address, amount)
     if (!result.ok) return json({ error: result.error, you: result.you ?? null }, 400)
     return json({ you: result.you, txHash: result.txHash })
   }
 
   if (url.pathname.startsWith("/api/agents/")) {
     if (!agentAuthorized(req.headers.get("x-agent-secret"))) return json({ error: "Unauthorized" }, 401)
-    return handleAgents(req, url, { mint: mintToTreasury, publish: markRoundDirty })
+    return handleAgents(req, url, { mint: (amount) => mintTreasury(amount), publish: markRoundDirty })
   }
 
   if (req.method === "POST" && url.pathname === "/api/buy-ins") {

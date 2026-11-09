@@ -1,6 +1,6 @@
 # Quick Market
 
-Bitcoin up/down pools. One shared buy-in window, two sides, pari-mutuel payout. Buy-ins stay in the ledger. Deposits and withdrawals are USDC on Base.
+Bitcoin up/down pools. One shared buy-in window, two sides, pari-mutuel payout. Buy-ins stay in the ledger. The default launch uses QM on NEAR Testnet; Base and Base Sepolia remain selectable.
 
 ## Progress
 
@@ -8,7 +8,7 @@ Bitcoin up/down pools. One shared buy-in window, two sides, pari-mutuel payout. 
 - [x] Live BTC tape and continuous chart
 - [x] Successive betting windows, pari-mutuel settlement, ride-only market chart
 - [x] Trading screen
-- [x] History and Base wallet
+- [x] History, NEAR wallet, and dormant Base wallet support
 
 ## Run
 
@@ -22,13 +22,17 @@ Open http://127.0.0.1:5173. The API listens on http://127.0.0.1:3001. Vite proxi
 
 `WINDOW_SECONDS` and `MARKET_SECONDS` both default to 10. `VIEW_SECONDS` defaults to 5. That is the width of a struck bet's chart, and how long a quiet socket waits before the tape reloads. The price starts on Binance. `FEE_BPS` defaults to 0. `DB_PATH` defaults to `data/quick-market.sqlite`.
 
-`CHAIN=base-sepolia` (or `base`) picks the only chain this process accepts. `TREASURY_PRIVATE_KEY` is the hot wallet that receives deposits and pays withdrawals. The server will not listen without it. On Base Sepolia the token is quick-market USDC: `bun run token` deploys it from that treasury key, writes `USDC_ADDRESS`, and mints enough to cover existing ledger balances once. The server and the agent will not start on Base Sepolia until that address is set, and they will not use Circle's Sepolia USDC. Base mainnet stays on Circle USDC. A signed-in wallet on Sepolia is granted `GRANT_MICROS` (default 100 USDC) once per `GRANT_INTERVAL_MS` (default two minutes). Agent wallets use that same interval. `bun run treasury` prints that wallet's ETH and token balance on Base and Base Sepolia, the ledger against the configured chain, and the last 10 transfers. It generates a key when the line is empty and writes it into `.env`. Use a different key for mainnet than for Base Sepolia. Connect uses the Phantom extension. `RPC_URL` overrides the public Base RPC for the server and the agents. Copy `.env.example` to `.env`.
+The default chain is `near-testnet`. The launcher reads `CHAIN`, then loads `.env.near-testnet`, `.env.base-sepolia`, or `.env.base`. It creates the selected file and fills missing defaults without replacing non-empty keys or addresses. Explicit process environment values win. The legacy `.env` remains the chain selector and a fallback for existing installs. For a production chain switch, run `CHAIN=base-sepolia bun run build` followed by `CHAIN=base-sepolia bun run start`; development only needs `CHAIN=base-sepolia bun run dev`.
 
-`bun run agent` keeps `AGENT_COUNT` wallets in `agent/keys.json` and trades with them. On Base Sepolia each wallet gets the same grant as a person and places buy-ins from that balance. It does not call the Coinbase faucet or sweep. `AGENT_SECRET` marks those sessions as bots so they can buy in every window. `CHAIN=base` does nothing unless `AGENT_MAINNET=1`. `bun run agents` is the terminal dashboard for the swarm: crowd, book, money, and roster, with clock, pin, buy-in pause, and bleed. `bun run feeds` is the terminal dashboard for the price feeds. It shows the live source and whether each backup venue can take over. Closing it leaves the server up.
+On NEAR, `TOKEN_ACCOUNT` is the quick-market NEP-141 contract (`QM`, 6 decimals), and the current UI connects through My NEAR Wallet. `bun run treasury` generates a missing treasury key in the selected network file. `bun run token` builds on the existing deployment flow and writes the NEAR token account/key, or Base Sepolia `USDC_ADDRESS`, back to that same file. The server checks treasury NEAR, treasury QM, and each agent account on NEAR startup. A short balance keeps the process listening; a missing key or a token that is not six-decimal QM stops it before listening.
+
+Base custody is dormant during a NEAR launch. When Base Sepolia is selected, the existing Phantom flow, quick-market USDC grants, deposits, withdrawals, and token deployment remain available. Base mainnet uses Circle USDC and does not grant test funds. Use a different mainnet treasury key. `RPC_URL` in each network file overrides that network's public RPC.
+
+`bun run agent` uses `agent/keys.near.json` and the NEAR treasury by default. Base Sepolia uses `agent/keys.json`; Base mainnet refuses the swarm. Agents enroll, trade, refill, and burn through the selected chain. `AGENT_SECRET` authorizes the agent API. `bun run agents` is the terminal dashboard for the swarm: crowd, book, money, and roster, with clock, pin, buy-in pause, and bleed. `bun run feeds` shows the live source and backup venues. Closing either dashboard leaves the server up.
 
 ## Architecture
 
-Bun serves HTTP and a websocket. SQLite holds users, rounds, buy-ins, and one price per second. React draws the screen. The server advances the clock every 16ms.
+Bun serves HTTP and a websocket. One SQLite database holds chain-scoped users, rounds, buy-ins, custody, sessions, and agent state, plus a shared BTC price tape. Legacy agent state is imported once; `agent/swarm.sqlite` is no longer active. React draws the screen. The server advances the clock every 16ms.
 
 Buy-in windows tile UTC time. Each lasts `WINDOW_SECONDS`, and the next opens when the previous closes. Market `id` is `floor(now / window)`. Its book opens at `id * window`, the strike locks when that window closes, and it settles `MARKET_SECONDS` later. A buy-in names that window. If the server receives it outside the window, the buy-in is rejected and is not placed on the window that is open on arrival.
 

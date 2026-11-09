@@ -1,4 +1,5 @@
 import { beforeEach, expect, test } from "bun:test"
+import { marketPreferences } from "../shared/market"
 import { applyDeposit, pollDeposits, treasuryFaultMessage } from "./custody"
 import { getDb, migrateCustody, useDatabase } from "./db"
 import { credit, youFor } from "./rounds"
@@ -7,6 +8,7 @@ const treasury = `0x${"11".repeat(20)}`
 const from = `0x${"22".repeat(20)}`
 
 beforeEach(() => {
+  marketPreferences.chain = "base-sepolia"
   useDatabase(":memory:")
 })
 
@@ -40,10 +42,10 @@ test("custody migration zeros demo balances and drops open bets", () => {
   const who = `0x${"44".repeat(20)}`
   credit(who, 5_000_000)
   const db = getDb()
-  db.query("INSERT INTO rounds (id, starts_at, ends_at, status) VALUES (1, 0, 1, 'open')").run()
-  db.query("INSERT INTO rounds (id, starts_at, ends_at, status) VALUES (2, 0, 1, 'settled')").run()
-  db.query("INSERT INTO buy_ins (id, round_id, address, side, stake_micros, created_at) VALUES ('open', 1, ?, 'up', 100, 0)").run(who)
-  db.query("INSERT INTO buy_ins (id, round_id, address, side, stake_micros, created_at) VALUES ('done', 2, ?, 'up', 100, 0)").run(who)
+  db.query("INSERT INTO rounds (chain_key, id, starts_at, ends_at, status) VALUES ('base-sepolia', 1, 0, 1, 'open')").run()
+  db.query("INSERT INTO rounds (chain_key, id, starts_at, ends_at, status) VALUES ('base-sepolia', 2, 0, 1, 'settled')").run()
+  db.query("INSERT INTO buy_ins (chain_key, id, round_id, address, side, stake_micros, created_at) VALUES ('base-sepolia', 'open', 1, ?, 'up', 100, 0)").run(who)
+  db.query("INSERT INTO buy_ins (chain_key, id, round_id, address, side, stake_micros, created_at) VALUES ('base-sepolia', 'done', 2, ?, 'up', 100, 0)").run(who)
   db.query("DELETE FROM meta WHERE key = 'custody_v1'").run()
   migrateCustody(db)
   expect(youFor(who)?.balanceMicros).toBe(0)
@@ -60,7 +62,7 @@ test("a treasury with no ETH reports the gas failure", () => {
 
 test("pollDeposits credits a transfer that landed ahead of the cursor", async () => {
   const db = getDb()
-  db.query("INSERT INTO meta (key, value) VALUES ('deposit_block', '100')").run()
+  db.query("INSERT INTO meta (key, value) VALUES ('base-sepolia:deposit_block', '100')").run()
   await pollDeposits(
     {
       getBlockNumber: async () => 110n,
@@ -76,13 +78,13 @@ test("pollDeposits credits a transfer that landed ahead of the cursor", async ()
     treasury as `0x${string}`,
   )
   expect(youFor(from)?.balanceMicros).toBe(20_000_000)
-  const saved = db.query("SELECT value FROM meta WHERE key = 'deposit_block'").get() as { value: string } | null
+  const saved = db.query("SELECT value FROM meta WHERE key = 'base-sepolia:deposit_block'").get() as { value: string } | null
   expect(saved?.value).toBe("107")
 })
 
 test("pollDeposits reads only the configured token", async () => {
   const usdc = `0x${"66".repeat(20)}`
-  getDb().query("INSERT INTO meta (key, value) VALUES ('deposit_block', '1')").run()
+  getDb().query("INSERT INTO meta (key, value) VALUES ('base-sepolia:deposit_block', '1')").run()
   let seen = ""
   await pollDeposits(
     {
@@ -101,7 +103,7 @@ test("pollDeposits reads only the configured token", async () => {
 
 test("pollDeposits chunks eth_getLogs into ranges of at most 200 blocks", async () => {
   const db = getDb()
-  db.query("INSERT INTO meta (key, value) VALUES ('deposit_block', '100')").run()
+  db.query("INSERT INTO meta (key, value) VALUES ('base-sepolia:deposit_block', '100')").run()
   const ranges: [bigint, bigint][] = []
   await pollDeposits(
     {
@@ -122,6 +124,6 @@ test("pollDeposits chunks eth_getLogs into ranges of at most 200 blocks", async 
   for (const [start, end] of ranges) {
     expect(end - start <= 199n).toBe(true)
   }
-  const saved = db.query("SELECT value FROM meta WHERE key = 'deposit_block'").get() as { value: string } | null
+  const saved = db.query("SELECT value FROM meta WHERE key = 'base-sepolia:deposit_block'").get() as { value: string } | null
   expect(saved?.value).toBe("550")
 })
