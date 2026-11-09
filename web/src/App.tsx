@@ -1,5 +1,6 @@
 import { Children, isValidElement, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react"
 import type { Lang } from "../../shared/lang"
+import { reportLines, type TreasuryReport } from "../../shared/near"
 import { MINT_CONFIRMATIONS } from "../../shared/mint"
 import { mountChart, priceY, type ChartScale, type TapeChart, type TapeSample } from "./chart"
 import { chartMarket, focusPool, followWindow, heldMarket, heldStrike } from "./focus"
@@ -82,6 +83,7 @@ export function App() {
   const [withdrawAmount, setWithdrawAmount] = useState("")
   const [withdrawError, setWithdrawError] = useState<string | null>(null)
   const [withdrawing, setWithdrawing] = useState(false)
+  const [treasuryReport, setTreasuryReport] = useState<TreasuryReport | null>(null)
   const [following, setFollowing] = useState(true)
   const scrub = useScrub(chart)
   boardRef.current = market.board
@@ -100,7 +102,31 @@ export function App() {
 
   const followHash = market.you?.grantPending?.txHash || (funding ? grantTx : null)
   useEffect(() => {
+    if (market.config.chainKey !== "near-testnet") return
+    let cancel = false
+    const tick = () => {
+      void fetch("/api/health")
+        .then((response) => response.json())
+        .then((body: { treasury?: TreasuryReport | null }) => {
+          if (!cancel) setTreasuryReport(body.treasury ?? null)
+        })
+        .catch(() => {
+          if (!cancel) setTreasuryReport(null)
+        })
+    }
+    tick()
+    const id = window.setInterval(tick, 15_000)
+    return () => {
+      cancel = true
+      window.clearInterval(id)
+    }
+  }, [market.config.chainKey])
+  useEffect(() => {
     if (!followHash) return
+    if (market.config.chainKey === "near-testnet") {
+      setGrantSeen(MINT_CONFIRMATIONS)
+      return
+    }
     let cancel = false
     setGrantSeen(0)
     const tick = () => {
@@ -114,7 +140,7 @@ export function App() {
       cancel = true
       window.clearInterval(id)
     }
-  }, [followHash, market.config.chainId])
+  }, [followHash, market.config.chainId, market.config.chainKey])
 
   const grantWatch = useRef<{ grantAt: number | null } | null>(null)
   useEffect(() => {
@@ -360,6 +386,9 @@ export function App() {
           </div>
         </div>
       </header>
+      {treasuryReport && !treasuryReport.ok && (
+        <p className="note warn">{reportLines(treasuryReport, text.nearReport).join(" · ")}</p>
+      )}
       {session.chainError && <p className="note bad">{localize(lang, session.chainError)}</p>}
       {session.pageChain && market.config.treasury && market.config.chainId !== session.pageChain.id && (
         <p className="note bad">{text.pageChain(session.pageChain.name, market.config.chainName)}</p>
@@ -434,7 +463,7 @@ export function App() {
         />
         <div className="stake">
           <div className="balance-label">
-            <TokenBadge kind={testnet ? "qm" : "circle"} />
+            <TokenBadge kind={testnet ? "qm" : "circle"} chainKey={market.config.chainKey} />
             {!session.token || !session.address ? (
               <span className="who" ref={session.address ? walletMenuRef : undefined}>
                 {session.address && (
@@ -507,7 +536,7 @@ export function App() {
                   type="button"
                   className="fund-plus"
                   data-grant={grantReady ? "due" : "wait"}
-                  aria-label={grantReady ? text.grantReady : testnet ? text.grantQm : text.depositUsdc}
+                  aria-label={grantReady ? text.grantReady : market.config.chainKey === "near-testnet" ? text.grantNear : testnet ? text.grantQm : text.depositUsdc}
                   title={grantReady ? text.grantReady : testnet ? text.grant : text.deposit}
                   onClick={openGrant}
                   disabled={!session.token || grantInFlight}
@@ -521,11 +550,11 @@ export function App() {
                       {session.address}
                     </p>
                     <div className="wallet-menu-net">
-                      <TokenBadge kind={testnet ? "qm" : "circle"} />
-                      <span className="net-badge" data-testnet={isTestnetChain(market.config.chainId) ? "1" : "0"}>
-                        {session.signing ? text.pleaseWait : chainMenuLabel(market.config.chainId, market.config.chainName, lang)}
+                      <TokenBadge kind={testnet ? "qm" : "circle"} chainKey={market.config.chainKey} />
+                      <span className="net-badge" data-testnet={isTestnetChain(market.config.chainId, market.config.chainKey) ? "1" : "0"}>
+                        {session.signing ? text.pleaseWait : chainMenuLabel(market.config.chainId, market.config.chainName, lang, market.config.chainKey)}
                       </span>
-                      {wrongChain && (
+                      {wrongChain && market.config.chainKey !== "near-testnet" && (
                         <button type="button" className="plain net-action" onClick={session.switchChain}>
                           {text.switchNetwork}
                         </button>
@@ -559,7 +588,7 @@ export function App() {
             )}
           </div>
           {session.signing && session.loginPhase && !grantPending && (
-            <WaitNote text={loginStatus(session.loginPhase, testnet, lang)} steps={loginSteps(testnet, lang)} phase={session.loginPhase} />
+            <WaitNote text={loginStatus(session.loginPhase, testnet, lang, market.config.chainKey)} steps={loginSteps(testnet, lang)} phase={session.loginPhase} />
           )}
           {grantPending && (
             <GrantFollow
@@ -568,6 +597,7 @@ export function App() {
               seen={grantSeen}
               needed={grantPending.confirmations}
               chainId={market.config.chainId}
+              chainKey={market.config.chainKey}
               now={now}
             />
           )}
@@ -640,6 +670,7 @@ export function App() {
       {fundOpen && testnet && (
         <GrantOverlay
           chainId={market.config.chainId}
+          chainKey={market.config.chainKey}
           chainName={market.config.chainName}
           grantMicros={market.config.grantMicros}
           grantIntervalMs={market.config.grantIntervalMs}
@@ -767,6 +798,7 @@ export function App() {
           label={session.label}
           balanceMicros={you?.balanceMicros ?? 0}
           chainId={market.config.chainId}
+          chainKey={market.config.chainKey}
           chainName={market.config.chainName}
           amount={withdrawAmount}
           pending={withdrawing}
@@ -1159,13 +1191,15 @@ function PriceReadout({
   )
 }
 
-function TokenBadge({ kind }: { kind: "circle" | "qm" }) {
+function TokenBadge({ kind, chainKey }: { kind: "circle" | "qm"; chainKey?: string }) {
   const { text } = useI18n()
-  const title = kind === "circle" ? text.circleTitle : text.qmTitle
+  const near = chainKey === "near-testnet"
+  const title = kind === "circle" ? text.circleTitle : near ? text.nearTitle : text.qmTitle
+  const label = kind === "circle" ? "USDC" : near ? text.nearBadge : "QM USDC"
   return (
     <span className="token-badge" data-kind={kind} title={title}>
       {kind === "circle" ? <CircleMark /> : <QmMark />}
-      <span>{kind === "circle" ? "USDC" : "QM USDC"}</span>
+      <span>{label}</span>
     </span>
   )
 }
@@ -1323,6 +1357,7 @@ function FundOverlay({
 
 function GrantOverlay({
   chainId,
+  chainKey,
   chainName,
   grantMicros,
   grantIntervalMs,
@@ -1337,6 +1372,7 @@ function GrantOverlay({
   onGrant,
 }: {
   chainId: number
+  chainKey: string
   chainName: string
   grantMicros: number
   grantIntervalMs: number
@@ -1367,26 +1403,27 @@ function GrantOverlay({
     return () => window.clearInterval(id)
   }, [granting])
   const timing = grantTiming(grantAt, now, grantIntervalMs)
-  const txUrl = txHash ? grantTxUrl(chainId, txHash) : null
+  const near = chainKey === "near-testnet"
+  const txUrl = txHash ? grantTxUrl(chainId, txHash, chainKey) : null
   const waiting = granting
-    ? grantWaitStatus(txHash ? { seen: confirmationsSeen, needed: confirmationsNeeded } : undefined, lang)
+    ? grantWaitStatus(txHash ? { seen: confirmationsSeen, needed: confirmationsNeeded } : undefined, lang, chainKey)
     : null
   return (
     <div className="fund-back" onClick={onClose}>
-      <div className="fund-overlay" role="dialog" aria-modal="true" aria-label={text.grantAria} onClick={(event) => event.stopPropagation()}>
+      <div className="fund-overlay" role="dialog" aria-modal="true" aria-label={near ? text.grantNear : text.grantAria} onClick={(event) => event.stopPropagation()}>
         <header className="overlay-head">
           <div>
             <h2>{text.grant}</h2>
-            <TokenBadge kind="qm" />
+            <TokenBadge kind="qm" chainKey={chainKey} />
             <span className="net-badge" data-testnet="1">
-              {chainBadgeText(chainId, chainName, lang)}
+              {chainBadgeText(chainId, chainName, lang, chainKey as "base" | "base-sepolia" | "near-testnet")}
             </span>
           </div>
           <button type="button" className="overlay-close" aria-label={text.close} onClick={onClose}>
             {"×"}
           </button>
         </header>
-        <p className="note grant-copy">{grantSentence(grantMicros, grantIntervalMs, lang)}</p>
+        <p className="note grant-copy">{grantSentence(grantMicros, grantIntervalMs, lang, chainKey as "base" | "base-sepolia" | "near-testnet")}</p>
         <dl className="overlay-meta">
           <div>
             <dt>{text.amount}</dt>
@@ -1426,6 +1463,7 @@ function WithdrawOverlay({
   label,
   balanceMicros,
   chainId,
+  chainKey,
   chainName,
   amount,
   pending,
@@ -1440,6 +1478,7 @@ function WithdrawOverlay({
   label: string | null
   balanceMicros: number
   chainId: number
+  chainKey: string
   chainName: string
   amount: string
   pending: boolean
@@ -1461,13 +1500,13 @@ function WithdrawOverlay({
   const submitDisabled = pending || parsed === null || parsed > balanceMicros
   return (
     <div className="fund-back" onClick={onClose}>
-      <div className="fund-overlay" role="dialog" aria-modal="true" aria-label={testnet ? text.withdrawQm : text.withdrawUsdc} onClick={(event) => event.stopPropagation()}>
+      <div className="fund-overlay" role="dialog" aria-modal="true" aria-label={chainKey === "near-testnet" ? text.withdrawNear : testnet ? text.withdrawQm : text.withdrawUsdc} onClick={(event) => event.stopPropagation()}>
         <header className="overlay-head">
           <div>
             <h2>{text.withdraw}</h2>
-            <TokenBadge kind={testnet ? "qm" : "circle"} />
+            <TokenBadge kind={testnet ? "qm" : "circle"} chainKey={chainKey} />
             <span className="net-badge" data-testnet={testnet ? "1" : "0"}>
-              {chainBadgeText(chainId, chainName, lang)}
+              {chainBadgeText(chainId, chainName, lang, chainKey as "base" | "base-sepolia" | "near-testnet")}
             </span>
           </div>
           <button type="button" className="overlay-close" aria-label={text.close} onClick={onClose}>
@@ -1502,7 +1541,7 @@ function WithdrawOverlay({
             {pending ? text.withdrawing : text.withdraw}
           </button>
         </div>
-        {testnet && <p className="note">{text.paysQm}</p>}
+        {chainKey === "near-testnet" ? <p className="note">{text.paysNear}</p> : testnet ? <p className="note">{text.paysQm}</p> : null}
         {error && <p className="note bad">{localize(lang, error)}</p>}
       </div>
     </div>
@@ -1575,6 +1614,7 @@ function GrantFollow({
   seen,
   needed,
   chainId,
+  chainKey,
   now,
 }: {
   startedAt: number
@@ -1582,15 +1622,16 @@ function GrantFollow({
   seen: number
   needed: number
   chainId: number
+  chainKey: string
   now: number
 }) {
   const { lang, text } = useI18n()
-  if (!txHash) return <WaitNote text={grantWaitStatus(undefined, lang)} />
+  if (!txHash) return <WaitNote text={grantWaitStatus(undefined, lang, chainKey)} />
   const elapsed = Math.max(0, now - startedAt)
-  const txUrl = grantTxUrl(chainId, txHash)
+  const txUrl = grantTxUrl(chainId, txHash, chainKey)
   return (
     <div className="grant-progress">
-      <WaitNote text={grantWaitStatus({ seen, needed }, lang)} />
+      <WaitNote text={grantWaitStatus({ seen, needed }, lang, chainKey)} />
       <p className="grant-timer" aria-label={text.elapsed(formatGrantTimer(elapsed))}>
         {formatGrantTimer(elapsed)}
       </p>

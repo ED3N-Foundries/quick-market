@@ -158,6 +158,24 @@ test("a bot session does not take the grant", async () => {
   expect(youFor(who)?.grantAt).toBeNull()
 })
 
+test("NEAR testnet grants the same way as Base Sepolia", async () => {
+  const account = "ab".repeat(32)
+  const minted: number[] = []
+  const credited = await applyGrant({
+    address: account,
+    now: 0,
+    chainKey: "near-testnet",
+    amount: 100_000_000,
+    intervalMs: hour,
+    mint: async (amount) => {
+      minted.push(amount)
+    },
+  })
+  expect(credited).toBe(true)
+  expect(minted).toEqual([100_000_000])
+  expect(youFor(account)?.balanceMicros).toBe(100_000_000)
+})
+
 test("Base does not grant", async () => {
   let minted = false
   const credited = await applyGrant({

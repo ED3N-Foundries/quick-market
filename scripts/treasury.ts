@@ -5,10 +5,13 @@ import { createPublicClient, http, parseAbiItem, type Address } from "viem"
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts"
 import { base, baseSepolia } from "viem/chains"
 import { CHAINS, chainFromEnv, type ChainConfig, type ChainKey } from "../shared/chain"
+import { formatQm, formatYocto, isImplicitAccount } from "../shared/near"
+import { accountFromSecret, generateNearSecret } from "../shared/nearKey"
 import { loadMarket, marketPreferences } from "../shared/market"
 import { usdcAbi } from "../shared/usdc"
 import { tuneDatabase } from "../server/db"
 import { loadEnv } from "../server/env"
+import { readNearBalance, readTokenBalance } from "../server/near"
 
 const ENV_PATH = join(process.cwd(), ".env")
 const EXAMPLE_PATH = join(process.cwd(), ".env.example")
@@ -20,12 +23,14 @@ const transferEvent = parseAbiItem("event Transfer(address indexed from, address
 const EXPLORERS: Record<ChainKey, { api: string; site: string }> = {
   base: { api: "https://base.blockscout.com", site: "https://base.blockscout.com" },
   "base-sepolia": { api: "https://base-sepolia.blockscout.com", site: "https://base-sepolia.blockscout.com" },
+  "near-testnet": { api: "https://api-testnet.nearblocks.io", site: "https://testnet.nearblocks.io" },
 }
 
 // Publicnode serves this span. Wider filtered eth_getLogs calls ask for an archive token.
 const HISTORY_RPC: Record<ChainKey, string> = {
   base: "https://base-rpc.publicnode.com",
   "base-sepolia": "https://base-sepolia-rpc.publicnode.com",
+  "near-testnet": "https://rpc.testnet.near.org",
 }
 
 export type TreasuryPlan =
@@ -145,6 +150,75 @@ function fillTreasuryLine(source: string, key: `0x${string}`): string {
   }
   const body = source.length === 0 || source.endsWith("\n") ? source : `${source}\n`
   return `${body}${NAME}=${key}\n`
+}
+
+function fillSecretLine(source: string, secret: string): string {
+  const lines = source.split(/\r?\n/)
+  let replaced = false
+  const next = lines.map((line) => {
+    if (replaced || !line.startsWith(`${NAME}=`)) return line
+    if (line.slice(NAME.length + 1).trim() !== "") return line
+    replaced = true
+    return `${NAME}=${secret}`
+  })
+  if (replaced) {
+    const joined = next.join("\n")
+    return joined.endsWith("\n") ? joined : `${joined}\n`
+  }
+  const body = source.length === 0 || source.endsWith("\n") ? source : `${source}\n`
+  return `${body}${NAME}=${secret}\n`
+}
+
+export async function planNearTreasury(
+  source: string,
+  envKey: string | undefined,
+  generated: string,
+): Promise<
+  | { action: "invalid" }
+  | { action: "refuse" | "keep"; account: string }
+  | { action: "write"; text: string; account: string }
+> {
+  const fileRaw = firstValue(source)
+  const envRaw = envKey?.trim() ?? ""
+  if (envRaw && envRaw !== fileRaw) {
+    const account = await accountFromSecret(envRaw)
+    if (!account || !isImplicitAccount(account)) return { action: "invalid" }
+    return { action: "refuse", account }
+  }
+  if (fileRaw) {
+    const account = await accountFromSecret(fileRaw)
+    if (!account || !isImplicitAccount(account)) return { action: "invalid" }
+    return { action: "keep", account }
+  }
+  const account = await accountFromSecret(generated)
+  if (!account || !isImplicitAccount(account)) return { action: "invalid" }
+  return { action: "write", text: fillSecretLine(source, generated), account }
+}
+
+async function runNearTreasury(source: string) {
+  const generated = await generateNearSecret()
+  const decision = await planNearTreasury(source, process.env.TREASURY_PRIVATE_KEY, generated.secretKey)
+  if (decision.action === "invalid") {
+    console.error("TREASURY_PRIVATE_KEY must be an ed25519 NEAR secret key")
+    process.exit(1)
+  }
+  if (decision.action === "write") {
+    writeFileSync(ENV_PATH, decision.text, { mode: 0o600 })
+    chmodSync(ENV_PATH, 0o600)
+    console.log("wrote TREASURY_PRIVATE_KEY to .env")
+  } else if (decision.action === "refuse") {
+    console.log("TREASURY_PRIVATE_KEY is already set. .env was not changed.")
+  }
+  console.log(`treasury ${decision.account}`)
+  console.log("This account needs testnet NEAR from the faucet before it can pay gas.")
+  try {
+    const balance = await readNearBalance(decision.account)
+    console.log(`NEAR ${formatYocto(balance.yocto)}`)
+    const token = loadEnv().tokenAccount.trim()
+    if (token) console.log(`QM ${formatQm(await readTokenBalance(token, decision.account))}`)
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : error)
+  }
 }
 
 export function planTreasury(source: string, envKey: string | undefined, generated: `0x${string}`): TreasuryPlan {
@@ -712,7 +786,8 @@ function viemChain(config: ChainConfig) {
 }
 
 function chainsFor(configured: ChainConfig): ChainConfig[] {
-  return [configured, ...Object.values(CHAINS).filter((chain) => chain.key !== configured.key)]
+  const evm = Object.values(CHAINS).filter((chain) => chain.family === "evm")
+  return [configured, ...evm.filter((chain) => chain.key !== configured.key)]
 }
 
 async function loadChain(config: ChainConfig, address: Address, rpc: string, configured: boolean): Promise<ChainFunds> {
@@ -866,6 +941,10 @@ async function main() {
     process.exit(1)
   }
   const source = loadSource()
+  if (marketPreferences.chain === "near-testnet") {
+    await runNearTreasury(source)
+    return
+  }
   const decision = planTreasury(source, process.env.TREASURY_PRIVATE_KEY, generatePrivateKey())
   if (decision.action === "invalid") {
     console.error("TREASURY_PRIVATE_KEY must be a 32-byte hex string")

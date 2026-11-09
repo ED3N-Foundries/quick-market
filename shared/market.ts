@@ -30,6 +30,7 @@ export type PublicConfig = {
   minStakeMicros: number
   source: PriceSource
   chainId: number
+  chainKey: ChainKey
   chainName: string
   usdc: string
   treasury: string
@@ -44,7 +45,7 @@ const seconds = z.int().min(1).max(120)
 const positive = z.int().positive()
 
 export const marketSchema = z.strictObject({
-  chain: z.enum(["base", "base-sepolia"]),
+  chain: z.enum(["base", "base-sepolia", "near-testnet"]),
   windowSeconds: seconds,
   marketSeconds: seconds,
   viewSeconds: seconds,
@@ -102,7 +103,7 @@ const optionalSeconds = z.preprocess(unset, z.coerce.number().int().min(1).max(1
 const optionalPositive = z.preprocess(unset, z.coerce.number().int().positive().optional())
 
 const preferenceEnv = z.object({
-  CHAIN: z.preprocess(unset, z.enum(["base", "base-sepolia"]).optional()),
+  CHAIN: z.preprocess(unset, z.enum(["base", "base-sepolia", "near-testnet"]).optional()),
   WINDOW_SECONDS: optionalSeconds,
   MARKET_SECONDS: optionalSeconds,
   VIEW_SECONDS: optionalSeconds,

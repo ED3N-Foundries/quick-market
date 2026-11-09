@@ -19,6 +19,7 @@ test("hardcoded preferences replace a valid env declaration", () => {
   expect(loaded.feeBps).toBe(0)
   expect(loaded.priceSource).toBe("binance")
   expect(loaded.chain).toBe("base-sepolia")
+  expect(loadMarket({ CHAIN: "near-testnet" }).chain).toBe("base-sepolia")
   expect(loaded.grantMicros).toBe(100_000_000)
   expect(loaded.grantIntervalMs).toBe(120_000)
 })

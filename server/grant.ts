@@ -2,7 +2,7 @@ import type { ChainKey } from "../shared/chain"
 import { marketPreferences } from "../shared/market"
 import { getDb } from "./db"
 import { trackGrant } from "./grantWait"
-import { normalizeAddress } from "./money"
+import { normalizeAccount } from "./money"
 
 export function grantSettings(): { amount: number; intervalMs: number } {
   return { amount: marketPreferences.grantMicros, intervalMs: marketPreferences.grantIntervalMs }
@@ -37,8 +37,8 @@ export function startGrant(input: {
   intervalMs: number
   mint: (amountMicros: number) => Promise<void>
 }): { claimed: boolean; done: Promise<boolean> } {
-  if (input.chainKey !== "base-sepolia") return { claimed: false, done: Promise.resolve(false) }
-  const address = normalizeAddress(input.address)
+  if (input.chainKey !== "base-sepolia" && input.chainKey !== "near-testnet") return { claimed: false, done: Promise.resolve(false) }
+  const address = normalizeAccount(input.address, input.chainKey)
   if (!address) return { claimed: false, done: Promise.resolve(false) }
   if (!claimSlot(address, input.now, input.intervalMs)) return { claimed: false, done: Promise.resolve(false) }
   const done = trackGrant(address, () => finishGrant(address, input.now, input.amount, input.mint))
@@ -59,8 +59,8 @@ export async function applyGrant(input: {
 }
 
 /** The mint hash, stored while the slot is still open. */
-export function noteGrantTx(address: string, hash: string): void {
-  const normalized = normalizeAddress(address)
+export function noteGrantTx(address: string, hash: string, chainKey: ChainKey = marketPreferences.chain): void {
+  const normalized = normalizeAccount(address, chainKey)
   if (!normalized || hash.length === 0) return
   getDb()
     .query("UPDATE users SET grant_tx = ? WHERE address = ? AND grant_pending_at IS NOT NULL")

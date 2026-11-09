@@ -1,12 +1,15 @@
-export type ChainKey = "base" | "base-sepolia"
+export type ChainKey = "base" | "base-sepolia" | "near-testnet"
 
 export type ChainConfig = {
   key: ChainKey
+  family: "evm" | "near"
   id: number
   name: string
+  /** EVM token contract. Unused on NEAR testnet, where TOKEN_ACCOUNT names the contract. */
   usdc: `0x${string}`
   rpc: string
   faucet: boolean
+  gasToken: "ETH" | "NEAR"
 }
 
 /** Circle's Base Sepolia USDC. Sepolia quick-market must not use this contract. */
@@ -15,19 +18,33 @@ export const CIRCLE_SEPOLIA_USDC = "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
 export const CHAINS: Record<ChainKey, ChainConfig> = {
   base: {
     key: "base",
+    family: "evm",
     id: 8453,
     name: "Base",
     usdc: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
     rpc: "https://mainnet.base.org",
     faucet: false,
+    gasToken: "ETH",
   },
   "base-sepolia": {
     key: "base-sepolia",
+    family: "evm",
     id: 84532,
     name: "Base Sepolia",
     usdc: CIRCLE_SEPOLIA_USDC,
     rpc: "https://sepolia.base.org",
     faucet: true,
+    gasToken: "ETH",
+  },
+  "near-testnet": {
+    key: "near-testnet",
+    family: "near",
+    id: 0,
+    name: "NEAR Testnet",
+    usdc: "0x0000000000000000000000000000000000000000",
+    rpc: "https://rpc.testnet.near.org",
+    faucet: true,
+    gasToken: "NEAR",
   },
 }
 
@@ -45,12 +62,14 @@ export function chainFromEnv(value: string | undefined, usdcAddress?: string | n
 
 function chainByKey(value: string | undefined): ChainConfig {
   if (value === undefined || value === "") return CHAINS["base-sepolia"]
-  if (value === "base" || value === "base-sepolia") return CHAINS[value]
-  throw new Error(`Unknown CHAIN "${value}". Use base or base-sepolia.`)
+  if (value === "base" || value === "base-sepolia" || value === "near-testnet") return CHAINS[value]
+  throw new Error(`Unknown CHAIN "${value}". Use base, base-sepolia, or near-testnet.`)
 }
 
 export function moneyLabel(chain: Pick<ChainConfig, "key">): string {
-  return chain.key === "base" ? "Circle USDC" : "quick-market USDC"
+  if (chain.key === "base") return "Circle USDC"
+  if (chain.key === "near-testnet") return "quick-market"
+  return "quick-market USDC"
 }
 
 export type TokenKind = "circle" | "qm"
@@ -62,7 +81,9 @@ export function tokenKind(chain: Pick<ChainConfig, "key">): TokenKind {
 
 /** Short name next to the coin mark. */
 export function tokenLabel(chain: Pick<ChainConfig, "key">): string {
-  return chain.key === "base" ? "USDC" : "QM USDC"
+  if (chain.key === "base") return "USDC"
+  if (chain.key === "near-testnet") return "QM"
+  return "QM USDC"
 }
 
 /** The running Sepolia server and agent must watch quick-market USDC, never Circle's contract. */

@@ -4,7 +4,7 @@ import { handoffBanner, tickerFor, type Handoff, type Ticker } from "../shared/s
 import { clockAt, feeBps, LIVE_MS, marketBounds, MIN_STAKE_MICROS, priceSource, TAPE_MS, windowAccepts, type PriceSource } from "./config"
 import { getDb } from "./db"
 import { grantWaiting } from "./grantWait"
-import { normalizeAddress } from "./money"
+import { normalizeAccount, normalizeAddress } from "./money"
 import { settleRound, type Resolution, type Side } from "./settle"
 
 export type { Side }
@@ -863,7 +863,7 @@ export function placeBuyIns(input: {
   if (!round || round.status !== "open") return { ok: false, error: "Buy-in is closed" }
 
   const prepared = input.orders.map((order) => {
-    const address = normalizeAddress(order.address)
+    const address = normalizeAccount(order.address)
     return { address, side: order.side, stakeMicros: order.stakeMicros }
   })
   const lookup = [...new Set(prepared.flatMap((order) => (order.address ? [order.address] : [])))]

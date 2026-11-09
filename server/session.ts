@@ -1,12 +1,54 @@
 import { timingSafeEqual } from "node:crypto"
 import { recoverMessageAddress, type Hex } from "viem"
-import { LOGIN_SKEW_MS, SESSION_MS, loginMessage } from "../shared/login"
+import { LOGIN_SKEW_MS, SESSION_MS, loginMessage, nearLoginMessage } from "../shared/login"
+import { NEP413_RECIPIENT, parseNearPublicKey, verifyNep413, verifyNearMessage } from "../shared/nearKey"
+import { isImplicitAccount } from "../shared/near"
 import { configuredChain, loadEnv } from "./env"
 import { getDb } from "./db"
-import { normalizeAddress } from "./money"
+import { normalizeAccount } from "./money"
+import { accessKeyOnAccount } from "./near"
 import { ensureUser, youFor, type You } from "./rounds"
 
 const SIGNATURE = /^0x[0-9a-fA-F]+$/
+
+function nonceBytes(value: unknown): Uint8Array | null {
+  if (typeof value !== "string" || value.length === 0) return null
+  const bytes = Buffer.from(value, "base64")
+  return bytes.length === 32 ? new Uint8Array(bytes) : null
+}
+
+function hex(bytes: Uint8Array): string {
+  return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("")
+}
+
+async function nearSignatureOk(input: {
+  address: string
+  signature: string
+  issued: number
+  bot: boolean
+  nonce?: unknown
+  publicKey?: unknown
+}): Promise<boolean> {
+  const message = nearLoginMessage(input.address, input.issued)
+  if (input.bot) return isImplicitAccount(input.address) && (await verifyNearMessage(message, input.address, input.signature))
+  const nonce = nonceBytes(input.nonce)
+  if (!nonce || typeof input.publicKey !== "string") return false
+  if (isImplicitAccount(input.address)) {
+    const pub = parseNearPublicKey(input.publicKey)
+    if (!pub || hex(pub) !== input.address) return false
+  } else {
+    const present = await accessKeyOnAccount(input.address, input.publicKey)
+    if (!present) return false
+  }
+  return verifyNep413({
+    message,
+    account: input.address,
+    publicKey: input.publicKey,
+    signature: input.signature,
+    nonce,
+    recipient: NEP413_RECIPIENT,
+  })
+}
 
 export async function openSession(input: {
   address: string
@@ -14,29 +56,44 @@ export async function openSession(input: {
   issued: number
   now: number
   botSecret?: unknown
+  nonce?: unknown
+  publicKey?: unknown
 }): Promise<{ ok: true; token: string; you: You } | { ok: false; error: string }> {
-  const address = normalizeAddress(input.address)
+  let chainKey: ReturnType<typeof configuredChain>["key"]
+  let chainId: number
+  try {
+    const chain = configuredChain()
+    chainKey = chain.key
+    chainId = chain.id
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : "Chain is invalid" }
+  }
+  const address = normalizeAccount(input.address, chainKey)
   if (!address) return { ok: false, error: "Address is invalid" }
   if (!Number.isInteger(input.issued) || Math.abs(input.now - input.issued) > LOGIN_SKEW_MS) {
     return { ok: false, error: "Sign-in expired" }
   }
-  if (!SIGNATURE.test(input.signature)) return { ok: false, error: "Signature is invalid" }
-
-  let chainId: number
-  try {
-    chainId = configuredChain().id
-  } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : "Chain is invalid" }
+  if (chainKey === "near-testnet") {
+    const ok = await nearSignatureOk({
+      address,
+      signature: input.signature,
+      issued: input.issued,
+      bot: botSecretOk(input.botSecret),
+      nonce: input.nonce,
+      publicKey: input.publicKey,
+    })
+    if (!ok) return { ok: false, error: "Signature is invalid" }
+  } else {
+    if (!SIGNATURE.test(input.signature)) return { ok: false, error: "Signature is invalid" }
+    const message = loginMessage(chainId, address, input.issued)
+    let recovered = ""
+    try {
+      recovered = (await recoverMessageAddress({ message, signature: input.signature as Hex })).toLowerCase()
+    } catch {
+      return { ok: false, error: "Signature is invalid" }
+    }
+    if (recovered !== address) return { ok: false, error: "Signature is invalid" }
   }
-
-  const message = loginMessage(chainId, address, input.issued)
-  let recovered = ""
-  try {
-    recovered = (await recoverMessageAddress({ message, signature: input.signature as Hex })).toLowerCase()
-  } catch {
-    return { ok: false, error: "Signature is invalid" }
-  }
-  if (recovered !== address) return { ok: false, error: "Signature is invalid" }
 
   const db = getDb()
   const seen = db.query("SELECT signature FROM login_sigs WHERE signature = ?").get(input.signature)

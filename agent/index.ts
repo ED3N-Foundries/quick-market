@@ -2,22 +2,25 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "n
 import { dirname } from "node:path"
 import { privateKeyToAccount } from "viem/accounts"
 import { requireSepoliaToken } from "../shared/chain"
-import { botEnrollMessage } from "../shared/login"
+import { botEnrollMessage, nearBotEnrollMessage } from "../shared/login"
 import { loadMarket, marketPreferences } from "../shared/market"
+import { requireNearToken } from "../shared/near"
+import { accountFromSecret, signNearMessage } from "../shared/nearKey"
 import { feeBps, windowMs } from "../server/config"
 import { configuredChain, loadEnv } from "../server/env"
+import { assertQmMetadata, fundedAgents, inspectNear, NearConfigError, readTokenMetadata } from "../server/near"
 import { bankAction, seedMicros } from "./bank"
 import { checkConfig, swarmConfig, type TapeStats } from "./config"
 import { admitWallet, decideOpen, freshGate, noteResult, tapeActivity, type GateState, type PrintPoint, type Side } from "./decide"
 import { fireAt, releaseWave, type FireSlot } from "./schedule"
 import { createDirector, manilaHour, stepDirector, type DirectorState, type DirectorView } from "./director"
-import { growKeys, type StoredKey } from "./keys"
+import { growKeys, growNearKeys, type NearStoredKey, type StoredKey } from "./keys"
 import { personaFor, type Persona } from "./persona"
 import { openClock, stepPresence, type Arrival, type WalletClock } from "./presence"
 import { replayPayouts } from "./replay"
 import { peekApiEndpoint, refreshApiEndpoint } from "./endpoint"
 import { histogram, manilaClock, parseControl, parseFlow, percentiles, type FlowFile, type SwarmSnapshot } from "./status"
-import { CONTROL_PATH, FLOW_PATH, KEYS_PATH, STATUS_PATH, SWARM_DB_PATH, SWARM_PATH, readJson, writeJsonAtomic } from "./store"
+import { CONTROL_PATH, FLOW_PATH, KEYS_PATH, NEAR_KEYS_PATH, STATUS_PATH, SWARM_DB_PATH, SWARM_PATH, readJson, writeJsonAtomic } from "./store"
 import {
   loadWalletMap,
   metaGet,
@@ -58,7 +61,8 @@ type Book = {
 type LiveWallet = {
   index: number
   address: string
-  privateKey: `0x${string}`
+  privateKey: string
+  funded: boolean
   clock: WalletClock
   online: boolean
   enrolled: boolean
@@ -117,15 +121,46 @@ async function main() {
     process.exit(1)
   }
   const chain = configuredChain()
-  requireSepoliaToken(chain)
+  const near = marketPreferences.chain === "near-testnet"
+  let funded: Set<string> | null = null
+  if (near) {
+    requireNearToken(chain.key, loadEnv().tokenAccount)
+    const treasury = await accountFromSecret(loadEnv().treasuryPrivateKey)
+    if (!treasury) {
+      console.error("TREASURY_PRIVATE_KEY must be an ed25519 NEAR secret key")
+      process.exit(1)
+    }
+    try {
+      assertQmMetadata(await readTokenMetadata(loadEnv().tokenAccount.trim()))
+    } catch (error) {
+      if (error instanceof NearConfigError) {
+        console.error(error.message)
+        process.exit(1)
+      }
+      console.error(error instanceof Error ? error.message : error)
+    }
+    const nearKeys = await growNearKeys(loadNearKeyFile(), 0, swarmConfig.runner.keyCap)
+    saveNearKeyFile(nearKeys)
+    const report = await inspectNear(treasury)
+    for (const line of report.lines) console.error(line)
+    funded = fundedAgents(report)
+  } else {
+    requireSepoliaToken(chain)
+  }
 
   const db = openSwarm(SWARM_DB_PATH)
   pruneUnenrolled(db)
-  let keys = growKeys(loadKeyFile(), 0, swarmConfig.runner.keyCap)
-  saveKeyFile(keys)
+  let keys: { address: string; privateKey: string }[]
+  if (near) {
+    keys = loadNearKeyFile().map((key) => ({ address: key.account, privateKey: key.privateKey }))
+  } else {
+    const evm = growKeys(loadKeyFile(), 0, swarmConfig.runner.keyCap)
+    saveKeyFile(evm)
+    keys = evm
+  }
   const wallets = new Map<string, LiveWallet>()
   const stored = loadWalletMap(db)
-  keys.forEach((key, index) => remember(wallets, key, stored.get(key.address.toLowerCase()) ?? null, index))
+  keys.forEach((key, index) => remember(wallets, key, stored.get(key.address.toLowerCase()) ?? null, index, funded))
   const existingBalances = await fetchBalances([...wallets.keys()])
   for (const row of existingBalances) {
     const wallet = wallets.get(row.address)
@@ -279,14 +314,27 @@ async function main() {
         Math.max(Math.ceil(view.window[1]) + 15, Math.ceil(view.window[1] * 1.4)),
       )
       if (keys.length < wanted && room > 0) {
-        const next = growKeys(keys, Math.min(wanted, keys.length + room), swarmConfig.runner.keyCap)
-        if (next.length !== keys.length || next.some((key, index) => key.privateKey !== keys[index]?.privateKey)) {
-          keys = next
-          saveKeyFile(keys)
+        if (marketPreferences.chain === "near-testnet") {
+          const next = await growNearKeys(
+            keys.map((key) => ({ account: key.address, privateKey: key.privateKey })),
+            Math.min(wanted, keys.length + room),
+            swarmConfig.runner.keyCap,
+          )
+          const mapped = next.map((key) => ({ address: key.account, privateKey: key.privateKey }))
+          if (mapped.length !== keys.length || mapped.some((key, index) => key.privateKey !== keys[index]?.privateKey)) {
+            keys = mapped
+            saveNearKeyFile(next)
+          }
+        } else {
+          const next = growKeys(keys as StoredKey[], Math.min(wanted, keys.length + room), swarmConfig.runner.keyCap)
+          if (next.length !== keys.length || next.some((key, index) => key.privateKey !== keys[index]?.privateKey)) {
+            keys = next
+            saveKeyFile(next)
+          }
         }
       }
       keys.forEach((key, index) => {
-        if (!wallets.has(key.address.toLowerCase())) remember(wallets, key, null, index)
+        if (!wallets.has(key.address.toLowerCase())) remember(wallets, key, null, index, funded)
       })
       const hour = manilaHour(now, swarmConfig.clock.timeZoneOffsetHours)
       const enrolledWallets = [...wallets.values()].filter((wallet) => wallet.enrolled).sort((left, right) => left.index - right.index)
@@ -467,6 +515,12 @@ async function main() {
             for (const slot of due) {
               const wallet = wallets.get(slot.address)
               if (!wallet) continue
+              if (wallet.funded === false) {
+                wallet.lastSkip = "unfunded"
+                wallet.dirty = true
+                windowStats.skips += 1
+                continue
+              }
               const decision = decideOpen({
                 wallet: {
                   index: wallet.index,
@@ -573,7 +627,13 @@ function steering(): { pin: number | null; hold: "off-peak" | "peak" | null; con
   return { pin: null, hold: null, control }
 }
 
-function remember(wallets: Map<string, LiveWallet>, key: StoredKey, row: WalletRow | null, index: number) {
+function remember(
+  wallets: Map<string, LiveWallet>,
+  key: { address: string; privateKey: string },
+  row: WalletRow | null,
+  index: number,
+  funded: Set<string> | null,
+) {
   const address = key.address.toLowerCase()
   if (wallets.has(address)) return
   const persona = personaFor(row?.idx ?? index, swarmConfig.persona)
@@ -586,6 +646,7 @@ function remember(wallets: Map<string, LiveWallet>, key: StoredKey, row: WalletR
     index: storedIndex,
     address,
     privateKey: key.privateKey,
+    funded: funded === null || funded.has(address),
     clock,
     online: row?.online === 1 && row?.enrolled === 1,
     enrolled: row?.enrolled === 1,
@@ -674,8 +735,17 @@ async function enrollDue(
   await pool(due, swarmConfig.runner.enrollWidth, async (wallet) => {
     const seed = seedMicros(wallet.index, swarmConfig.bank)
     const issued = Date.now()
-    const account = privateKeyToAccount(wallet.privateKey)
-    const signature = await account.signMessage({ message: botEnrollMessage(chainId, wallet.address, issued, seed) })
+    const signature =
+      marketPreferences.chain === "near-testnet"
+        ? await signNearMessage(nearBotEnrollMessage(wallet.address, issued, seed), wallet.privateKey)
+        : await privateKeyToAccount(wallet.privateKey as `0x${string}`).signMessage({
+            message: botEnrollMessage(chainId, wallet.address, issued, seed),
+          })
+    if (!signature) {
+      wallet.nextEnroll = Date.now() + 5_000
+      fail("Enroll failed")
+      return
+    }
     const response = await api("/api/agents/enroll", {
       method: "POST",
       body: JSON.stringify({ address: wallet.address, signature, issued, seedMicros: seed }),
@@ -1011,6 +1081,28 @@ function walletsEnrolled(wallets: Map<string, LiveWallet>): number {
   let count = 0
   for (const wallet of wallets.values()) if (wallet.enrolled) count += 1
   return count
+}
+
+function loadNearKeyFile(): NearStoredKey[] {
+  if (!existsSync(NEAR_KEYS_PATH)) return []
+  try {
+    const parsed = JSON.parse(readFileSync(NEAR_KEYS_PATH, "utf8")) as unknown
+    if (!Array.isArray(parsed)) return []
+    return parsed.flatMap((row) => {
+      if (!row || typeof row !== "object") return []
+      const key = row as { account?: unknown; privateKey?: unknown }
+      if (typeof key.account !== "string" || typeof key.privateKey !== "string") return []
+      return [{ account: key.account, privateKey: key.privateKey }]
+    })
+  } catch {
+    return []
+  }
+}
+
+function saveNearKeyFile(keys: NearStoredKey[]) {
+  mkdirSync(dirname(NEAR_KEYS_PATH), { recursive: true })
+  writeFileSync(NEAR_KEYS_PATH, `${JSON.stringify(keys, null, 2)}\n`, { mode: 0o600 })
+  chmodSync(NEAR_KEYS_PATH, 0o600)
 }
 
 function loadKeyFile(): StoredKey[] {

@@ -44,7 +44,7 @@ test("a locked strike is the price in use, and a missing strike uses the stage f
 
 test("a pegged strike leaves the left caption empty", () => {
   expect(strikeCaption({ price: 100, text: "100.5", peg: true }, points, 12_000)).toBeNull()
-  expect(strikeCaption({ price: 100, text: "100.5" }, points, 12_000)).toBe("100.50")
+  expect(strikeCaption({ price: 100, text: "100.5" }, points, 12_000)).toBe("100.5000")
 })
 
 test("a bet window stays on the open print while later prints move", () => {

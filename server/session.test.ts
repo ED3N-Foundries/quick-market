@@ -1,7 +1,10 @@
 import { beforeEach, expect, test } from "bun:test"
+import * as ed from "@noble/ed25519"
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts"
 import { chainFromEnv } from "../shared/chain"
-import { loginMessage } from "../shared/login"
+import { loginMessage, nearLoginMessage } from "../shared/login"
+import { marketPreferences } from "../shared/market"
+import { NEP413_RECIPIENT, bs58, generateNearSecret, nep413Bytes, seedFromSecret } from "../shared/nearKey"
 import { getDb, useDatabase } from "./db"
 import { openSession } from "./session"
 
@@ -66,4 +69,50 @@ test("the agent secret marks a bot and a wrong secret does not", async () => {
   const humanRow = getDb().query("SELECT is_bot FROM users WHERE address = ?").get(human.account.address.toLowerCase()) as { is_bot: number }
   expect(botRow.is_bot).toBe(1)
   expect(humanRow.is_bot).toBe(0)
+})
+
+
+test("a NEAR NEP-413 signature opens a session only with its nonce", async () => {
+  const previousKey = process.env.TREASURY_PRIVATE_KEY
+  marketPreferences.chain = "near-testnet"
+  try {
+    const made = await generateNearSecret()
+    process.env.TREASURY_PRIVATE_KEY = made.secretKey
+    const issued = Date.now()
+    const message = nearLoginMessage(made.account, issued)
+    const nonce = new Uint8Array(32).fill(4)
+    const signature = Buffer.from(
+      await ed.signAsync(nep413Bytes(message, nonce, NEP413_RECIPIENT), seedFromSecret(made.secretKey)!),
+    ).toString("hex")
+    const publicKey = `ed25519:${bs58.encode(Buffer.from(made.account, "hex"))}`
+    const opened = await openSession({
+      address: made.account,
+      signature,
+      issued,
+      now: issued,
+      nonce: Buffer.from(nonce).toString("base64"),
+      publicKey,
+    })
+    expect(opened.ok).toBe(true)
+
+    const otherIssued = issued + 1
+    const otherMessage = nearLoginMessage(made.account, otherIssued)
+    const otherSignature = Buffer.from(
+      await ed.signAsync(nep413Bytes(otherMessage, nonce, NEP413_RECIPIENT), seedFromSecret(made.secretKey)!),
+    ).toString("hex")
+    const wrongNonce = new Uint8Array(32).fill(5)
+    const rejected = await openSession({
+      address: made.account,
+      signature: otherSignature,
+      issued: otherIssued,
+      now: otherIssued,
+      nonce: Buffer.from(wrongNonce).toString("base64"),
+      publicKey,
+    })
+    expect(rejected).toEqual({ ok: false, error: "Signature is invalid" })
+  } finally {
+    marketPreferences.chain = "base-sepolia"
+    if (previousKey === undefined) delete process.env.TREASURY_PRIVATE_KEY
+    else process.env.TREASURY_PRIVATE_KEY = previousKey
+  }
 })

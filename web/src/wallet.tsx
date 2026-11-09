@@ -19,6 +19,17 @@ import { base, baseSepolia } from "wagmi/chains"
 import { chainFromEnv, tokenLabel, type ChainConfig } from "../../shared/chain"
 import { marketPreferences } from "../../shared/market"
 import { loginMessage } from "../../shared/login"
+import {
+  clearNearPending,
+  nearLoginUrl,
+  newNonce,
+  parseNearAccount,
+  parseNearCallback,
+  readNearPending,
+  saveNearPending,
+  signMessageFor,
+  stripNearParams,
+} from "./nearConnect"
 import { usdcAbi } from "../../shared/usdc"
 import {
   depositRefusal,
@@ -147,19 +158,21 @@ const phantomTheme = {
   overlay: "rgba(9, 10, 12, 0.8)",
 }
 
-export const wagmiConfig = !read.chain
+const evmChain = read.chain && read.chain.family === "evm" ? read.chain : null
+
+export const wagmiConfig = !evmChain
   ? null
-  : read.chain.id === base.id
+  : evmChain.id === base.id
     ? createConfig({
         chains: [base],
         connectors: [phantomConnector()],
-        transports: { [base.id]: http(read.chain.rpc) },
+        transports: { [base.id]: http(evmChain.rpc) },
         multiInjectedProviderDiscovery: false,
       })
     : createConfig({
         chains: [baseSepolia],
         connectors: [phantomConnector()],
-        transports: { [baseSepolia.id]: http(read.chain.rpc) },
+        transports: { [baseSepolia.id]: http(evmChain.rpc) },
         multiInjectedProviderDiscovery: false,
       })
 
@@ -652,7 +665,106 @@ function Bridge({ children }: { children: ReactNode }) {
   return <SessionContext.Provider value={session}>{children}</SessionContext.Provider>
 }
 
+function NearBridge({ children }: { children: ReactNode }) {
+  const expected = 0
+  const stored = readStored(expected)
+  const [token, setToken] = useState<string | null>(stored?.token ?? null)
+  const [address, setAddress] = useState<string | null>(stored?.address ?? null)
+  const [signedYou, setSignedYou] = useState<You | null>(null)
+  const [signing, setSigning] = useState(false)
+  const [loginPhase, setLoginPhase] = useState<LoginPhase | null>(null)
+  const [signError, setSignError] = useState<string | null>(null)
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const callback = parseNearCallback(params)
+    const returned = parseNearAccount(params)
+    const pending = readNearPending()
+    if (!callback && !(returned && pending && pending.accountId === null)) return
+    window.history.replaceState({}, "", stripNearParams(window.location.href))
+    if (callback && pending) {
+      clearNearPending()
+      setSigning(true)
+      setLoginPhase("session")
+      void fetch("/api/session", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          address: callback.accountId,
+          signature: callback.signature,
+          issued: pending.issued,
+          nonce: pending.nonce,
+          publicKey: callback.publicKey,
+        }),
+      })
+        .then(async (response) => {
+          const body = (await response.json()) as { token?: string; error?: string; you?: unknown }
+          if (!response.ok || !body.token) throw new Error(body.error ?? "Sign-in failed")
+          sessionStorage.setItem(SESSION_KEY, JSON.stringify({ token: body.token, address: callback.accountId, chainId: expected }))
+          setSignedYou(sessionYou(body.you))
+          setToken(body.token)
+          setAddress(callback.accountId)
+          setSignError(null)
+        })
+        .catch((error: unknown) => {
+          setSignError(error instanceof Error ? error.message : "Sign-in failed")
+        })
+        .finally(() => {
+          setSigning(false)
+          setLoginPhase(null)
+        })
+      return
+    }
+    if (returned && pending && pending.accountId === null) {
+      saveNearPending({ issued: pending.issued, nonce: pending.nonce, accountId: returned })
+      window.location.assign(signMessageFor(returned, pending.issued, pending.nonce, window.location.href))
+    }
+  }, [])
+
+  const disconnect = () => {
+    const current = readStored(expected)
+    if (current) void fetch("/api/session", { method: "DELETE", headers: { authorization: `Bearer ${current.token}` } })
+    sessionStorage.removeItem(SESSION_KEY)
+    clearNearPending()
+    setToken(null)
+    setAddress(null)
+    setSignedYou(null)
+    setSignError(null)
+  }
+
+  const session: WalletSession = {
+    chainError: null,
+    pageChain: read.chain,
+    address,
+    label: null,
+    chainId: address ? expected : undefined,
+    token,
+    signedYou,
+    signing,
+    loginPhase,
+    signError,
+    login: () => {
+      const issued = Date.now()
+      const nonce = newNonce().base64
+      saveNearPending({ issued, nonce, accountId: null })
+      setSigning(true)
+      setLoginPhase("sign")
+      setSignError(null)
+      window.location.assign(nearLoginUrl(window.location.href))
+    },
+    connectMode: "modal",
+    connectError: null,
+    disconnect,
+    switchChain: () => {},
+    expire: disconnect,
+    deposit: async () => ({ ok: false, message: "Deposits on NEAR Testnet are QM transfers to the treasury." }),
+  }
+
+  return <SessionContext.Provider value={session}>{children}</SessionContext.Provider>
+}
+
 export function WalletProviders({ children }: { children: ReactNode }) {
+  if (read.chain?.key === "near-testnet") return <NearBridge>{children}</NearBridge>
   if (!wagmiConfig || !read.chain) {
     const value: WalletSession = {
       ...missing,

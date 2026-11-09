@@ -1,3 +1,4 @@
+import type { ChainKey } from "../../shared/chain"
 import type { Lang } from "../../shared/lang"
 import { copy } from "./copy"
 
@@ -195,7 +196,9 @@ export function extractAccountLabel(
   return null
 }
 
-export function isTestnetChain(chainId: number): boolean {
+export function isTestnetChain(chainId: number, chainKey?: ChainKey): boolean {
+  if (chainKey === "near-testnet" || chainKey === "base-sepolia") return true
+  if (chainKey === "base") return false
   return chainId === 84532
 }
 
@@ -265,25 +268,33 @@ export function grantNextLabel(timing: GrantTiming, lang: Lang = "en"): string {
   return timing.due ? copy(lang).ready : formatGrantWait(timing.waitMs, lang)
 }
 
-export function grantSentence(amountMicros: number, intervalMs: number, lang: Lang = "en"): string {
-  return copy(lang).grantSentence(formatGrantDollars(amountMicros), grantPace(intervalMs, lang))
+export function grantSentence(amountMicros: number, intervalMs: number, lang: Lang = "en", chainKey?: ChainKey): string {
+  const text = copy(lang)
+  const amount = formatGrantDollars(amountMicros)
+  const pace = grantPace(intervalMs, lang)
+  if (chainKey === "near-testnet") return text.grantSentenceNear(amount, pace)
+  return text.grantSentence(amount, pace)
 }
 
-export function chainMenuLabel(chainId: number, chainName = "Base", lang: Lang = "en"): string {
-  if (isTestnetChain(chainId)) return copy(lang).chainTestnetMenu
+export function chainMenuLabel(chainId: number, chainName = "Base", lang: Lang = "en", chainKey?: ChainKey): string {
+  const text = copy(lang)
+  if (chainKey === "near-testnet") return text.chainNearMenu
+  if (isTestnetChain(chainId, chainKey)) return text.chainTestnetMenu
   return chainName || "Base"
 }
 
-export function chainBadgeText(chainId: number, chainName = "Base", lang: Lang = "en"): string {
+export function chainBadgeText(chainId: number, chainName = "Base", lang: Lang = "en", chainKey?: ChainKey): string {
   const text = copy(lang)
-  if (isTestnetChain(chainId)) return text.chainTestnetBadge
+  if (chainKey === "near-testnet") return text.chainNearBadge
+  if (isTestnetChain(chainId, chainKey)) return text.chainTestnetBadge
   if (chainId === 8453) return text.chainMainnet
   return chainName || "Base"
 }
 
-export function chainNetworkLabel(chainId: number, chainName = "Base", lang: Lang = "en"): string {
+export function chainNetworkLabel(chainId: number, chainName = "Base", lang: Lang = "en", chainKey?: ChainKey): string {
   const text = copy(lang)
-  if (isTestnetChain(chainId)) return text.chainTestnetNetwork
+  if (chainKey === "near-testnet") return text.chainNearNetwork
+  if (isTestnetChain(chainId, chainKey)) return text.chainTestnetNetwork
   if (chainId === 8453) return text.chainMainnet
   return chainName || "Base"
 }

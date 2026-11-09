@@ -1,10 +1,13 @@
 import { recoverMessageAddress, type Hex } from "viem"
 import { swarmConfig } from "../agent/config"
-import { botEnrollMessage, LOGIN_SKEW_MS } from "../shared/login"
+import { botEnrollMessage, nearBotEnrollMessage, LOGIN_SKEW_MS } from "../shared/login"
+import { isImplicitAccount } from "../shared/near"
+import { verifyNearMessage } from "../shared/nearKey"
 import { requestBurn } from "./custody"
 import { getDb } from "./db"
 import { configuredChain } from "./env"
-import { normalizeAddress } from "./money"
+import { normalizeAccount } from "./money"
+import { requestNearBurn } from "./near"
 import { credit, openBook, placeBuyIns, recentSettles, settledSince, tapeTail, youFor, type BuyInOrder } from "./rounds"
 
 const SIGNATURE = /^0x[0-9a-fA-F]+$/
@@ -17,7 +20,16 @@ export async function enrollBot(input: {
   now: number
   mint: (amountMicros: number) => Promise<void>
 }): Promise<{ ok: true; balanceMicros: number; seeded: boolean } | { ok: false; error: string }> {
-  const address = normalizeAddress(input.address)
+  let chainKey: ReturnType<typeof configuredChain>["key"]
+  let chainId: number
+  try {
+    const chain = configuredChain()
+    chainKey = chain.key
+    chainId = chain.id
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : "Chain is invalid" }
+  }
+  const address = normalizeAccount(input.address, chainKey)
   if (!address) return { ok: false, error: "Address is invalid" }
   const bank = swarmConfig.bank
   if (!Number.isSafeInteger(input.seedMicros) || input.seedMicros < bank.seedMinMicros || input.seedMicros > bank.seedMaxMicros) {
@@ -26,22 +38,21 @@ export async function enrollBot(input: {
   if (!Number.isInteger(input.issued) || Math.abs(input.now - input.issued) > LOGIN_SKEW_MS) {
     return { ok: false, error: "Sign-in expired" }
   }
-  if (!SIGNATURE.test(input.signature)) return { ok: false, error: "Signature is invalid" }
-
-  let chainId: number
-  try {
-    chainId = configuredChain().id
-  } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : "Chain is invalid" }
+  if (chainKey === "near-testnet") {
+    if (!isImplicitAccount(address)) return { ok: false, error: "Address is invalid" }
+    const ok = await verifyNearMessage(nearBotEnrollMessage(address, input.issued, input.seedMicros), address, input.signature)
+    if (!ok) return { ok: false, error: "Signature is invalid" }
+  } else {
+    if (!SIGNATURE.test(input.signature)) return { ok: false, error: "Signature is invalid" }
+    const message = botEnrollMessage(chainId, address, input.issued, input.seedMicros)
+    let recovered = ""
+    try {
+      recovered = (await recoverMessageAddress({ message, signature: input.signature as Hex })).toLowerCase()
+    } catch {
+      return { ok: false, error: "Signature is invalid" }
+    }
+    if (recovered !== address) return { ok: false, error: "Signature is invalid" }
   }
-  const message = botEnrollMessage(chainId, address, input.issued, input.seedMicros)
-  let recovered = ""
-  try {
-    recovered = (await recoverMessageAddress({ message, signature: input.signature as Hex })).toLowerCase()
-  } catch {
-    return { ok: false, error: "Signature is invalid" }
-  }
-  if (recovered !== address) return { ok: false, error: "Signature is invalid" }
 
   const existing = userRow(address)
   if (existing && existing.is_bot !== 1) return { ok: false, error: "That address is a person" }
@@ -71,7 +82,7 @@ export async function resurrectBot(input: {
   amountMicros: number
   mint: (amountMicros: number) => Promise<void>
 }): Promise<{ ok: true; balanceMicros: number } | { ok: false; error: string }> {
-  const address = normalizeAddress(input.address)
+  const address = normalizeAccount(input.address)
   if (!address) return { ok: false, error: "Address is invalid" }
   const bank = swarmConfig.bank
   if (!Number.isSafeInteger(input.amountMicros) || input.amountMicros <= 0 || input.amountMicros > bank.refillMaxMicros) {
@@ -88,7 +99,7 @@ export async function resurrectBot(input: {
 
 export function agentBalances(addresses: string[]): { address: string; balanceMicros: number }[] {
   const clean = [...new Set(addresses.flatMap((item) => {
-    const address = normalizeAddress(item)
+    const address = normalizeAccount(item)
     return address ? [address] : []
   }))].slice(0, 200)
   if (clean.length === 0) return []
@@ -179,9 +190,10 @@ export async function handleAgents(
     const body = await readJson(req)
     const amount = body?.amountMicros
     if (typeof amount !== "number") return json({ error: "Amount is invalid" }, 400)
-    const result = await requestBurn(String(body?.address ?? ""), amount)
-    if (!result.ok) return json({ error: result.error, you: youFor(normalizeAddress(body?.address) ?? "") }, 400)
-    return json({ txHash: result.txHash, you: youFor(normalizeAddress(String(body?.address ?? "")) ?? "") })
+    const who = normalizeAccount(String(body?.address ?? "")) ?? ""
+    const result = configuredChain().key === "near-testnet" ? await requestNearBurn(who, amount) : await requestBurn(who, amount)
+    if (!result.ok) return json({ error: result.error, you: youFor(who) }, 400)
+    return json({ txHash: result.txHash, you: youFor(who) })
   }
 
   if (req.method === "POST" && url.pathname === "/api/agents/resurrect") {

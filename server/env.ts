@@ -1,8 +1,10 @@
 import { join } from "node:path"
 import * as z from "zod"
-import { chainFromEnv, type ChainConfig } from "../shared/chain"
+import { chainFromEnv, type ChainConfig, type ChainKey } from "../shared/chain"
 import type { Assert, Equal } from "../shared/exact"
 import { marketPreferences } from "../shared/market"
+import { isNearAccountId } from "../shared/near"
+import { seedFromSecret } from "../shared/nearKey"
 
 /** Secrets and machine settings. Nothing here is hardcoded. */
 export type Env = {
@@ -10,6 +12,7 @@ export type Env = {
   agentSecret: string
   rpcUrl: string
   usdcAddress: string
+  tokenAccount: string
   dbPath: string
   port: number
   apiUrl: string
@@ -22,6 +25,7 @@ type EnvSource = {
   AGENT_SECRET?: string
   RPC_URL?: string
   USDC_ADDRESS?: string
+  TOKEN_ACCOUNT?: string
   DB_PATH?: string
   PORT?: string
   API_URL?: string
@@ -36,14 +40,31 @@ function unset(value: unknown): unknown {
 }
 
 const keyMessage = "TREASURY_PRIVATE_KEY must be a 32-byte hex string"
+const nearKeyMessage = "TREASURY_PRIVATE_KEY must be an ed25519 NEAR secret key"
 
-const treasuryKey = z.preprocess((value) => {
+/** EVM keys become `0x` + 64 hex. NEAR accepts an empty line or an `ed25519:` secret. */
+export function parseTreasuryKey(value: unknown, chainKey: ChainKey = marketPreferences.chain): string {
   const raw = unset(value)
   if (raw === undefined) return ""
-  if (typeof raw !== "string") return raw
-  const body = raw.startsWith("0x") || raw.startsWith("0X") ? raw.slice(2) : raw
-  return `0x${body}`
-}, z.string().regex(/^$|^0x[0-9a-fA-F]{64}$/, keyMessage))
+  if (typeof raw !== "string") return String(raw)
+  if (chainKey !== "near-testnet") {
+    const body = raw.startsWith("0x") || raw.startsWith("0X") ? raw.slice(2) : raw
+    return `0x${body}`
+  }
+  if (raw.startsWith("0x") || raw.startsWith("0X") || !seedFromSecret(raw)) throw new Error(nearKeyMessage)
+  return raw.trim()
+}
+
+export function parseTokenAccount(value: unknown): string {
+  const raw = unset(value)
+  if (raw === undefined) return ""
+  if (typeof raw !== "string" || !isNearAccountId(raw)) throw new Error("TOKEN_ACCOUNT must be a NEAR account id")
+  return raw
+}
+
+const treasuryKey = z.preprocess((value) => parseTreasuryKey(value), z.string().regex(/^$|^0x[0-9a-fA-F]{64}$|^ed25519:\S+$/, keyMessage))
+
+const tokenAccount = z.preprocess((value) => parseTokenAccount(value), z.string())
 
 const address = z.preprocess((value) => {
   const raw = unset(value)
@@ -58,6 +79,7 @@ const envSchema = z.object({
     return raw === undefined ? "" : raw
   }, z.string()),
   usdcAddress: address,
+  tokenAccount,
   dbPath: z.preprocess((value) => {
     const raw = unset(value)
     return raw === undefined ? join(process.cwd(), "data", "quick-market.sqlite") : raw
@@ -86,6 +108,7 @@ export function loadEnv(env: EnvSource = process.env): Env {
     agentSecret: env.AGENT_SECRET,
     rpcUrl: env.RPC_URL,
     usdcAddress: env.USDC_ADDRESS,
+    tokenAccount: env.TOKEN_ACCOUNT,
     dbPath: env.DB_PATH,
     port: env.PORT,
     apiUrl: env.API_URL,
