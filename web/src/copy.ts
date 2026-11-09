@@ -107,6 +107,16 @@ export type Copy = {
   grantReadyAmount: (amount: string) => string
   nextGrant: (wait: string) => string
   grantSentence: (amount: string, pace: string) => string
+  briefKicker: string
+  briefSignIn: string
+  briefTrades: string
+  briefWallet: string
+  briefContinue: string
+  briefHour: string
+  briefHours: (hours: number) => string
+  briefMinute: string
+  briefMinutes: (minutes: number) => string
+  briefGrant: (amount: string, pace: string) => string
   ready: string
   waitHours: (hours: number) => string
   waitHoursMinutes: (hours: number, minutes: number) => string
@@ -239,6 +249,16 @@ const en: Copy = {
   nextGrant: (wait) => `Next grant in ${wait}`,
   grantSentence: (amount, pace) =>
     `Quick Market adds ${amount} QM USDC to this balance ${pace}. The wallet is not charged, and Phantom is not involved.`,
+  briefKicker: "Testnet",
+  briefSignIn: "Sign in with your wallet.",
+  briefTrades: "Trades use QM USDC.",
+  briefWallet: "Your wallet is not charged.",
+  briefContinue: "Continue",
+  briefHour: "every hour",
+  briefHours: (hours) => `every ${hours} hours`,
+  briefMinute: "every minute",
+  briefMinutes: (minutes) => `every ${minutes} minutes`,
+  briefGrant: (amount, pace) => `You receive ${amount} ${pace}.`,
   ready: "Ready",
   waitHours: (hours) => `${hours}h`,
   waitHoursMinutes: (hours, minutes) => `${hours}h ${minutes}m`,
@@ -371,6 +391,16 @@ const zhTW: Copy = {
   nextGrant: (wait) => `下次領取還要 ${wait}`,
   grantSentence: (amount, pace) =>
     `Quick Market ${pace}，把 ${amount} QM USDC 加進這個餘額。不會向錢包扣款，也不經過 Phantom。`,
+  briefKicker: "測試網",
+  briefSignIn: "用錢包登入。",
+  briefTrades: "交易使用 QM USDC。",
+  briefWallet: "不會向錢包扣款。",
+  briefContinue: "繼續",
+  briefHour: "每小時",
+  briefHours: (hours) => `每 ${hours} 小時`,
+  briefMinute: "每分鐘",
+  briefMinutes: (minutes) => `每 ${minutes} 分鐘`,
+  briefGrant: (amount, pace) => `${pace}撥款 ${amount}。`,
   ready: "可領取",
   waitHours: (hours) => `${hours} 小時`,
   waitHoursMinutes: (hours, minutes) => `${hours} 小時 ${minutes} 分`,

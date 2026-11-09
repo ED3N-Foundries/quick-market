@@ -36,6 +36,8 @@ import { placePricePops, pricePopText, type PlacedPop, type PopRect } from "./pr
 import { RESULT_MS, SETTLING_MS, type MarketNotice } from "./resultNotice"
 import type { Band, Board, HistoryRound, OpenBuyIn, Side, TrayRow } from "./types"
 import { readCachedBalance, visibleBalance } from "./balanceCache"
+import { TestnetBrief } from "./testnetBriefView"
+import { briefDue, readBriefAt, writeBriefAt } from "./testnetBrief"
 import { BALANCE_MS, balanceStep } from "./balanceMotion"
 import { readGrantConfirmations } from "./grantChain"
 import { grantLanded, grantTxUrl } from "./grantWatch"
@@ -76,6 +78,7 @@ export function App() {
   const [grantTx, setGrantTx] = useState<string | null>(null)
   const [grantSeen, setGrantSeen] = useState(0)
   const [grantNeeded, setGrantNeeded] = useState(MINT_CONFIRMATIONS)
+  const [grantStartedAt, setGrantStartedAt] = useState<number | null>(null)
   const [fundPhase, setFundPhase] = useState<"idle" | "phantom" | "confirming" | "pending">("idle")
   const [fundHash, setFundHash] = useState<string | null>(null)
   const [withdrawOpen, setWithdrawOpen] = useState(false)
@@ -83,6 +86,8 @@ export function App() {
   const [withdrawError, setWithdrawError] = useState<string | null>(null)
   const [withdrawing, setWithdrawing] = useState(false)
   const [following, setFollowing] = useState(true)
+  const [briefOpen, setBriefOpen] = useState(false)
+  const briefChecked = useRef(false)
   const scrub = useScrub(chart)
   boardRef.current = market.board
   openBuyInsRef.current = market.you?.openBuyIns ?? []
@@ -233,6 +238,15 @@ export function App() {
     viewRef.current = { follow: true, start: 0, end: 0 }
     setFollowing(true)
   }, [rideChart])
+  useEffect(() => {
+    const eligible =
+      (market.config.tokenKind === "qm" || isTestnetChain(market.config.chainId)) &&
+      market.config.grantMicros > 0 &&
+      market.config.grantIntervalMs > 0
+    if (briefChecked.current || !eligible) return
+    briefChecked.current = true
+    if (briefDue(readBriefAt(), Date.now())) setBriefOpen(true)
+  }, [market.config.tokenKind, market.config.chainId, market.config.grantMicros, market.config.grantIntervalMs])
   const heldSpan = board ? heldMarket(board, openBuyIns, now) : null
   const focus = focusPool(board, openBuyIns, now)
   const total = (focus?.poolUpMicros ?? 0) + (focus?.poolDownMicros ?? 0)
@@ -561,15 +575,18 @@ export function App() {
           {session.signing && session.loginPhase && !grantPending && (
             <WaitNote text={loginStatus(session.loginPhase, testnet, lang)} steps={loginSteps(testnet, lang)} phase={session.loginPhase} />
           )}
-          {grantPending && (
+          {(grantPending || (testnet && funding)) && (
             <GrantFollow
-              startedAt={grantPending.startedAt}
-              txHash={grantPending.txHash}
+              startedAt={grantPending?.startedAt ?? grantStartedAt ?? now}
+              txHash={grantPending?.txHash || grantTx}
               seen={grantSeen}
-              needed={grantPending.confirmations}
+              needed={grantPending?.confirmations ?? grantNeeded}
               chainId={market.config.chainId}
               now={now}
             />
+          )}
+          {testnet && grantTx && !grantPending && !funding && (
+            <GrantTxLink chainId={market.config.chainId} txHash={grantTx} />
           )}
           {session.connectError && <p className="note bad connect-error">{localize(lang, session.connectError)}</p>}
           {!session.token && session.signError && session.signError !== SIGN_PROMPT && (
@@ -646,15 +663,13 @@ export function App() {
           grantAt={grantAt}
           now={now}
           granting={funding}
-          txHash={grantTx}
-          confirmationsSeen={grantSeen}
-          confirmationsNeeded={grantNeeded}
           error={fundError}
           onClose={() => {
             setFundOpen(false)
             if (!funding) {
               setGrantTx(null)
               setGrantSeen(0)
+              setGrantStartedAt(null)
               setFundError(null)
             }
           }}
@@ -662,9 +677,11 @@ export function App() {
             if (funding) return
             const before = grantAt
             setFunding(true)
+            setFundOpen(false)
             setFundError(null)
             setGrantTx(null)
             setGrantSeen(0)
+            setGrantStartedAt(Date.now() + market.offsetRef.current)
             setGrantNeeded(MINT_CONFIRMATIONS)
             void (async () => {
               const result = await market.claimGrant()
@@ -795,6 +812,18 @@ export function App() {
             <LatePop key={id} onDone={() => market.dismissLate(id)} />
           ))}
         </PricePops>
+      )}
+
+      {briefOpen && (
+        <TestnetBrief
+          chainName={market.config.chainName}
+          grantMicros={market.config.grantMicros}
+          grantIntervalMs={market.config.grantIntervalMs}
+          onDismiss={() => {
+            writeBriefAt(Date.now())
+            setBriefOpen(false)
+          }}
+        />
       )}
 
       <footer className="footer">
@@ -1329,9 +1358,6 @@ function GrantOverlay({
   grantAt,
   now,
   granting,
-  txHash,
-  confirmationsSeen,
-  confirmationsNeeded,
   error,
   onClose,
   onGrant,
@@ -1343,9 +1369,6 @@ function GrantOverlay({
   grantAt: number | null
   now: number
   granting: boolean
-  txHash: string | null
-  confirmationsSeen: number
-  confirmationsNeeded: number
   error: string | null
   onClose: () => void
   onGrant: () => void
@@ -1358,19 +1381,7 @@ function GrantOverlay({
     window.addEventListener("keydown", onKey)
     return () => window.removeEventListener("keydown", onKey)
   }, [onClose])
-  const [elapsedMs, setElapsedMs] = useState(0)
-  useEffect(() => {
-    if (!granting) return
-    const started = Date.now()
-    setElapsedMs(0)
-    const id = window.setInterval(() => setElapsedMs(Date.now() - started), 200)
-    return () => window.clearInterval(id)
-  }, [granting])
   const timing = grantTiming(grantAt, now, grantIntervalMs)
-  const txUrl = txHash ? grantTxUrl(chainId, txHash) : null
-  const waiting = granting
-    ? grantWaitStatus(txHash ? { seen: confirmationsSeen, needed: confirmationsNeeded } : undefined, lang)
-    : null
   return (
     <div className="fund-back" onClick={onClose}>
       <div className="fund-overlay" role="dialog" aria-modal="true" aria-label={text.grantAria} onClick={(event) => event.stopPropagation()}>
@@ -1400,20 +1411,6 @@ function GrantOverlay({
         <button type="button" className="primary grant-submit" onClick={onGrant} disabled={granting || !timing.due}>
           {granting ? text.granting : grantButtonLabel(timing, grantMicros, lang)}
         </button>
-        {(waiting || txHash) && (
-          <div className="grant-progress">
-            {waiting && <WaitNote text={waiting} />}
-            {granting && <p className="grant-timer">{formatGrantTimer(elapsedMs)}</p>}
-            {txHash &&
-              (txUrl ? (
-                <a className="grant-tx" href={txUrl} target="_blank" rel="noreferrer">
-                  {txHash}
-                </a>
-              ) : (
-                <p className="grant-tx">{txHash}</p>
-              ))}
-          </div>
-        )}
         {error && <p className="note bad">{localize(lang, error)}</p>}
       </div>
     </div>
@@ -1569,6 +1566,18 @@ function SideCard(props: {
   )
 }
 
+function GrantTxLink({ chainId, txHash }: { chainId: number; txHash: string }) {
+  const txUrl = grantTxUrl(chainId, txHash)
+  if (txUrl) {
+    return (
+      <a className="grant-tx" href={txUrl} target="_blank" rel="noreferrer">
+        {txHash}
+      </a>
+    )
+  }
+  return <p className="grant-tx">{txHash}</p>
+}
+
 function GrantFollow({
   startedAt,
   txHash,
@@ -1587,20 +1596,13 @@ function GrantFollow({
   const { lang, text } = useI18n()
   if (!txHash) return <WaitNote text={grantWaitStatus(undefined, lang)} />
   const elapsed = Math.max(0, now - startedAt)
-  const txUrl = grantTxUrl(chainId, txHash)
   return (
     <div className="grant-progress">
       <WaitNote text={grantWaitStatus({ seen, needed }, lang)} />
       <p className="grant-timer" aria-label={text.elapsed(formatGrantTimer(elapsed))}>
         {formatGrantTimer(elapsed)}
       </p>
-      {txUrl ? (
-        <a className="grant-tx" href={txUrl} target="_blank" rel="noreferrer">
-          {txHash}
-        </a>
-      ) : (
-        <p className="grant-tx">{txHash}</p>
-      )}
+      <GrantTxLink chainId={chainId} txHash={txHash} />
     </div>
   )
 }

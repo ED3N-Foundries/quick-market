@@ -6,6 +6,7 @@ import {
   extractAccountLabel,
   formatDollarMove,
   formatReturn,
+  briefGrantLine,
   formatGrantTimer,
   formatGrantWait,
   formatMoney,
@@ -193,6 +194,18 @@ test("grant timing and labels describe an hourly claim", () => {
   const taiwan = grantSentence(amount, hour, "zh-TW")
   expect(taiwan).toContain("每小時一次")
   expect(taiwan).not.toContain("once an hour")
+})
+
+test("the testnet brief states the live grant cadence", () => {
+  const amount = 100_000_000
+  expect(briefGrantLine(amount, 2 * 60_000)).toBe("You receive $100 every 2 minutes.")
+  expect(briefGrantLine(amount, 60_000)).toBe("You receive $100 every minute.")
+  expect(briefGrantLine(amount, 3_600_000)).toBe("You receive $100 every hour.")
+  expect(briefGrantLine(amount, 3 * 3_600_000)).toBe("You receive $100 every 3 hours.")
+  expect(briefGrantLine(amount, 5_000)).toBe("You receive $100 once every 5s.")
+  expect(briefGrantLine(amount, 2 * 60_000, "zh-TW")).toBe("每 2 分鐘撥款 $100。")
+  expect(briefGrantLine(amount, 60_000, "zh-TW")).toBe("每分鐘撥款 $100。")
+  expect(briefGrantLine(amount, 3_600_000, "zh-TW")).toBe("每小時撥款 $100。")
 })
 
 test("formatClock follows the timezone and the locale hour cycle", () => {

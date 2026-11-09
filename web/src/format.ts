@@ -269,6 +269,22 @@ export function grantSentence(amountMicros: number, intervalMs: number, lang: La
   return copy(lang).grantSentence(formatGrantDollars(amountMicros), grantPace(intervalMs, lang))
 }
 
+/** Short pace for the testnet brief. Other intervals keep the grantPace wording. */
+export function briefPace(intervalMs: number, lang: Lang = "en"): string {
+  const text = copy(lang)
+  if (intervalMs === 3_600_000) return text.briefHour
+  if (intervalMs > 0 && intervalMs % 3_600_000 === 0) return text.briefHours(intervalMs / 3_600_000)
+  if (intervalMs > 0 && intervalMs % 60_000 === 0) {
+    const minutes = intervalMs / 60_000
+    return minutes === 1 ? text.briefMinute : text.briefMinutes(minutes)
+  }
+  return grantPace(intervalMs, lang)
+}
+
+export function briefGrantLine(amountMicros: number, intervalMs: number, lang: Lang = "en"): string {
+  return copy(lang).briefGrant(formatGrantDollars(amountMicros), briefPace(intervalMs, lang))
+}
+
 export function chainMenuLabel(chainId: number, chainName = "Base", lang: Lang = "en"): string {
   if (isTestnetChain(chainId)) return copy(lang).chainTestnetMenu
   return chainName || "Base"
