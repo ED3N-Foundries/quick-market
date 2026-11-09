@@ -103,14 +103,12 @@ test("a ready treasury and an empty agent set are ready", () => {
   expect(report.lines).toContain("agents ready")
 })
 
-test("the ledger guard names DB_PATH and does not mix chains", () => {
+test("the legacy ledger guard identifies the incompatible account family", () => {
   expect(ledgerChainConflict(["0x" + "ab".repeat(20)], "near-testnet")).toBe("base")
   expect(ledgerChainConflict(["ab".repeat(32)], "base-sepolia")).toBe("near")
   expect(ledgerChainConflict(["alice.testnet"], "base")).toBe("near")
-  expect(ledgerChainMessage("base", "data/near.sqlite")).toBe(
-    "This database has Base accounts. Use a separate DB_PATH for NEAR testnet. DB_PATH=data/near.sqlite",
-  )
-  expect(ledgerChainMessage("near", "data/quick-market.sqlite")).toContain("DB_PATH=data/quick-market.sqlite")
+  expect(ledgerChainMessage("base", "data/near.sqlite")).toContain("unmigrated Base accounts")
+  expect(ledgerChainMessage("near", "data/quick-market.sqlite")).toContain("data/quick-market.sqlite")
   expect(() => requireNearToken("near-testnet", "")).toThrow("TOKEN_ACCOUNT")
   expect(() => requireNearToken("base-sepolia", "")).not.toThrow()
 })

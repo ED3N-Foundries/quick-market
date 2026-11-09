@@ -225,11 +225,11 @@ If a window cannot be posted before it closes, skip it. Late bets are not retrie
 
 ### 6. See it and steer it
 
-`bun run agents` is one OpenTUI screen. It does not open `data/quick-market.sqlite`.
+`bun run agents` is one OpenTUI screen. It reads chain-scoped agent rows from `data/quick-market.sqlite`.
 
 The runner writes:
 
-- `agent/swarm.sqlite` (gitignored): one row per wallet (online, phase, bankroll, last side, last stake, last skip reason, win/loss counts) and a ring of window summaries.
+- `data/quick-market.sqlite` (gitignored): chain-scoped wallet rows (online, phase, bankroll, last side, last stake, last skip reason, win/loss counts) and a ring of window summaries.
 - `agent/swarm.json`: a small snapshot every quarter second (Manila time, window, online, spring target, bets, skips, stake percentiles, balance histogram, mint micros, burn micros, last error, book lag).
 
 The dashboard reads those. It does not parse a 6,000-row `status.json`.

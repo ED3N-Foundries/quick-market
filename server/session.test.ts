@@ -9,6 +9,7 @@ import { getDb, useDatabase } from "./db"
 import { openSession } from "./session"
 
 beforeEach(() => {
+  marketPreferences.chain = "base-sepolia"
   process.env.CHAIN = "base-sepolia"
   process.env.AGENT_SECRET = "test-secret"
   useDatabase(":memory:")

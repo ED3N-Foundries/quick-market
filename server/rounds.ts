@@ -1,6 +1,7 @@
 import { LATE_BUY_IN_CODE, LATE_BUY_IN_ERROR } from "../shared/buyIn"
 import { GRANT_FOLLOW_MS, MINT_CONFIRMATIONS } from "../shared/mint"
 import { handoffBanner, tickerFor, type Handoff, type Ticker } from "../shared/source"
+import { activeChainKey } from "./activeChain"
 import { clockAt, feeBps, LIVE_MS, marketBounds, MIN_STAKE_MICROS, priceSource, TAPE_MS, windowAccepts, type PriceSource } from "./config"
 import { getDb } from "./db"
 import { grantWaiting } from "./grantWait"
@@ -251,7 +252,7 @@ function recordSecond(print: Print) {
 }
 
 function getRound(id: number): RoundRow | null {
-  return (getDb().query("SELECT * FROM rounds WHERE id = ?").get(id) as RoundRow | null) ?? null
+  return (getDb().query("SELECT * FROM rounds WHERE chain_key = ? AND id = ?").get(activeChainKey(), id) as RoundRow | null) ?? null
 }
 
 function ensureRound(id: number): void {
@@ -259,11 +260,11 @@ function ensureRound(id: number): void {
   const bounds = marketBounds(id)
   getDb()
     .query(
-      `INSERT INTO rounds (id, starts_at, ends_at, status, fee_micros, pool_up_micros, pool_down_micros, source)
-       VALUES (?, ?, ?, 'open', 0, 0, 0, ?)
-       ON CONFLICT(id) DO NOTHING`,
+      `INSERT INTO rounds (chain_key, id, starts_at, ends_at, status, fee_micros, pool_up_micros, pool_down_micros, source)
+       VALUES (?, ?, ?, ?, 'open', 0, 0, 0, ?)
+       ON CONFLICT(chain_key, id) DO NOTHING`,
     )
-    .run(id, bounds.strikeAt, bounds.settlesAt, ticker.venue)
+    .run(activeChainKey(), id, bounds.strikeAt, bounds.settlesAt, ticker.venue)
 }
 
 /** The window id is the clock slot, so a voided buy-in row has to be emptied and reopened. */
@@ -275,15 +276,15 @@ function reviveJoin(now: number): void {
   const tx = getDb().transaction(() => {
     const current = getRound(id)
     if (!current || current.status === "open") return
-    getDb().query("DELETE FROM buy_ins WHERE round_id = ?").run(id)
+    getDb().query("DELETE FROM buy_ins WHERE chain_key = ? AND round_id = ?").run(activeChainKey(), id)
     getDb()
       .query(
         `UPDATE rounds
          SET strike = NULL, settle = NULL, status = 'open', fee_micros = 0, winning_side = NULL, resolution = NULL,
              pool_up_micros = 0, pool_down_micros = 0, source = ?
-         WHERE id = ? AND status != 'open'`,
+         WHERE chain_key = ? AND id = ? AND status != 'open'`,
       )
-      .run(ticker.venue, id)
+      .run(ticker.venue, activeChainKey(), id)
   })
   tx()
 }
@@ -292,9 +293,9 @@ function poolSums(roundId: number) {
   const rows = getDb()
     .query(
       `SELECT side, COALESCE(SUM(stake_micros), 0) AS pool, COUNT(*) AS players
-       FROM buy_ins WHERE round_id = ? GROUP BY side`,
+       FROM buy_ins WHERE chain_key = ? AND round_id = ? GROUP BY side`,
     )
-    .all(roundId) as { side: Side; pool: number; players: number }[]
+    .all(activeChainKey(), roundId) as { side: Side; pool: number; players: number }[]
   let poolUpMicros = 0
   let poolDownMicros = 0
   let playersUp = 0
@@ -321,11 +322,11 @@ function recentBuyIns(roundId: number, limit: number): { address: string; side: 
     .query(
       `SELECT address, side, stake_micros, payout_micros
        FROM buy_ins
-       WHERE round_id = ?
+       WHERE chain_key = ? AND round_id = ?
        ORDER BY created_at DESC, address ASC
        LIMIT ?`,
     )
-    .all(roundId, limit) as { address: string; side: Side; stake_micros: number; payout_micros: number | null }[]
+    .all(activeChainKey(), roundId, limit) as { address: string; side: Side; stake_micros: number; payout_micros: number | null }[]
   return rows.map((row) => ({
     address: row.address,
     side: row.side,
@@ -394,8 +395,8 @@ export function board(now = Date.now()): Board {
   if (clock.joinId >= 0) ensureRound(clock.joinId)
   if (clock.liveId >= 0) ensureRound(clock.liveId)
   const rows = getDb()
-    .query("SELECT * FROM rounds WHERE ends_at > ? ORDER BY id ASC")
-    .all(now - TAPE_MS) as RoundRow[]
+    .query("SELECT * FROM rounds WHERE chain_key = ? AND ends_at > ? ORDER BY id ASC")
+    .all(activeChainKey(), now - TAPE_MS) as RoundRow[]
   return {
     blockStart: clock.blockStart,
     blockEnd: clock.blockEnd,
@@ -411,11 +412,11 @@ function openBuyInsFor(address: string): OpenBuyIn[] {
   const rows = getDb()
     .query(
       `SELECT b.round_id, b.side, b.stake_micros
-       FROM buy_ins b JOIN rounds r ON r.id = b.round_id
-       WHERE b.address = ? AND r.status = 'open'
+       FROM buy_ins b JOIN rounds r ON r.chain_key = b.chain_key AND r.id = b.round_id
+       WHERE b.chain_key = ? AND b.address = ? AND r.status = 'open'
        ORDER BY b.round_id ASC`,
     )
-    .all(address) as { round_id: number; side: Side; stake_micros: number }[]
+    .all(activeChainKey(), address) as { round_id: number; side: Side; stake_micros: number }[]
   return rows.map((row) => ({ roundId: row.round_id, side: row.side, stakeMicros: row.stake_micros }))
 }
 
@@ -426,7 +427,7 @@ function grantPendingFrom(pendingAt: number | null, txHash: string | null): Gran
 
 /** A crashed mint must not stick. A live waiter in this process keeps the slot. */
 function releaseStaleGrant(address: string, now = Date.now()) {
-  const row = getDb().query("SELECT grant_pending_at FROM users WHERE address = ?").get(address) as
+  const row = getDb().query("SELECT grant_pending_at FROM users WHERE chain_key = ? AND address = ?").get(activeChainKey(), address) as
     | { grant_pending_at: number | null }
     | null
   const pendingAt = row?.grant_pending_at
@@ -435,15 +436,15 @@ function releaseStaleGrant(address: string, now = Date.now()) {
   const key = normalizeAddress(address) ?? address
   if (grantWaiting(key)) return
   getDb()
-    .query("UPDATE users SET grant_pending_at = NULL, grant_tx = NULL WHERE address = ? AND grant_pending_at = ?")
-    .run(address, pendingAt)
+    .query("UPDATE users SET grant_pending_at = NULL, grant_tx = NULL WHERE chain_key = ? AND address = ? AND grant_pending_at = ?")
+    .run(activeChainKey(), address, pendingAt)
 }
 
 export function youFor(address: string): You | null {
   releaseStaleGrant(address)
   const row = getDb()
-    .query("SELECT balance_micros, grant_at, grant_pending_at, grant_tx FROM users WHERE address = ?")
-    .get(address) as
+    .query("SELECT balance_micros, grant_at, grant_pending_at, grant_tx FROM users WHERE chain_key = ? AND address = ?")
+    .get(activeChainKey(), address) as
     | { balance_micros: number; grant_at: number | null; grant_pending_at: number | null; grant_tx: string | null }
     | null
   if (!row) return null
@@ -460,8 +461,8 @@ export function ensureUser(address: string): You {
   const existing = youFor(address)
   if (existing) return existing
   getDb()
-    .query("INSERT INTO users (address, balance_micros, created_at, is_bot) VALUES (?, 0, ?, 0)")
-    .run(address, Date.now())
+    .query("INSERT INTO users (chain_key, address, balance_micros, created_at, is_bot) VALUES (?, ?, 0, ?, 0)")
+    .run(activeChainKey(), address, Date.now())
   return { address, balanceMicros: 0, grantAt: null, grantPending: null, openBuyIns: [] }
 }
 
@@ -473,8 +474,8 @@ export function credit(
   const tx = getDb().transaction(() => {
     ensureUser(address)
     getDb()
-      .query("UPDATE users SET balance_micros = balance_micros + ? WHERE address = ?")
-      .run(amountMicros, address)
+      .query("UPDATE users SET balance_micros = balance_micros + ? WHERE chain_key = ? AND address = ?")
+      .run(amountMicros, activeChainKey(), address)
   })
   tx()
   return { ok: true, you: youFor(address)! }
@@ -491,8 +492,8 @@ export function withdraw(
       if (!Number.isSafeInteger(amountMicros) || amountMicros <= 0) throw new BuyInError("Amount is invalid")
       if (amountMicros > you.balanceMicros) throw new BuyInError("Insufficient balance")
       getDb()
-        .query("UPDATE users SET balance_micros = balance_micros - ? WHERE address = ?")
-        .run(amountMicros, address)
+        .query("UPDATE users SET balance_micros = balance_micros - ? WHERE chain_key = ? AND address = ?")
+        .run(amountMicros, activeChainKey(), address)
     })
     tx()
   } catch (error) {
@@ -526,8 +527,8 @@ export function placeBuyIn(input: {
 
       releaseStaleGrant(input.address, input.now)
       const row = getDb()
-        .query("SELECT balance_micros, grant_at, is_bot, grant_pending_at, grant_tx FROM users WHERE address = ?")
-        .get(input.address) as
+        .query("SELECT balance_micros, grant_at, is_bot, grant_pending_at, grant_tx FROM users WHERE chain_key = ? AND address = ?")
+        .get(activeChainKey(), input.address) as
         | {
             balance_micros: number
             grant_at: number | null
@@ -542,8 +543,8 @@ export function placeBuyIn(input: {
       const bot = row?.is_bot === 1
       if (!row) {
         getDb()
-          .query("INSERT INTO users (address, balance_micros, created_at, is_bot) VALUES (?, 0, ?, 0)")
-          .run(input.address, input.now)
+          .query("INSERT INTO users (chain_key, address, balance_micros, created_at, is_bot) VALUES (?, ?, 0, ?, 0)")
+          .run(activeChainKey(), input.address, input.now)
         balance = 0
       }
 
@@ -560,18 +561,18 @@ export function placeBuyIn(input: {
 
       if (onThis) {
         getDb()
-          .query("UPDATE buy_ins SET stake_micros = stake_micros + ? WHERE round_id = ? AND address = ?")
-          .run(input.stakeMicros, id, input.address)
+          .query("UPDATE buy_ins SET stake_micros = stake_micros + ? WHERE chain_key = ? AND round_id = ? AND address = ?")
+          .run(input.stakeMicros, activeChainKey(), id, input.address)
       } else {
         getDb()
           .query(
-            `INSERT INTO buy_ins (id, round_id, address, side, stake_micros, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+            `INSERT INTO buy_ins (chain_key, id, round_id, address, side, stake_micros, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
           )
-          .run(crypto.randomUUID(), id, input.address, input.side, input.stakeMicros, input.now)
+          .run(activeChainKey(), crypto.randomUUID(), id, input.address, input.side, input.stakeMicros, input.now)
       }
       getDb()
-        .query("UPDATE users SET balance_micros = balance_micros - ? WHERE address = ?")
-        .run(input.stakeMicros, input.address)
+        .query("UPDATE users SET balance_micros = balance_micros - ? WHERE chain_key = ? AND address = ?")
+        .run(input.stakeMicros, activeChainKey(), input.address)
 
       const openBuyIns = opens.map((bet) =>
         bet.roundId === id ? { ...bet, stakeMicros: bet.stakeMicros + input.stakeMicros } : bet,
@@ -611,14 +612,16 @@ function loadBets(roundId: number): BetRow[] {
   return getDb()
     .query(
       `SELECT b.*, COALESCE(u.is_bot, 0) AS is_bot
-       FROM buy_ins b LEFT JOIN users u ON u.address = b.address
-       WHERE b.round_id = ? ORDER BY b.created_at ASC`,
+       FROM buy_ins b LEFT JOIN users u ON u.chain_key = b.chain_key AND u.address = b.address
+       WHERE b.chain_key = ? AND b.round_id = ? ORDER BY b.created_at ASC`,
     )
-    .all(roundId) as BetRow[]
+    .all(activeChainKey(), roundId) as BetRow[]
 }
 
 function voidOpenRounds(): SettledEvent[] {
-  const open = getDb().query("SELECT * FROM rounds WHERE status = 'open' ORDER BY id ASC").all() as RoundRow[]
+  const open = getDb()
+    .query("SELECT * FROM rounds WHERE chain_key = ? AND status = 'open' ORDER BY id ASC")
+    .all(activeChainKey()) as RoundRow[]
   return open.map((round) => closeRound(round, true))
 }
 
@@ -645,11 +648,13 @@ function closeRound(round: RoundRow, forceVoid = false): SettledEvent {
     const current = getRound(round.id)
     if (!current || current.status !== "open") return
     for (const payout of outcome.payouts) {
-      getDb().query("UPDATE buy_ins SET payout_micros = ? WHERE id = ?").run(payout.payoutMicros, payout.id)
+      getDb()
+        .query("UPDATE buy_ins SET payout_micros = ? WHERE chain_key = ? AND id = ?")
+        .run(payout.payoutMicros, activeChainKey(), payout.id)
       if (payout.payoutMicros > 0) {
         getDb()
-          .query("UPDATE users SET balance_micros = balance_micros + ? WHERE address = ?")
-          .run(payout.payoutMicros, payout.address)
+          .query("UPDATE users SET balance_micros = balance_micros + ? WHERE chain_key = ? AND address = ?")
+          .run(payout.payoutMicros, activeChainKey(), payout.address)
       }
     }
     const status = outcome.resolution === "void" ? "void" : "settled"
@@ -658,7 +663,7 @@ function closeRound(round: RoundRow, forceVoid = false): SettledEvent {
         `UPDATE rounds
          SET strike = COALESCE(strike, ?), settle = ?, status = ?, fee_micros = ?, winning_side = ?, resolution = ?,
              pool_up_micros = ?, pool_down_micros = ?
-         WHERE id = ? AND status = 'open'`,
+         WHERE chain_key = ? AND id = ? AND status = 'open'`,
       )
       .run(
         strike,
@@ -669,6 +674,7 @@ function closeRound(round: RoundRow, forceVoid = false): SettledEvent {
         outcome.resolution,
         outcome.poolUpMicros,
         outcome.poolDownMicros,
+        activeChainKey(),
         round.id,
       )
   })
@@ -717,8 +723,8 @@ export function advance(now: number): { settled: SettledEvent[]; broadcastRound:
   reviveJoin(now)
 
   const due = getDb()
-    .query("SELECT * FROM rounds WHERE status = 'open' AND ends_at <= ? ORDER BY id ASC")
-    .all(now) as RoundRow[]
+    .query("SELECT * FROM rounds WHERE chain_key = ? AND status = 'open' AND ends_at <= ? ORDER BY id ASC")
+    .all(activeChainKey(), now) as RoundRow[]
   for (const round of due) settled.push(closeRound(round))
   if (settled.length) broadcastRound = true
 
@@ -726,14 +732,14 @@ export function advance(now: number): { settled: SettledEvent[]; broadcastRound:
   if (clock.liveId >= 0) ensureRound(clock.liveId)
 
   const locking = getDb()
-    .query("SELECT * FROM rounds WHERE status = 'open' AND strike IS NULL AND starts_at <= ?")
-    .all(now) as RoundRow[]
+    .query("SELECT * FROM rounds WHERE chain_key = ? AND status = 'open' AND strike IS NULL AND starts_at <= ?")
+    .all(activeChainKey(), now) as RoundRow[]
   for (const round of locking) {
     const print = priceAt(round.starts_at, round.ends_at - round.starts_at)
     if (!print) continue
     const result = getDb()
-      .query("UPDATE rounds SET strike = ? WHERE id = ? AND strike IS NULL")
-      .run(print.price, round.id)
+      .query("UPDATE rounds SET strike = ? WHERE chain_key = ? AND id = ? AND strike IS NULL")
+      .run(print.price, activeChainKey(), round.id)
     if (result.changes > 0) broadcastRound = true
   }
 
@@ -791,17 +797,17 @@ export function listRounds(limit: number, address?: string | null, mine = false)
       .query(
         `SELECT r.*, b.side AS my_side, b.stake_micros AS my_stake, b.payout_micros AS my_payout
          FROM rounds r
-         JOIN buy_ins b ON b.round_id = r.id AND b.address = ?
-         WHERE r.status != 'open'
+         JOIN buy_ins b ON b.chain_key = r.chain_key AND b.round_id = r.id AND b.address = ?
+         WHERE r.chain_key = ? AND r.status != 'open'
          ORDER BY r.starts_at DESC, r.id DESC
          LIMIT ?`,
       )
-      .all(address, capped) as (RoundRow & { my_side: Side; my_stake: number; my_payout: number | null })[]
+      .all(address, activeChainKey(), capped) as (RoundRow & { my_side: Side; my_stake: number; my_payout: number | null })[]
     return rows.map(mapHistory)
   }
   const rows = getDb()
-    .query("SELECT * FROM rounds WHERE status != 'open' ORDER BY starts_at DESC, id DESC LIMIT ?")
-    .all(capped) as RoundRow[]
+    .query("SELECT * FROM rounds WHERE chain_key = ? AND status != 'open' ORDER BY starts_at DESC, id DESC LIMIT ?")
+    .all(activeChainKey(), capped) as RoundRow[]
   return rows.map(mapHistory)
 }
 
@@ -873,12 +879,12 @@ export function placeBuyIns(input: {
     if (lookup.length > 0) {
       const marks = lookup.map(() => "?").join(",")
       const userRows = getDb()
-        .query(`SELECT address, balance_micros, is_bot FROM users WHERE address IN (${marks})`)
-        .all(...lookup) as { address: string; balance_micros: number; is_bot: number }[]
+        .query(`SELECT address, balance_micros, is_bot FROM users WHERE chain_key = ? AND address IN (${marks})`)
+        .all(activeChainKey(), ...lookup) as { address: string; balance_micros: number; is_bot: number }[]
       for (const row of userRows) users.set(row.address, { balance: row.balance_micros, bot: row.is_bot === 1 })
       const betRows = getDb()
-        .query(`SELECT address FROM buy_ins WHERE round_id = ? AND address IN (${marks})`)
-        .all(id, ...lookup) as { address: string }[]
+        .query(`SELECT address FROM buy_ins WHERE chain_key = ? AND round_id = ? AND address IN (${marks})`)
+        .all(activeChainKey(), id, ...lookup) as { address: string }[]
       for (const row of betRows) taken.add(row.address)
     }
     const spent = new Map<string, number>()
@@ -917,22 +923,22 @@ export function placeBuyIns(input: {
       results.push({ address: order.address, ok: true })
     }
     const insert = getDb().query(
-      `INSERT OR IGNORE INTO buy_ins (id, round_id, address, side, stake_micros, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+      `INSERT OR IGNORE INTO buy_ins (chain_key, id, round_id, address, side, stake_micros, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
     )
     const debit = getDb().query(
-      `UPDATE users SET balance_micros = balance_micros - ? WHERE address = ? AND is_bot = 1 AND balance_micros >= ?`,
+      `UPDATE users SET balance_micros = balance_micros - ? WHERE chain_key = ? AND address = ? AND is_bot = 1 AND balance_micros >= ?`,
     )
-    const undo = getDb().query(`DELETE FROM buy_ins WHERE round_id = ? AND address = ?`)
+    const undo = getDb().query(`DELETE FROM buy_ins WHERE chain_key = ? AND round_id = ? AND address = ?`)
     const missed = new Set<string>()
     for (const order of accepted) {
-      const inserted = insert.run(crypto.randomUUID(), id, order.address, order.side, order.stakeMicros, input.now)
+      const inserted = insert.run(activeChainKey(), crypto.randomUUID(), id, order.address, order.side, order.stakeMicros, input.now)
       if (inserted.changes !== 1) {
         missed.add(order.address)
         continue
       }
-      const updated = debit.run(order.stakeMicros, order.address, order.stakeMicros)
+      const updated = debit.run(order.stakeMicros, activeChainKey(), order.address, order.stakeMicros)
       if (updated.changes !== 1) {
-        undo.run(id, order.address)
+        undo.run(activeChainKey(), id, order.address)
         missed.add(order.address)
       }
     }
@@ -1008,27 +1014,27 @@ export function recentSettles(limit = 8): RecentSettle[] {
     .query(
       `SELECT id, winning_side
        FROM rounds
-       WHERE status = 'settled' AND winning_side IN ('up', 'down')
+       WHERE chain_key = ? AND status = 'settled' AND winning_side IN ('up', 'down')
        ORDER BY id DESC
        LIMIT ?`,
     )
-    .all(capped) as { id: number; winning_side: Side }[]
+    .all(activeChainKey(), capped) as { id: number; winning_side: Side }[]
   return rows.reverse().map((row) => ({ id: row.id, winningSide: row.winning_side }))
 }
 
 export function settledSince(sinceId: number, limit = 200): SettledBook[] {
   const capped = Math.min(Math.max(limit, 1), 200)
   const latest = getDb()
-    .query("SELECT COALESCE(MAX(id), 0) AS max_id FROM rounds WHERE status != 'open'")
-    .get() as { max_id: number }
+    .query("SELECT COALESCE(MAX(id), 0) AS max_id FROM rounds WHERE chain_key = ? AND status != 'open'")
+    .get(activeChainKey()) as { max_id: number }
   const floorId = Math.max(0, latest.max_id - 2_000)
   const effectiveSince = Math.max(sinceId, floorId)
   const rows = getDb()
     .query(
       `SELECT id, strike, settle, fee_micros, pool_up_micros, pool_down_micros, winning_side, resolution
-       FROM rounds WHERE status != 'open' AND id > ? ORDER BY id ASC LIMIT ?`,
+       FROM rounds WHERE chain_key = ? AND status != 'open' AND id > ? ORDER BY id ASC LIMIT ?`,
     )
-    .all(effectiveSince, capped) as {
+    .all(activeChainKey(), effectiveSince, capped) as {
     id: number
     strike: string | null
     settle: string | null

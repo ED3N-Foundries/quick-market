@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 import bs58 from "bs58"
+import { activeChainKey } from "./activeChain"
 import { configuredChain, loadEnv } from "./env"
 import { getDb } from "./db"
 import { normalizeAccount } from "./money"
@@ -19,7 +20,7 @@ import {
 import { accountFromSecret, parseNearPublicKey, publicKeyBytes } from "../shared/nearKey"
 import { encodeFunctionCall, encodeTransfer, jsonArgs, signTransaction } from "./nearTx"
 
-/** A missing key, the wrong token, or the other chain's database. The process exits. */
+/** A missing key or invalid NEAR token stops the process before it listens. */
 export class NearConfigError extends Error {}
 
 const GAS = 30_000_000_000_000n
@@ -190,13 +191,15 @@ export function nearAgentAccounts(): string[] {
 }
 
 export function ledgerSumMicros(): bigint {
-  const row = getDb().query("SELECT COALESCE(SUM(balance_micros), 0) AS total FROM users").get() as { total: number | bigint | null }
+  const row = getDb()
+    .query("SELECT COALESCE(SUM(balance_micros), 0) AS total FROM users WHERE chain_key = ?")
+    .get(activeChainKey()) as { total: number | bigint | null }
   if (row.total === null) return 0n
   return typeof row.total === "bigint" ? row.total : BigInt(row.total)
 }
 
 export function userAddresses(): string[] {
-  const rows = getDb().query("SELECT address FROM users").all() as { address: string }[]
+  const rows = getDb().query("SELECT address FROM users WHERE chain_key = ?").all(activeChainKey()) as { address: string }[]
   return rows.map((row) => row.address)
 }
 
@@ -362,24 +365,26 @@ function debitWithdraw(address: string, amountMicros: number, raw: string, hash:
     if (!held.ok) throw new Error(held.error)
     getDb()
       .query(
-        `INSERT INTO withdrawals (id, address, amount_micros, tx_hash, raw_tx, status, created_at)
-         VALUES (?, ?, ?, ?, ?, 'pending', ?)`,
+        `INSERT INTO withdrawals (chain_key, id, address, amount_micros, tx_hash, raw_tx, status, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)`,
       )
-      .run(id, address, amountMicros, hash, raw, Date.now())
+      .run(activeChainKey(), id, address, amountMicros, hash, raw, Date.now())
   })
   tx()
   return id
 }
 
 function refundWithdraw(id: string) {
-  const row = getDb().query("SELECT address, amount_micros, status FROM withdrawals WHERE id = ?").get(id) as
+  const row = getDb().query("SELECT address, amount_micros, status FROM withdrawals WHERE chain_key = ? AND id = ?").get(activeChainKey(), id) as
     | { address: string; amount_micros: number; status: string }
     | null
   if (!row || row.status !== "pending") return
   const tx = getDb().transaction(() => {
     const added = credit(row.address, row.amount_micros)
     if (!added.ok) throw new Error(added.error)
-    getDb().query("UPDATE withdrawals SET status = 'refunded' WHERE id = ? AND status = 'pending'").run(id)
+    getDb()
+      .query("UPDATE withdrawals SET status = 'refunded' WHERE chain_key = ? AND id = ? AND status = 'pending'")
+      .run(activeChainKey(), id)
   })
   tx()
 }
@@ -438,7 +443,9 @@ export async function requestNearWithdraw(
     }
     try {
       await broadcastRaw(raw)
-      getDb().query("UPDATE withdrawals SET status = 'sent' WHERE id = ? AND status = 'pending'").run(id)
+      getDb()
+        .query("UPDATE withdrawals SET status = 'sent' WHERE chain_key = ? AND id = ? AND status = 'pending'")
+        .run(activeChainKey(), id)
       return { ok: true, you: youFor(who)!, txHash: hash }
     } catch (error) {
       const message = error instanceof Error ? error.message.toLowerCase() : ""
@@ -462,15 +469,17 @@ export async function requestNearBurn(address: string, amountMicros: number): Pr
     const id = crypto.randomUUID()
     try {
       const tx = getDb().transaction(() => {
-        const row = getDb().query("SELECT balance_micros, is_bot FROM users WHERE address = ?").get(address) as
-          | { balance_micros: number; is_bot: number }
-          | null
+        const row = getDb()
+          .query("SELECT balance_micros, is_bot FROM users WHERE chain_key = ? AND address = ?")
+          .get(activeChainKey(), address) as { balance_micros: number; is_bot: number } | null
         if (!row || row.is_bot !== 1) throw new Error("Not a bot")
         if (amountMicros > row.balance_micros) throw new Error("Insufficient balance")
-        getDb().query("UPDATE users SET balance_micros = balance_micros - ? WHERE address = ?").run(amountMicros, address)
         getDb()
-          .query(`INSERT INTO burns (id, address, amount_micros, tx_hash, raw_tx, status, created_at) VALUES (?, ?, ?, NULL, NULL, 'pending', ?)`)
-          .run(id, address, amountMicros, Date.now())
+          .query("UPDATE users SET balance_micros = balance_micros - ? WHERE chain_key = ? AND address = ?")
+          .run(amountMicros, activeChainKey(), address)
+        getDb()
+          .query(`INSERT INTO burns (chain_key, id, address, amount_micros, tx_hash, raw_tx, status, created_at) VALUES (?, ?, ?, ?, NULL, NULL, 'pending', ?)`)
+          .run(activeChainKey(), id, address, amountMicros, Date.now())
       })
       tx()
     } catch (error) {
@@ -483,14 +492,20 @@ export async function requestNearBurn(address: string, amountMicros: number): Pr
         receiverId: env.tokenAccount.trim(),
         actions: [encodeFunctionCall("burn", jsonArgs({ amount: String(amountMicros) }), GAS, 0n)],
       })
-      getDb().query("UPDATE burns SET status = 'sent', tx_hash = ? WHERE id = ? AND status = 'pending'").run(hash, id)
+      getDb()
+        .query("UPDATE burns SET status = 'sent', tx_hash = ? WHERE chain_key = ? AND id = ? AND status = 'pending'")
+        .run(hash, activeChainKey(), id)
       return { ok: true, txHash: hash }
     } catch (error) {
       const refund = getDb().transaction(() => {
-        const row = getDb().query("SELECT status FROM burns WHERE id = ?").get(id) as { status: string } | null
+        const row = getDb().query("SELECT status FROM burns WHERE chain_key = ? AND id = ?").get(activeChainKey(), id) as
+          | { status: string }
+          | null
         if (!row || row.status !== "pending") return
         credit(address, amountMicros)
-        getDb().query("UPDATE burns SET status = 'refunded' WHERE id = ? AND status = 'pending'").run(id)
+        getDb()
+          .query("UPDATE burns SET status = 'refunded' WHERE chain_key = ? AND id = ? AND status = 'pending'")
+          .run(activeChainKey(), id)
       })
       refund()
       return { ok: false, error: nearFaultMessage(error) }
@@ -542,11 +557,11 @@ export function applyNearDeposit(input: ParsedDeposit): boolean {
   const run = getDb().transaction(() => {
     const inserted = getDb()
       .query(
-        `INSERT INTO deposits (tx_hash, log_index, address, amount_micros, created_at)
-         VALUES (?, ?, ?, ?, ?)
+        `INSERT INTO deposits (chain_key, tx_hash, log_index, address, amount_micros, created_at)
+         VALUES (?, ?, ?, ?, ?, ?)
          ON CONFLICT DO NOTHING`,
       )
-      .run(input.txHash, input.logIndex, input.from, input.amountMicros, Date.now())
+      .run(activeChainKey(), input.txHash, input.logIndex, input.from, input.amountMicros, Date.now())
     if (inserted.changes === 0) return false
     const added = credit(input.from, input.amountMicros)
     if (!added.ok) throw new Error(added.error)
@@ -566,10 +581,11 @@ async function nearBlock(height?: number): Promise<NearBlock> {
 
 async function pollNearDeposits(treasury: string) {
   const token = loadEnv().tokenAccount.trim()
-  const cursorRow = getDb().query("SELECT value FROM meta WHERE key = 'near_deposit_height'").get() as { value: string } | null
+  const cursorKey = `${activeChainKey()}:near_deposit_height`
+  const cursorRow = getDb().query("SELECT value FROM meta WHERE key = ?").get(cursorKey) as { value: string } | null
   const latest = await nearBlock()
   if (!cursorRow) {
-    getDb().query("INSERT INTO meta (key, value) VALUES ('near_deposit_height', ?)").run(String(latest.header.height))
+    getDb().query("INSERT INTO meta (key, value) VALUES (?, ?)").run(cursorKey, String(latest.header.height))
     return
   }
   const cursor = Number(cursorRow.value)
@@ -597,21 +613,23 @@ async function pollNearDeposits(treasury: string) {
       }
     }
     getDb()
-      .query("INSERT INTO meta (key, value) VALUES ('near_deposit_height', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
-      .run(String(height))
+      .query("INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+      .run(cursorKey, String(height))
   }
 }
 
 async function resumeNearWithdrawals() {
   const rows = getDb()
-    .query("SELECT id, raw_tx FROM withdrawals WHERE status = 'pending' ORDER BY created_at ASC")
-    .all() as { id: string; raw_tx: string | null }[]
+    .query("SELECT id, raw_tx FROM withdrawals WHERE chain_key = ? AND status = 'pending' ORDER BY created_at ASC")
+    .all(activeChainKey()) as { id: string; raw_tx: string | null }[]
   for (const row of rows) {
     if (!row.raw_tx) continue
     const raw = row.raw_tx
     try {
       await enqueue(() => broadcastRaw(raw))
-      getDb().query("UPDATE withdrawals SET status = 'sent' WHERE id = ? AND status = 'pending'").run(row.id)
+      getDb()
+        .query("UPDATE withdrawals SET status = 'sent' WHERE chain_key = ? AND id = ? AND status = 'pending'")
+        .run(activeChainKey(), row.id)
     } catch (error) {
       const message = error instanceof Error ? error.message.toLowerCase() : ""
       if (message.includes("failure") || message.includes("revert") || message.includes("not enough")) refundWithdraw(row.id)

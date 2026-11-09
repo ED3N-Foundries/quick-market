@@ -4,7 +4,7 @@ import { Database } from "bun:sqlite"
 import { marketPreferences } from "../shared/market"
 import { loadEnv } from "../server/env"
 import { peekApiEndpoint, refreshApiEndpoint, type ApiTarget } from "./endpoint"
-import { CONTROL_PATH, STATUS_PATH, SWARM_DB_PATH, SWARM_PATH, readJson, writeJsonAtomic } from "./store"
+import { CONTROL_PATH, STATUS_PATH, SWARM_PATH, readJson, writeJsonAtomic } from "./store"
 import { roster, rosterCount, type RosterFilter, type WalletRow } from "./swarmdb"
 import {
   formatMicros,
@@ -313,8 +313,9 @@ export function pageRoster(
   capacity: number,
 ): { rows: WalletRow[]; count: number; offset: number; selected: number } {
   const size = Math.max(1, capacity)
-  if (!existsSync(SWARM_DB_PATH)) return { rows: [], count: 0, offset: 0, selected: 0 }
-  const db = new Database(SWARM_DB_PATH, { readonly: true })
+  const path = loadEnv().dbPath
+  if (!existsSync(path)) return { rows: [], count: 0, offset: 0, selected: 0 }
+  const db = new Database(path, { readonly: true })
   try {
     const count = rosterCount(db, filter)
     const nextSelected = count === 0 ? 0 : Math.min(Math.max(0, selected), count - 1)
@@ -355,7 +356,7 @@ export function runnerConfirmCopy(prompt: RunnerPrompt, pid: number | null): { a
   if (prompt === "start") return { ask: "Start the agent runner?", yes: "y start", no: "n cancel" }
   const who = typeof pid === "number" && pid > 0 ? `Pid ${pid} stops` : "The current process stops"
   return {
-    ask: `Restart the runner? ${who}, then a new process starts. Wallets stay in swarm.sqlite.`,
+    ask: `Restart the runner? ${who}, then a new process starts. Wallets stay in the shared database.`,
     yes: "y restart",
     no: "n cancel",
   }

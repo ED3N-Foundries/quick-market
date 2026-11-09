@@ -185,7 +185,7 @@ test("the runner control names start or restart", () => {
   expect(runnerActionLine(true, null, "restart")).toBe("restarting runner")
   expect(runnerConfirmLine("start", null)).toBe("Start the agent runner?  y start   n cancel")
   expect(runnerConfirmLine("restart", 48538)).toBe(
-    "Restart the runner? Pid 48538 stops, then a new process starts. Wallets stay in swarm.sqlite.  y restart   n cancel",
+    "Restart the runner? Pid 48538 stops, then a new process starts. Wallets stay in the shared database.  y restart   n cancel",
   )
   const page = renderSnapshot(snapshot(), state(), 2_000)
   expect(page).toContain("R  restart runner")

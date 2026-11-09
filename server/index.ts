@@ -1,17 +1,12 @@
 import { existsSync } from "node:fs"
 import { join, normalize, sep } from "node:path"
-import { moneyLabel, requireSepoliaToken, tokenKind, tokenLabel } from "../shared/chain"
 import { parseLang, stampHtml, type Lang } from "../shared/lang"
 import { loadMarket, TICK_MS, type PublicConfig } from "../shared/market"
-import { requireNearToken } from "../shared/near"
-import { accountFromSecret } from "../shared/nearKey"
 import { feeBps, marketMs, MIN_STAKE_MICROS, priceSource, viewMs, windowMs, type PriceSource } from "./config"
 import { takeTick } from "./tick"
 import { configuredChain, loadEnv } from "./env"
 import { handleAgents } from "./agents"
-import { mintToTreasury, requestWithdraw, startCustody, treasuryAddress } from "./custody"
-import { getDb } from "./db"
-import { assertLedgerChain, bootNear, currentTreasuryReport, mintNearToTreasury, requestNearWithdraw, startNearCustody } from "./near"
+import { startChainRuntime, type ChainRuntime } from "./chainRuntime"
 import { MINT_CONFIRMATIONS } from "../shared/mint"
 import { grantOnSignIn, grantSettings, noteGrantTx, settleGrantRequest, startGrant } from "./grant"
 import { hub } from "./hub"
@@ -22,6 +17,7 @@ import { oracleView, startOracle } from "./oracle"
 import { adoptFeed, advance, board, failFeed, feedStatus, handoffNow, listRounds, noteAlive, notePrint, placeBuyIn, roundDetail, tapePoints, tickerNow, youFor } from "./rounds"
 import { agentAuthorized, endSession, openSession, readSession } from "./session"
 
+let activeChain: ChainRuntime
 let chain: ReturnType<typeof configuredChain>
 let treasury: string
 
@@ -31,24 +27,9 @@ const serveUi = loadEnv().nodeEnv === "production"
 
 async function bootServer() {
   loadMarket()
-  chain = configuredChain()
-  const env = loadEnv()
-  if (chain.key === "near-testnet") {
-    requireNearToken(chain.key, env.tokenAccount)
-    const account = await accountFromSecret(env.treasuryPrivateKey)
-    if (!account) throw new Error("TREASURY_PRIVATE_KEY must be an ed25519 NEAR secret key")
-    treasury = account
-    getDb()
-    await bootNear(treasury)
-    startNearCustody(treasury)
-    return
-  }
-  requireSepoliaToken(chain)
-  grantSettings()
-  treasury = treasuryAddress()
-  getDb()
-  assertLedgerChain(chain.key, env.dbPath)
-  startCustody()
+  activeChain = await startChainRuntime()
+  chain = activeChain.chain
+  treasury = activeChain.treasury
 }
 
 try {
@@ -59,11 +40,11 @@ try {
 }
 
 function grantsOpen(): boolean {
-  return chain.key === "base-sepolia" || chain.key === "near-testnet"
+  return activeChain.grantsOpen
 }
 
 function mintTreasury(amount: number, onHash?: (hash: string) => void): Promise<void> {
-  return chain.key === "near-testnet" ? mintNearToTreasury(amount, onHash) : mintToTreasury(amount, onHash)
+  return activeChain.mint(amount, onHash)
 }
 
 let pending: { price: string; exchangeTs: number; source: PriceSource } | null = null
@@ -164,11 +145,11 @@ function publicConfig(): PublicConfig {
     chainId: chain.id,
     chainKey: chain.key,
     chainName: chain.name,
-    usdc: chain.key === "near-testnet" ? loadEnv().tokenAccount.trim() : chain.usdc,
+    usdc: activeChain.token,
     treasury,
-    moneyLabel: moneyLabel(chain),
-    tokenKind: tokenKind(chain),
-    tokenLabel: tokenLabel(chain),
+    moneyLabel: activeChain.moneyLabel,
+    tokenKind: activeChain.tokenKind,
+    tokenLabel: activeChain.tokenLabel,
     grantMicros: grant.amount,
     grantIntervalMs: grant.intervalMs,
   }
@@ -178,7 +159,7 @@ async function handle(req: Request): Promise<Response> {
   const url = new URL(req.url)
 
   if (req.method === "GET" && url.pathname === "/api/health") {
-    return json({ ok: true, source: priceSource(), treasury: chain.key === "near-testnet" ? currentTreasuryReport() : null })
+    return json({ ok: true, source: priceSource(), chain: chain.key, treasury: activeChain.treasuryReport() })
   }
 
   if (req.method === "GET" && url.pathname === "/api/feeds") {
@@ -320,7 +301,7 @@ async function handle(req: Request): Promise<Response> {
     const body = await readJson(req)
     const amount = parseMicros(body?.amount)
     if (amount === null) return json({ error: "Amount is invalid" }, 400)
-    const result = chain.key === "near-testnet" ? await requestNearWithdraw(session.address, amount) : await requestWithdraw(session.address, amount)
+    const result = await activeChain.withdraw(session.address, amount)
     if (!result.ok) return json({ error: result.error, you: result.you ?? null }, 400)
     return json({ you: result.you, txHash: result.txHash })
   }

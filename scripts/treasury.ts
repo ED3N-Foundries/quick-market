@@ -11,9 +11,10 @@ import { loadMarket, marketPreferences } from "../shared/market"
 import { usdcAbi } from "../shared/usdc"
 import { tuneDatabase } from "../server/db"
 import { loadEnv } from "../server/env"
+import { envFilePath } from "../server/envFile"
 import { readNearBalance, readTokenBalance } from "../server/near"
 
-const ENV_PATH = join(process.cwd(), ".env")
+const ENV_PATH = envFilePath(marketPreferences.chain)
 const EXAMPLE_PATH = join(process.cwd(), ".env.example")
 const NAME = "TREASURY_PRIVATE_KEY"
 const GAS_FLOOR = 50_000_000_000_000n
@@ -565,46 +566,54 @@ function ledgerFile(): string {
   return loadEnv().dbPath
 }
 
-function one(db: Database, sql: string): number {
-  const row = db.query(sql).get() as { n: number | bigint } | null
+function one(db: Database, sql: string, chain?: ChainKey): number {
+  const query = db.query(sql)
+  const row = (chain === undefined ? query.get() : query.get(chain)) as { n: number | bigint } | null
   if (!row) throw new Error("ledger query returned nothing")
   return asNumber(row.n)
 }
 
-// Read-only. Opening the server database runs the custody migration and zeros balances.
 export function readLedger(path: string): LedgerView {
   if (!existsSync(path)) return { path, missing: true }
   let db: Database | null = null
   try {
     db = new Database(path, { readonly: true })
     tuneDatabase(db, { readonly: true })
-    const spendableMicros = one(db, "SELECT COALESCE(SUM(balance_micros), 0) AS n FROM users")
+    const scoped = (db.query("PRAGMA table_info(users)").all() as { name: string }[]).some((column) => column.name === "chain_key")
+    const chain = scoped ? marketPreferences.chain : undefined
+    const where = scoped ? " WHERE chain_key = ?" : ""
+    const spendableMicros = one(db, `SELECT COALESCE(SUM(balance_micros), 0) AS n FROM users${where}`, chain)
     const openStakeMicros = one(
       db,
-      `SELECT COALESCE(SUM(b.stake_micros), 0) AS n
-       FROM buy_ins b JOIN rounds r ON r.id = b.round_id
-       WHERE r.status = 'open'`,
+      scoped
+        ? `SELECT COALESCE(SUM(b.stake_micros), 0) AS n
+           FROM buy_ins b JOIN rounds r ON r.chain_key = b.chain_key AND r.id = b.round_id
+           WHERE b.chain_key = ? AND r.status = 'open'`
+        : `SELECT COALESCE(SUM(b.stake_micros), 0) AS n
+           FROM buy_ins b JOIN rounds r ON r.id = b.round_id
+           WHERE r.status = 'open'`,
+      chain,
     )
-    const pendingMicros = one(db, "SELECT COALESCE(SUM(amount_micros), 0) AS n FROM withdrawals WHERE status = 'pending'")
-    const pendingCount = one(db, "SELECT COUNT(*) AS n FROM withdrawals WHERE status = 'pending'")
-    const users = one(db, "SELECT COUNT(*) AS n FROM users")
-    const deposits = one(db, "SELECT COUNT(*) AS n FROM deposits")
-    const withdrawals = one(db, "SELECT COUNT(*) AS n FROM withdrawals")
-    const feeMicros = one(db, "SELECT COALESCE(SUM(fee_micros), 0) AS n FROM rounds")
+    const pendingMicros = one(db, `SELECT COALESCE(SUM(amount_micros), 0) AS n FROM withdrawals${scoped ? " WHERE chain_key = ? AND status = 'pending'" : " WHERE status = 'pending'"}`, chain)
+    const pendingCount = one(db, `SELECT COUNT(*) AS n FROM withdrawals${scoped ? " WHERE chain_key = ? AND status = 'pending'" : " WHERE status = 'pending'"}`, chain)
+    const users = one(db, `SELECT COUNT(*) AS n FROM users${where}`, chain)
+    const deposits = one(db, `SELECT COUNT(*) AS n FROM deposits${where}`, chain)
+    const withdrawals = one(db, `SELECT COUNT(*) AS n FROM withdrawals${where}`, chain)
+    const feeMicros = one(db, `SELECT COALESCE(SUM(fee_micros), 0) AS n FROM rounds${where}`, chain)
     const rows = db
       .query(
         `SELECT direction, kind, address, amount_micros, tx_hash, status, created_at
          FROM (
            SELECT 'in' AS direction, 'deposit' AS kind, address, amount_micros, tx_hash, 'credited' AS status, created_at
-           FROM deposits
+           FROM deposits${where}
            UNION ALL
            SELECT 'out', 'withdraw', address, amount_micros, tx_hash, status, created_at
-           FROM withdrawals
+           FROM withdrawals${where}
          )
          ORDER BY created_at DESC
          LIMIT 10`,
       )
-      .all() as {
+      .all(...(scoped ? [marketPreferences.chain, marketPreferences.chain] : [])) as {
       direction: string
       kind: string
       address: string

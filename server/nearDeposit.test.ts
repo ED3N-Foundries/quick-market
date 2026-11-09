@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test"
+import { marketPreferences } from "../shared/market"
 import { applyNearDeposit, parseNearDeposits } from "./near"
 import { useDatabase } from "./db"
 import { youFor } from "./rounds"
@@ -38,6 +39,7 @@ test("deposit events credit only successful QM transfers to the treasury", () =>
 })
 
 test("a NEAR deposit is credited once", () => {
+  marketPreferences.chain = "near-testnet"
   useDatabase(":memory:")
   const deposit = { txHash: "hash", logIndex: 0, from: sender, amountMicros: 2_500_000, timestamp: 10n }
   expect(applyNearDeposit(deposit)).toBe(true)

@@ -8,6 +8,7 @@ import { requireNearToken } from "../shared/near"
 import { accountFromSecret, signNearMessage } from "../shared/nearKey"
 import { feeBps, windowMs } from "../server/config"
 import { configuredChain, loadEnv } from "../server/env"
+import { getDb } from "../server/db"
 import { assertQmMetadata, fundedAgents, inspectNear, NearConfigError, readTokenMetadata } from "../server/near"
 import { bankAction, seedMicros } from "./bank"
 import { checkConfig, swarmConfig, type TapeStats } from "./config"
@@ -20,7 +21,7 @@ import { openClock, stepPresence, type Arrival, type WalletClock } from "./prese
 import { replayPayouts } from "./replay"
 import { peekApiEndpoint, refreshApiEndpoint } from "./endpoint"
 import { histogram, manilaClock, parseControl, parseFlow, percentiles, type FlowFile, type SwarmSnapshot } from "./status"
-import { CONTROL_PATH, FLOW_PATH, KEYS_PATH, NEAR_KEYS_PATH, STATUS_PATH, SWARM_DB_PATH, SWARM_PATH, readJson, writeJsonAtomic } from "./store"
+import { CONTROL_PATH, FLOW_PATH, KEYS_PATH, NEAR_KEYS_PATH, STATUS_PATH, SWARM_PATH, readJson, writeJsonAtomic } from "./store"
 import {
   loadWalletMap,
   metaGet,
@@ -148,7 +149,7 @@ async function main() {
     requireSepoliaToken(chain)
   }
 
-  const db = openSwarm(SWARM_DB_PATH)
+  const db = openSwarm(getDb())
   pruneUnenrolled(db)
   let keys: { address: string; privateKey: string }[]
   if (near) {

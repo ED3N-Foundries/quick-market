@@ -96,22 +96,22 @@ export async function openSession(input: {
   }
 
   const db = getDb()
-  const seen = db.query("SELECT signature FROM login_sigs WHERE signature = ?").get(input.signature)
+  const seen = db.query("SELECT signature FROM login_sigs WHERE chain_key = ? AND signature = ?").get(chainKey, input.signature)
   if (seen) return { ok: false, error: "Sign-in already used" }
 
   const token = randomToken()
   const bot = botSecretOk(input.botSecret)
   const tx = db.transaction(() => {
-    db.query("INSERT INTO login_sigs (signature, expires_at) VALUES (?, ?)").run(input.signature, input.now + LOGIN_SKEW_MS)
+    db.query("INSERT INTO login_sigs (chain_key, signature, expires_at) VALUES (?, ?, ?)").run(chainKey, input.signature, input.now + LOGIN_SKEW_MS)
     if (bot) {
       db.query(
-        `INSERT INTO users (address, balance_micros, created_at, is_bot) VALUES (?, 0, ?, 1)
-         ON CONFLICT(address) DO UPDATE SET is_bot = 1`,
-      ).run(address, input.now)
+        `INSERT INTO users (chain_key, address, balance_micros, created_at, is_bot) VALUES (?, ?, 0, ?, 1)
+         ON CONFLICT(chain_key, address) DO UPDATE SET is_bot = 1`,
+      ).run(chainKey, address, input.now)
     } else {
       ensureUser(address)
     }
-    db.query("INSERT INTO sessions (token, address, expires_at) VALUES (?, ?, ?)").run(token, address, input.now + SESSION_MS)
+    db.query("INSERT INTO sessions (chain_key, token, address, expires_at) VALUES (?, ?, ?, ?)").run(chainKey, token, address, input.now + SESSION_MS)
   })
   tx()
   return { ok: true, token, you: youFor(address)! }
@@ -122,9 +122,9 @@ export function readSession(req: Request, now = Date.now()): { address: string |
   if (!header) return { address: null, rejected: false }
   const match = /^Bearer\s+([0-9a-f]{64})$/i.exec(header)
   if (!match) return { address: null, rejected: true }
-  const row = getDb().query("SELECT address, expires_at FROM sessions WHERE token = ?").get(match[1]!) as
-    | { address: string; expires_at: number }
-    | null
+  const row = getDb()
+    .query("SELECT address, expires_at FROM sessions WHERE chain_key = ? AND token = ?")
+    .get(configuredChain().key, match[1]!) as { address: string; expires_at: number } | null
   if (!row || row.expires_at <= now) return { address: null, rejected: true }
   return { address: row.address, rejected: false }
 }
@@ -133,7 +133,7 @@ export function endSession(req: Request) {
   const header = req.headers.get("authorization") ?? ""
   const match = /^Bearer\s+([0-9a-f]{64})$/i.exec(header)
   if (!match) return
-  getDb().query("DELETE FROM sessions WHERE token = ?").run(match[1]!)
+  getDb().query("DELETE FROM sessions WHERE chain_key = ? AND token = ?").run(configuredChain().key, match[1]!)
 }
 
 function randomToken(): string {

@@ -1,6 +1,9 @@
 import { defineConfig } from "vite"
 import react from "@vitejs/plugin-react"
 import { brandHead } from "./brand/meta.ts"
+import { bootstrapChainEnv } from "./server/envFile.ts"
+
+bootstrapChainEnv()
 
 export default defineConfig({
   root: "web",

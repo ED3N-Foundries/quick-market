@@ -190,15 +190,15 @@ export function describeTreasury(input: {
   return report
 }
 
-/** A NEAR launch cannot share a ledger with Base addresses, and the reverse. */
+/** Legacy pre-migration safeguard. Chain-scoped databases may contain both families. */
 export function ledgerChainConflict(addresses: string[], chainKey: ChainKey): "base" | "near" | null {
   if (chainKey === "near-testnet") return addresses.some((item) => EVM_ADDRESS.test(item)) ? "base" : null
   return addresses.some((item) => isNearAccountId(item)) ? "near" : null
 }
 
 export function ledgerChainMessage(conflict: "base" | "near", dbPath: string): string {
-  if (conflict === "base") return `This database has Base accounts. Use a separate DB_PATH for NEAR testnet. DB_PATH=${dbPath}`
-  return `This database has NEAR testnet accounts. Use a separate DB_PATH for Base. DB_PATH=${dbPath}`
+  if (conflict === "base") return `The active NEAR ledger contains unmigrated Base accounts. Restore the legacy migration before using ${dbPath}`
+  return `The active Base ledger contains unmigrated NEAR accounts. Restore the legacy migration before using ${dbPath}`
 }
 
 export function requireNearToken(chainKey: ChainKey, tokenAccount: string) {

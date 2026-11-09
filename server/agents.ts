@@ -3,6 +3,7 @@ import { swarmConfig } from "../agent/config"
 import { botEnrollMessage, nearBotEnrollMessage, LOGIN_SKEW_MS } from "../shared/login"
 import { isImplicitAccount } from "../shared/near"
 import { verifyNearMessage } from "../shared/nearKey"
+import { activeChainKey } from "./activeChain"
 import { requestBurn } from "./custody"
 import { getDb } from "./db"
 import { configuredChain } from "./env"
@@ -64,8 +65,8 @@ export async function enrollBot(input: {
     if (again && again.is_bot !== 1) throw new Error("That address is a person")
     if (again?.is_bot === 1) return { balanceMicros: again.balance_micros, seeded: false }
     getDb()
-      .query("INSERT INTO users (address, balance_micros, created_at, is_bot) VALUES (?, ?, ?, 1)")
-      .run(address, input.seedMicros, input.now)
+      .query("INSERT INTO users (chain_key, address, balance_micros, created_at, is_bot) VALUES (?, ?, ?, ?, 1)")
+      .run(activeChainKey(), address, input.seedMicros, input.now)
     return { balanceMicros: input.seedMicros, seeded: true }
   })
   try {
@@ -105,14 +106,14 @@ export function agentBalances(addresses: string[]): { address: string; balanceMi
   if (clean.length === 0) return []
   const marks = clean.map(() => "?").join(",")
   const rows = getDb()
-    .query(`SELECT address, balance_micros FROM users WHERE address IN (${marks}) AND is_bot = 1`)
-    .all(...clean) as { address: string; balance_micros: number }[]
+    .query(`SELECT address, balance_micros FROM users WHERE chain_key = ? AND address IN (${marks}) AND is_bot = 1`)
+    .all(activeChainKey(), ...clean) as { address: string; balance_micros: number }[]
   return rows.map((row) => ({ address: row.address, balanceMicros: row.balance_micros }))
 }
 
 function userRow(address: string): { balance_micros: number; is_bot: number } | null {
   return (
-    (getDb().query("SELECT balance_micros, is_bot FROM users WHERE address = ?").get(address) as
+    (getDb().query("SELECT balance_micros, is_bot FROM users WHERE chain_key = ? AND address = ?").get(activeChainKey(), address) as
       | { balance_micros: number; is_bot: number }
       | null) ?? null
   )

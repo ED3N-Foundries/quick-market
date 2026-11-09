@@ -8,11 +8,12 @@ import { loadMarket, marketPreferences } from "../shared/market"
 import { mintToTreasury, treasuryAccount } from "../server/custody"
 import { getDb } from "../server/db"
 import { loadEnv } from "../server/env"
+import { envFilePath } from "../server/envFile"
 import { sendNearActions } from "../server/near"
 import { encodeDeploy, encodeFunctionCall, encodeTransfer, jsonArgs } from "../server/nearTx"
 import { cutoverAmount } from "../server/grant"
 
-const ENV_PATH = join(process.cwd(), ".env")
+const ENV_PATH = envFilePath(marketPreferences.chain)
 const EXAMPLE_PATH = join(process.cwd(), ".env.example")
 
 async function main() {
@@ -71,8 +72,10 @@ async function main() {
 
 async function backLedger(token: Address) {
   process.env.USDC_ADDRESS = token
-  const row = getDb().query("SELECT value FROM meta WHERE key = 'qm_usdc_v1'").get() as { value: string } | null
-  const sumRow = getDb().query("SELECT COALESCE(SUM(balance_micros), 0) AS total FROM users").get() as {
+  const chain = marketPreferences.chain
+  const metaKey = `${chain}:qm_usdc_v1`
+  const row = getDb().query("SELECT value FROM meta WHERE key = ?").get(metaKey) as { value: string } | null
+  const sumRow = getDb().query("SELECT COALESCE(SUM(balance_micros), 0) AS total FROM users WHERE chain_key = ?").get(chain) as {
     total: number | bigint | null
   }
   const total = sumRow.total === null ? 0 : typeof sumRow.total === "bigint" ? Number(sumRow.total) : sumRow.total
@@ -82,7 +85,7 @@ async function backLedger(token: Address) {
     return
   }
   if (amount > 0) await mintToTreasury(amount)
-  getDb().query("INSERT INTO meta (key, value) VALUES ('qm_usdc_v1', ?)").run(String(amount))
+  getDb().query("INSERT INTO meta (key, value) VALUES (?, ?)").run(metaKey, String(amount))
   console.log(`backed ${amount} micros of existing balances with quick-market USDC`)
 }
 

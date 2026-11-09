@@ -5,7 +5,6 @@ export const STATUS_PATH = join(process.cwd(), "agent", "status.json")
 export const CONTROL_PATH = join(process.cwd(), "agent", "control.json")
 export const FLOW_PATH = join(process.cwd(), "agent", "flow.json")
 export const SWARM_PATH = join(process.cwd(), "agent", "swarm.json")
-export const SWARM_DB_PATH = join(process.cwd(), "agent", "swarm.sqlite")
 export const KEYS_PATH = join(process.cwd(), "agent", "keys.json")
 export const NEAR_KEYS_PATH = join(process.cwd(), "agent", "keys.near.json")
 

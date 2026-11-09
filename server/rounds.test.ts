@@ -4,6 +4,7 @@ import { windowAccepts } from "./config"
 import { getDb, useDatabase } from "./db"
 import { parseMicros } from "./money"
 import { handoffBanner } from "../shared/source"
+import { marketPreferences } from "../shared/market"
 import { adoptFeed, advance, board, credit, ensureUser, failFeed, feedStatus, handoffNow, listRounds, noteAlive, notePrint, placeBuyIn, placeBuyIns, recentSettles, resetRuntime, resumeAtFor, roundDetail, tapePoints, tickerNow, withdraw, youFor, type Print, type Side } from "./rounds"
 
 const USDC = 1_000_000
@@ -30,6 +31,7 @@ function bet(input: { address: string; side: Side; stakeMicros: number; now: num
 }
 
 beforeEach(() => {
+  marketPreferences.chain = "base-sepolia"
   process.env.WINDOW_SECONDS = "10"
   process.env.MARKET_SECONDS = "10"
   process.env.BOT_COUNT = "0"
@@ -41,15 +43,15 @@ beforeEach(() => {
 
 test("history lists a later market ahead of an older round with a higher id", () => {
   const insert = getDb().query(
-    `INSERT INTO rounds (id, starts_at, ends_at, status, winning_side, resolution)
-     VALUES (?, ?, ?, 'settled', 'up', 'paid')`,
+    `INSERT INTO rounds (chain_key, id, starts_at, ends_at, status, winning_side, resolution)
+     VALUES ('base-sepolia', ?, ?, ?, 'settled', 'up', 'paid')`,
   )
   insert.run(500, 1_000, 2_000)
   insert.run(100, 5_000, 6_000)
   expect(listRounds(10).map((row) => row.id)).toEqual([100, 500])
   const who = address(3)
   const betRow = getDb().query(
-    `INSERT INTO buy_ins (id, round_id, address, side, stake_micros, created_at) VALUES (?, ?, ?, 'up', 1, 0)`,
+    `INSERT INTO buy_ins (chain_key, id, round_id, address, side, stake_micros, created_at) VALUES ('base-sepolia', ?, ?, ?, 'up', 1, 0)`,
   )
   betRow.run("old", 500, who)
   betRow.run("new", 100, who)
@@ -60,8 +62,8 @@ test("history lists a later market ahead of an older round with a higher id", ()
 
 test("recent settles keep directional markets, oldest first", () => {
   const insert = getDb().query(
-    `INSERT INTO rounds (id, starts_at, ends_at, status, winning_side, resolution)
-     VALUES (?, 0, 1, ?, ?, ?)`,
+    `INSERT INTO rounds (chain_key, id, starts_at, ends_at, status, winning_side, resolution)
+     VALUES ('base-sepolia', ?, 0, 1, ?, ?, ?)`,
   )
   insert.run(1, "settled", "up", "paid")
   insert.run(2, "void", "up", "void")
@@ -499,4 +501,33 @@ test("insufficient balance does not open a bet", () => {
   expect(result.ok).toBe(false)
   expect(youFor(you)?.balanceMicros).toBe(10_000 * USDC)
   expect(youFor(you)?.openBuyIns).toEqual([])
+})
+
+
+test("one database keeps chain balances, rounds, and history separate", () => {
+  const baseAddress = address(77)
+  const nearAddress = "ab".repeat(32)
+  try {
+    marketPreferences.chain = "base-sepolia"
+    grant(baseAddress, 5 * USDC)
+    getDb().query("INSERT INTO rounds (chain_key, id, starts_at, ends_at, status) VALUES ('base-sepolia', 9, 10, 20, 'settled')").run()
+    getDb().query("INSERT INTO ticks (second_ts, price, source, exchange_ts) VALUES (1, '100', 'binance', 1000)").run()
+
+    marketPreferences.chain = "near-testnet"
+    expect(youFor(baseAddress)).toBeNull()
+    grant(nearAddress, 7 * USDC)
+    getDb().query("INSERT INTO rounds (chain_key, id, starts_at, ends_at, status) VALUES ('near-testnet', 9, 30, 40, 'settled')").run()
+    expect(youFor(nearAddress)?.balanceMicros).toBe(7 * USDC)
+    expect(listRounds(10).map((row) => row.startsAt)).toEqual([30])
+    expect(roundDetail(9)?.round.startsAt).toBe(30)
+
+    marketPreferences.chain = "base-sepolia"
+    expect(youFor(baseAddress)?.balanceMicros).toBe(5 * USDC)
+    expect(youFor(nearAddress)).toBeNull()
+    expect(listRounds(10).map((row) => row.startsAt)).toEqual([10])
+    expect(roundDetail(9)?.round.startsAt).toBe(10)
+    expect(getDb().query("SELECT price FROM ticks WHERE second_ts = 1").get()).toEqual({ price: "100" })
+  } finally {
+    marketPreferences.chain = "base-sepolia"
+  }
 })

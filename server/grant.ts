@@ -1,5 +1,6 @@
 import type { ChainKey } from "../shared/chain"
 import { marketPreferences } from "../shared/market"
+import { activeChainKey } from "./activeChain"
 import { getDb } from "./db"
 import { trackGrant } from "./grantWait"
 import { normalizeAccount } from "./money"
@@ -25,10 +26,7 @@ export function cutoverAmount(flag: string | null, sumMicros: number): number | 
   return sumMicros
 }
 
-/**
- * Claim the in-flight slot, then mint.
- * The claim commits before this returns, so a caller can answer and let `done` finish.
- */
+/** Claim the in-flight slot, then mint. The claim commits before this returns. */
 export function startGrant(input: {
   address: string
   now: number
@@ -40,8 +38,8 @@ export function startGrant(input: {
   if (input.chainKey !== "base-sepolia" && input.chainKey !== "near-testnet") return { claimed: false, done: Promise.resolve(false) }
   const address = normalizeAccount(input.address, input.chainKey)
   if (!address) return { claimed: false, done: Promise.resolve(false) }
-  if (!claimSlot(address, input.now, input.intervalMs)) return { claimed: false, done: Promise.resolve(false) }
-  const done = trackGrant(address, () => finishGrant(address, input.now, input.amount, input.mint))
+  if (!claimSlot(address, input.now, input.intervalMs, input.chainKey)) return { claimed: false, done: Promise.resolve(false) }
+  const done = trackGrant(address, () => finishGrant(address, input.now, input.amount, input.mint, input.chainKey))
   return { claimed: true, done }
 }
 
@@ -59,18 +57,15 @@ export async function applyGrant(input: {
 }
 
 /** The mint hash, stored while the slot is still open. */
-export function noteGrantTx(address: string, hash: string, chainKey: ChainKey = marketPreferences.chain): void {
+export function noteGrantTx(address: string, hash: string, chainKey: ChainKey = activeChainKey()): void {
   const normalized = normalizeAccount(address, chainKey)
   if (!normalized || hash.length === 0) return
   getDb()
-    .query("UPDATE users SET grant_tx = ? WHERE address = ? AND grant_pending_at IS NOT NULL")
-    .run(hash, normalized)
+    .query("UPDATE users SET grant_tx = ? WHERE chain_key = ? AND address = ? AND grant_pending_at IS NOT NULL")
+    .run(hash, chainKey, normalized)
 }
 
-/**
- * The hash can arrive while the mint is still waiting on blocks.
- * Pending means the caller should answer now and let `done` credit afterwards.
- */
+/** The hash can arrive while the mint is still waiting on blocks. */
 export async function settleGrantRequest<T>(input: {
   done: Promise<T>
   hash: Promise<string>
@@ -88,25 +83,25 @@ type GrantRow = {
 }
 
 /** One transaction. Eligible rows are not bots, are due, and have no pending grant. */
-function claimSlot(address: string, now: number, intervalMs: number): boolean {
+function claimSlot(address: string, now: number, intervalMs: number, chainKey: ChainKey): boolean {
   const tx = getDb().transaction(() => {
     const row = getDb()
-      .query("SELECT grant_at, is_bot, grant_pending_at FROM users WHERE address = ?")
-      .get(address) as GrantRow | null
+      .query("SELECT grant_at, is_bot, grant_pending_at FROM users WHERE chain_key = ? AND address = ?")
+      .get(chainKey, address) as GrantRow | null
     if (!row) {
       getDb()
         .query(
-          "INSERT INTO users (address, balance_micros, created_at, is_bot, grant_pending_at) VALUES (?, 0, ?, 0, ?)",
+          "INSERT INTO users (chain_key, address, balance_micros, created_at, is_bot, grant_pending_at) VALUES (?, ?, 0, ?, 0, ?)",
         )
-        .run(address, now, now)
+        .run(chainKey, address, now, now)
       return true
     }
     if (row.is_bot === 1) return false
     if (row.grant_pending_at != null) return false
     if (!grantDue(row.grant_at, now, intervalMs)) return false
     const result = getDb()
-      .query("UPDATE users SET grant_pending_at = ? WHERE address = ? AND grant_pending_at IS NULL")
-      .run(now, address)
+      .query("UPDATE users SET grant_pending_at = ? WHERE chain_key = ? AND address = ? AND grant_pending_at IS NULL")
+      .run(now, chainKey, address)
     return result.changes === 1
   })
   return tx()
@@ -117,30 +112,33 @@ async function finishGrant(
   now: number,
   amount: number,
   mint: (amountMicros: number) => Promise<void>,
+  chainKey: ChainKey,
 ): Promise<boolean> {
   try {
     await mint(amount)
   } catch (error) {
-    clearPending(address)
+    clearPending(address, chainKey)
     throw error
   }
-  return creditGrant(address, now, amount)
+  return creditGrant(address, now, amount, chainKey)
 }
 
-function creditGrant(address: string, now: number, amount: number): boolean {
+function creditGrant(address: string, now: number, amount: number, chainKey: ChainKey): boolean {
   const tx = getDb().transaction(() => {
     const result = getDb()
       .query(
         `UPDATE users
          SET balance_micros = balance_micros + ?, grant_at = ?, grant_pending_at = NULL, grant_tx = NULL
-         WHERE address = ? AND grant_pending_at IS NOT NULL`,
+         WHERE chain_key = ? AND address = ? AND grant_pending_at IS NOT NULL`,
       )
-      .run(amount, now, address)
+      .run(amount, now, chainKey, address)
     return result.changes === 1
   })
   return tx()
 }
 
-function clearPending(address: string) {
-  getDb().query("UPDATE users SET grant_pending_at = NULL, grant_tx = NULL WHERE address = ?").run(address)
+function clearPending(address: string, chainKey: ChainKey) {
+  getDb()
+    .query("UPDATE users SET grant_pending_at = NULL, grant_tx = NULL WHERE chain_key = ? AND address = ?")
+    .run(chainKey, address)
 }

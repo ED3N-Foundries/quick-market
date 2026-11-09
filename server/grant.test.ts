@@ -1,7 +1,7 @@
 import { beforeEach, expect, test } from "bun:test"
 import { getDb, useDatabase } from "./db"
 import { GRANT_FOLLOW_MS, MINT_CONFIRMATIONS } from "../shared/mint"
-import { loadMarket } from "../shared/market"
+import { loadMarket, marketPreferences } from "../shared/market"
 import { applyGrant, cutoverAmount, grantDue, grantOnSignIn, grantSettings, noteGrantTx, settleGrantRequest } from "./grant"
 import { youFor } from "./rounds"
 
@@ -9,6 +9,7 @@ const who = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 const hour = 60 * 60 * 1000
 
 beforeEach(() => {
+  marketPreferences.chain = "base-sepolia"
   useDatabase(":memory:")
 })
 
@@ -100,7 +101,7 @@ test("a stale pending grant clears on read when this process is not minting", ()
   const started = Date.now() - GRANT_FOLLOW_MS - 1
   getDb()
     .query(
-      "INSERT INTO users (address, balance_micros, created_at, is_bot, grant_pending_at, grant_tx) VALUES (?, 0, 0, 0, ?, ?)",
+      "INSERT INTO users (chain_key, address, balance_micros, created_at, is_bot, grant_pending_at, grant_tx) VALUES ('base-sepolia', ?, 0, 0, 0, ?, ?)",
     )
     .run(who, started, "0xabc")
   expect(youFor(who)?.grantPending).toBeNull()
@@ -140,7 +141,7 @@ test("a pending grant stays while this process is still minting", async () => {
 })
 
 test("a bot session does not take the grant", async () => {
-  getDb().query("INSERT INTO users (address, balance_micros, created_at, is_bot) VALUES (?, 0, 0, 1)").run(who)
+  getDb().query("INSERT INTO users (chain_key, address, balance_micros, created_at, is_bot) VALUES ('base-sepolia', ?, 0, 0, 1)").run(who)
   let minted = false
   const credited = await applyGrant({
     address: who,
@@ -159,6 +160,7 @@ test("a bot session does not take the grant", async () => {
 })
 
 test("NEAR testnet grants the same way as Base Sepolia", async () => {
+  marketPreferences.chain = "near-testnet"
   const account = "ab".repeat(32)
   const minted: number[] = []
   const credited = await applyGrant({
