@@ -34,7 +34,13 @@ function Splash({
   retry?: () => void
 }) {
   return (
-    <main className="splash" role="status" aria-live="polite" aria-label="Loading Quick Market">
+    <main
+      className="splash"
+      data-state={retry ? "error" : "loading"}
+      role="status"
+      aria-live="polite"
+      aria-label="Loading Quick Market"
+    >
       <div className="splash-card">
         <div className="splash-brand">
           <span className="splash-mark" aria-hidden="true">
@@ -58,9 +64,6 @@ function Splash({
             </span>
           </p>
           {detail && <p className="splash-detail">{detail}</p>}
-        </div>
-        <div className="splash-bar" aria-hidden="true">
-          <span />
         </div>
         {retry ? (
           <button type="button" className="splash-retry" onClick={retry}>

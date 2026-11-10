@@ -1293,7 +1293,25 @@ tr.open td { color: var(--text); }
   align-items: center;
   gap: 20px;
   text-align: center;
-  animation: splash-in 420ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+/* Progressive disclosure: spinner is instant, everything else only
+   rises in if loading persists (slow / first load). Fast reloads
+   unmount before the delays elapse, so users just see the spinner. */
+.splash-brand,
+.splash-text,
+.splash-powered {
+  opacity: 0;
+  transform: translateY(8px);
+  animation: splash-rise 480ms cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+}
+.splash-brand { animation-delay: 450ms; }
+.splash-text { animation-delay: 650ms; }
+.splash-powered { animation-delay: 850ms; }
+.splash[data-state="error"] .splash-brand,
+.splash[data-state="error"] .splash-text,
+.splash[data-state="error"] .splash-powered {
+  animation-delay: 0ms;
+  animation-duration: 220ms;
 }
 .splash-brand {
   display: inline-flex;
@@ -1317,6 +1335,7 @@ tr.open td { color: var(--text); }
   height: 84px;
   display: grid;
   place-items: center;
+  animation: splash-pop 240ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 .splash-track {
   position: absolute;
@@ -1390,21 +1409,6 @@ tr.open td { color: var(--text); }
   line-height: 1.45;
   overflow-wrap: anywhere;
 }
-.splash-bar {
-  width: min(220px, 60vw);
-  height: 3px;
-  border-radius: 999px;
-  overflow: hidden;
-  background: rgba(243, 240, 232, 0.1);
-}
-.splash-bar span {
-  display: block;
-  width: 40%;
-  height: 100%;
-  border-radius: inherit;
-  background: linear-gradient(90deg, var(--up), var(--push), var(--warn));
-  animation: splash-slide 1.15s ease-in-out infinite;
-}
 .splash-retry {
   border: 1px solid var(--line);
   background: var(--raise-2);
@@ -1440,10 +1444,6 @@ tr.open td { color: var(--text); }
 }
 @keyframes splash-spin { to { transform: rotate(360deg); } }
 @keyframes splash-spin-rev { to { transform: rotate(-360deg); } }
-@keyframes splash-slide {
-  0% { transform: translateX(-110%); }
-  100% { transform: translateX(280%); }
-}
 @keyframes splash-pulse {
   0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(47, 206, 134, 0.35); }
   50% { transform: scale(1.06); box-shadow: 0 0 0 8px rgba(47, 206, 134, 0); }
@@ -1460,11 +1460,27 @@ tr.open td { color: var(--text); }
   from { opacity: 0; transform: translateY(8px) scale(0.99); }
   to { opacity: 1; transform: none; }
 }
+@keyframes splash-rise {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes splash-pop {
+  from { opacity: 0; transform: scale(0.92); }
+  to { opacity: 1; transform: none; }
+}
 @media (prefers-reduced-motion: reduce) {
   .splash-card { animation: none; }
+  .splash-brand,
+  .splash-text,
+  .splash-powered {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
+  .splash-spinner { animation: none; }
   .splash-mark { animation: none; }
   .splash-ring, .splash-orbit { animation-duration: 2.4s; }
-  .splash-core, .splash-bar span, .splash-dots span { animation: none; }
+  .splash-core, .splash-dots span { animation: none; }
   .splash-dots span { opacity: 0.7; }
 }
 .footer-bar {
