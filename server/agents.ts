@@ -1,5 +1,4 @@
 import { recoverMessageAddress, type Hex } from "viem"
-import { swarmConfig } from "../agent/config"
 import { botEnrollMessage, nearBotEnrollMessage, LOGIN_SKEW_MS } from "../shared/login"
 import { isImplicitAccount } from "../shared/near"
 import { verifyNearMessage } from "../shared/nearKey"
@@ -12,6 +11,18 @@ import { requestNearBurn } from "./near"
 import { credit, openBook, placeBuyIns, recentSettles, settledSince, tapeTail, youFor, type BuyInOrder } from "./rounds"
 
 const SIGNATURE = /^0x[0-9a-fA-F]+$/
+
+/**
+ * Bot bank band. Duplicated from the agent repo's `agent/config.ts` (`bank`
+ * slice) so the server does not depend on the runner. Keep both in sync:
+ * floor $3, seed $8–$250, refill pocket $6–$24 (cap enforced here).
+ */
+const BOT_BANK = {
+  floorMicros: 3_000_000,
+  seedMinMicros: 8_000_000,
+  seedMaxMicros: 250_000_000,
+  refillMaxMicros: 24_000_000,
+} as const
 
 export async function enrollBot(input: {
   address: string
@@ -32,7 +43,7 @@ export async function enrollBot(input: {
   }
   const address = normalizeAccount(input.address, chainKey)
   if (!address) return { ok: false, error: "Address is invalid" }
-  const bank = swarmConfig.bank
+  const bank = BOT_BANK
   if (!Number.isSafeInteger(input.seedMicros) || input.seedMicros < bank.seedMinMicros || input.seedMicros > bank.seedMaxMicros) {
     return { ok: false, error: "Seed is outside the band" }
   }
@@ -85,7 +96,7 @@ export async function resurrectBot(input: {
 }): Promise<{ ok: true; balanceMicros: number } | { ok: false; error: string }> {
   const address = normalizeAccount(input.address)
   if (!address) return { ok: false, error: "Address is invalid" }
-  const bank = swarmConfig.bank
+  const bank = BOT_BANK
   if (!Number.isSafeInteger(input.amountMicros) || input.amountMicros <= 0 || input.amountMicros > bank.refillMaxMicros) {
     return { ok: false, error: "Amount is outside the refill" }
   }

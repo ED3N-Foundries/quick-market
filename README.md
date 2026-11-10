@@ -28,11 +28,11 @@ On NEAR, `TOKEN_ACCOUNT` is the quick-market NEP-141 contract (`QM`, 6 decimals)
 
 Base custody is dormant during a NEAR launch. When Base Sepolia is selected, the existing Phantom flow, quick-market USDC grants, deposits, withdrawals, and token deployment remain available. Base mainnet uses Circle USDC and does not grant test funds. Use a different mainnet treasury key. `RPC_URL` overrides the selected network's public RPC.
 
-With `CHAIN=near-testnet`, `bun run agent` uses `agent/keys.near.json` and the NEAR treasury. Base Sepolia uses `agent/keys.json`; Base mainnet refuses the swarm. Agents enroll, trade, refill, and burn through the selected chain. `AGENT_SECRET` authorizes the agent API. `bun run agents` is the terminal dashboard for the swarm: crowd, book, money, and roster, with clock, pin, buy-in pause, and bleed. `bun run feeds` shows the live source and backup venues. Closing either dashboard leaves the server up.
+With `CHAIN=near-testnet`, the swarm runner (private repo `ED3N-Foundries/quick-market-agent`) uses its own `keys.near.json` and the NEAR treasury. Base Sepolia uses its own `keys.json`; Base mainnet refuses the swarm. Agents enroll, trade, refill, and burn through the selected chain. `AGENT_SECRET` authorizes the agent API. The runner's terminal dashboard shows the swarm: crowd, book, money, and roster, with clock, pin, buy-in pause, and bleed. `bun run feeds` shows the live source and backup venues. Closing the dashboard leaves the server up.
 
 ## Architecture
 
-Bun serves HTTP and a websocket. One SQLite database holds chain-scoped users, rounds, buy-ins, custody, sessions, and agent state, plus a shared BTC price tape. Legacy agent state is imported once; `agent/swarm.sqlite` is no longer active. React draws the screen. The server advances the clock every 16ms.
+Bun serves HTTP and a websocket. One SQLite database holds chain-scoped users, rounds, buy-ins, custody, sessions, and agent state, plus a shared BTC price tape. Legacy runner state is imported once; the runner keeps its own SQLite file and no longer shares this one. React draws the screen. The server advances the clock every 16ms.
 
 Buy-in windows tile UTC time. Each lasts `WINDOW_SECONDS`, and the next opens when the previous closes. Market `id` is `floor(now / window)`. Its book opens at `id * window`, the strike locks when that window closes, and it settles `MARKET_SECONDS` later. A buy-in names that window. If the server receives it outside the window, the buy-in is rejected and is not placed on the window that is open on arrival.
 
