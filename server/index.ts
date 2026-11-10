@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs"
 import { join, normalize, sep } from "node:path"
 import { parseLang, stampHtml, type Lang } from "../shared/lang"
-import { loadMarket, TICK_MS, type PublicConfig } from "../shared/market"
+import { loadMarket, requireExplicitChain, TICK_MS, type PublicConfig } from "../shared/market"
 import { feeBps, marketMs, MIN_STAKE_MICROS, priceSource, viewMs, windowMs, type PriceSource } from "./config"
 import { takeTick } from "./tick"
 import { configuredChain, loadEnv } from "./env"
@@ -26,6 +26,7 @@ const distDir = join(import.meta.dir, "..", "dist")
 const serveUi = loadEnv().nodeEnv === "production"
 
 async function bootServer() {
+  requireExplicitChain()
   loadMarket()
   activeChain = await startChainRuntime()
   chain = activeChain.chain
@@ -157,6 +158,10 @@ function publicConfig(): PublicConfig {
 
 async function handle(req: Request): Promise<Response> {
   const url = new URL(req.url)
+
+  if (req.method === "GET" && url.pathname === "/api/config") {
+    return json(publicConfig())
+  }
 
   if (req.method === "GET" && url.pathname === "/api/health") {
     return json({ ok: true, source: priceSource(), chain: chain.key, treasury: activeChain.treasuryReport() })

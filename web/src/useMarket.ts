@@ -1,8 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react"
 import { LATE_BUY_IN_CODE } from "../../shared/buyIn"
-import { chainFromEnv, moneyLabel, tokenKind, tokenLabel, type ChainConfig } from "../../shared/chain"
 import { GRANT_FOLLOW_MS, MINT_CONFIRMATIONS } from "../../shared/mint"
-import { marketPreferences } from "../../shared/market"
 import { writeCachedBalance } from "./balanceCache"
 import { applyBuyIn } from "./buyInIntent"
 import type { TapeChart, TapePoint } from "./chart"
@@ -31,35 +29,6 @@ import { tickerFor } from "../../shared/source"
 import { dismissRound, dueBuyIns, emptyNotices, settleNotice, tickNotices } from "./resultNotice"
 import type { Board, Config, SettledMessage, Side, You } from "./types"
 
-function configuredChain(): ChainConfig {
-  try {
-    return chainFromEnv(marketPreferences.chain, import.meta.env.USDC_ADDRESS)
-  } catch {
-    return chainFromEnv(undefined)
-  }
-}
-
-const pageChain = configuredChain()
-
-const defaultConfig: Config = {
-  windowSeconds: 10,
-  marketSeconds: 10,
-  viewSeconds: 5,
-  feeBps: 0,
-  minStakeMicros: 1_000_000,
-  source: "binance",
-  chainId: pageChain.id,
-  chainKey: pageChain.key,
-  chainName: pageChain.name,
-  usdc: pageChain.key === "near-testnet" ? "" : pageChain.usdc,
-  treasury: "",
-  moneyLabel: moneyLabel(pageChain),
-  tokenKind: tokenKind(pageChain),
-  tokenLabel: tokenLabel(pageChain),
-  grantMicros: 0,
-  grantIntervalMs: 0,
-}
-
 function readTape(value: unknown): TapePoint[] | null {
   if (!Array.isArray(value)) return null
   const points: TapePoint[] = []
@@ -81,10 +50,10 @@ function headers(token: string | null, json = false): HeadersInit {
   return result
 }
 
-export function useMarket(token: string | null, seed: You | null = null) {
+export function useMarket(token: string | null, seed: You | null = null, initialConfig: Config) {
   const [board, setBoard] = useState<Board | null>(null)
   const [you, setYou] = useState<You | null>(null)
-  const [config, setConfig] = useState<Config>(defaultConfig)
+  const [config, setConfig] = useState<Config>(initialConfig)
   const [feed, setFeed] = useState<"live" | "stale">("stale")
   const [ticker, setTicker] = useState<Ticker>(tickerFor("binance"))
   const [handoff, setHandoff] = useState<Handoff | null>(null)

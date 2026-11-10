@@ -1,10 +1,11 @@
-import { loadMarket } from "../shared/market"
+import { loadMarket, requireExplicitChain } from "../shared/market"
 import { loadEnv } from "./env"
 
+requireExplicitChain()
 loadMarket()
 const runtime = loadEnv()
 
-const server = Bun.spawn(["bun", "--hot", "scripts/launch.ts", "server"], {
+const server = Bun.spawn(["bun", "--hot", "server/index.ts"], {
   stdout: "inherit",
   stderr: "inherit",
   stdin: "inherit",

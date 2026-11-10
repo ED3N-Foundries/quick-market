@@ -2,7 +2,7 @@ import { isMobileDevice } from "@phantom/browser-sdk"
 import type { IEthereumChain } from "@phantom/chain-interfaces"
 import { AddressType, PhantomProvider, useConnect as usePhantomConnect, usePhantom } from "@phantom/react-sdk"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react"
+import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { getPublicClient } from "wagmi/actions"
 import { getAddress, type Address } from "viem"
 import {
@@ -16,8 +16,7 @@ import {
   WagmiProvider,
 } from "wagmi"
 import { base, baseSepolia } from "wagmi/chains"
-import { chainFromEnv, tokenLabel, type ChainConfig } from "../../shared/chain"
-import { marketPreferences } from "../../shared/market"
+import { tokenLabel, type ChainConfig } from "../../shared/chain"
 import { loginMessage } from "../../shared/login"
 import {
   clearNearPending,
@@ -131,16 +130,7 @@ const missing: WalletSession = {
 
 const SessionContext = createContext<WalletSession>(missing)
 
-function readChain(): { chain: ChainConfig | null; error: string | null } {
-  try {
-    return { chain: chainFromEnv(marketPreferences.chain, import.meta.env.USDC_ADDRESS), error: null }
-  } catch (error) {
-    return { chain: null, error: error instanceof Error ? error.message : "Chain is invalid" }
-  }
-}
-
-const read = readChain()
-const selected = read.chain?.id === base.id ? base : baseSepolia
+type WagmiConfig = ReturnType<typeof createConfig>
 
 const phantomConfig = {
   providers: ["injected" as const],
@@ -157,24 +147,6 @@ const phantomTheme = {
   borderRadius: "16px",
   overlay: "rgba(9, 10, 12, 0.8)",
 }
-
-const evmChain = read.chain && read.chain.family === "evm" ? read.chain : null
-
-export const wagmiConfig = !evmChain
-  ? null
-  : evmChain.id === base.id
-    ? createConfig({
-        chains: [base],
-        connectors: [phantomConnector()],
-        transports: { [base.id]: http(evmChain.rpc) },
-        multiInjectedProviderDiscovery: false,
-      })
-    : createConfig({
-        chains: [baseSepolia],
-        connectors: [phantomConnector()],
-        transports: { [baseSepolia.id]: http(evmChain.rpc) },
-        multiInjectedProviderDiscovery: false,
-      })
 
 const queryClient = new QueryClient()
 
@@ -220,8 +192,9 @@ function missedChain(): { code: number; message: string } {
   return { code: 4902, message: "Unrecognized chain ID" }
 }
 
-function Bridge({ children }: { children: ReactNode }) {
-  const expected = read.chain!.id
+function Bridge({ children, chain, wagmiConfig }: { children: ReactNode; chain: ChainConfig; wagmiConfig: WagmiConfig }) {
+  const expected = chain.id
+  const selected = chain.id === base.id ? base : baseSepolia
   const { status } = useAccount()
   const wagmiChainId = useChainId()
   const { connectAsync, connectors } = useConnect()
@@ -348,8 +321,8 @@ function Bridge({ children }: { children: ReactNode }) {
     accounts: readStandardAccounts(),
   })
 
-  const chainName = read.chain?.name ?? "Base Sepolia"
-  const asset = read.chain ? tokenLabel(read.chain) : "USDC"
+  const chainName = chain?.name ?? "Base Sepolia"
+  const asset = chain ? tokenLabel(chain) : "USDC"
   const signedIn = matchingSession(readStored(expected), address ?? null, expected)
   const activeToken = signedIn && (token === null || token === signedIn.token) ? signedIn.token : null
 
@@ -497,7 +470,7 @@ function Bridge({ children }: { children: ReactNode }) {
 
   const session: WalletSession = {
     chainError: null,
-    pageChain: read.chain,
+    pageChain: chain,
     address: address ?? null,
     label,
     chainId: walletChainId,
@@ -665,7 +638,7 @@ function Bridge({ children }: { children: ReactNode }) {
   return <SessionContext.Provider value={session}>{children}</SessionContext.Provider>
 }
 
-function NearBridge({ children }: { children: ReactNode }) {
+function NearBridge({ children, chain }: { children: ReactNode; chain: ChainConfig }) {
   const expected = 0
   const stored = readStored(expected)
   const [token, setToken] = useState<string | null>(stored?.token ?? null)
@@ -734,7 +707,7 @@ function NearBridge({ children }: { children: ReactNode }) {
 
   const session: WalletSession = {
     chainError: null,
-    pageChain: read.chain,
+    pageChain: chain,
     address,
     label: null,
     chainId: address ? expected : undefined,
@@ -763,14 +736,31 @@ function NearBridge({ children }: { children: ReactNode }) {
   return <SessionContext.Provider value={session}>{children}</SessionContext.Provider>
 }
 
-export function WalletProviders({ children }: { children: ReactNode }) {
-  if (read.chain?.key === "near-testnet") return <NearBridge>{children}</NearBridge>
-  if (!wagmiConfig || !read.chain) {
+export function WalletProviders({ children, chain }: { children: ReactNode; chain: ChainConfig }) {
+  const wagmiConfig = useMemo<WagmiConfig | null>(() => {
+    if (chain.family !== "evm") return null
+    if (chain.id === base.id) {
+      return createConfig({
+        chains: [base],
+        connectors: [phantomConnector()],
+        transports: { [base.id]: http(chain.rpc) },
+        multiInjectedProviderDiscovery: false,
+      })
+    }
+    return createConfig({
+      chains: [baseSepolia],
+      connectors: [phantomConnector()],
+      transports: { [baseSepolia.id]: http(chain.rpc) },
+      multiInjectedProviderDiscovery: false,
+    })
+  }, [chain])
+
+  if (chain.key === "near-testnet") return <NearBridge chain={chain}>{children}</NearBridge>
+  if (!wagmiConfig) {
     const value: WalletSession = {
       ...missing,
-      chainError: read.error,
-      pageChain: read.chain,
-      deposit: async () => ({ ok: false, message: read.error ?? "Chain is invalid" }),
+      chainError: "Chain is invalid",
+      pageChain: chain,
     }
     return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>
   }
@@ -778,7 +768,7 @@ export function WalletProviders({ children }: { children: ReactNode }) {
     <WagmiProvider config={wagmiConfig} reconnectOnMount={false}>
       <QueryClientProvider client={queryClient}>
         <PhantomProvider config={phantomConfig} theme={phantomTheme} appName="Quick Market">
-          <Bridge>{children}</Bridge>
+          <Bridge chain={chain} wagmiConfig={wagmiConfig}>{children}</Bridge>
         </PhantomProvider>
       </QueryClientProvider>
     </WagmiProvider>

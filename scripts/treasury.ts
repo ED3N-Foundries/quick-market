@@ -11,10 +11,9 @@ import { loadMarket, marketPreferences } from "../shared/market"
 import { usdcAbi } from "../shared/usdc"
 import { tuneDatabase } from "../server/db"
 import { loadEnv } from "../server/env"
-import { envFilePath } from "../server/envFile"
 import { readNearBalance, readTokenBalance } from "../server/near"
 
-const ENV_PATH = envFilePath(marketPreferences.chain)
+const ENV_PATH = join(process.cwd(), ".env")
 const EXAMPLE_PATH = join(process.cwd(), ".env.example")
 const NAME = "TREASURY_PRIVATE_KEY"
 const GAS_FLOOR = 50_000_000_000_000n

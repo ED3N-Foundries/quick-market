@@ -8,12 +8,11 @@ import { loadMarket, marketPreferences } from "../shared/market"
 import { mintToTreasury, treasuryAccount } from "../server/custody"
 import { getDb } from "../server/db"
 import { loadEnv } from "../server/env"
-import { envFilePath } from "../server/envFile"
 import { sendNearActions } from "../server/near"
 import { encodeDeploy, encodeFunctionCall, encodeTransfer, jsonArgs } from "../server/nearTx"
 import { cutoverAmount } from "../server/grant"
 
-const ENV_PATH = envFilePath(marketPreferences.chain)
+const ENV_PATH = join(process.cwd(), ".env")
 const EXAMPLE_PATH = join(process.cwd(), ".env.example")
 
 async function main() {

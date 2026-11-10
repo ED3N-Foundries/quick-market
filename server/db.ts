@@ -172,9 +172,6 @@ function openDatabase(path: string): Database {
   migrateRoundSource(db)
   ensureRoundIndexes(db)
   migrateCustody(db)
-  if (path !== ":memory:" && resolve(path) === resolve(join(process.cwd(), "data", "quick-market.sqlite"))) {
-    importLegacySwarm(db, path)
-  }
   return db
 }
 

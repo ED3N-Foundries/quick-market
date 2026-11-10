@@ -35,7 +35,7 @@ import {
 } from "./format"
 import { placePricePops, pricePopText, type PlacedPop, type PopRect } from "./pricePop"
 import { RESULT_MS, SETTLING_MS, type MarketNotice } from "./resultNotice"
-import type { Band, Board, HistoryRound, OpenBuyIn, Side, TrayRow } from "./types"
+import type { Band, Board, Config, HistoryRound, OpenBuyIn, Side, TrayRow } from "./types"
 import { readCachedBalance, visibleBalance } from "./balanceCache"
 import { TestnetBrief } from "./testnetBriefView"
 import { briefDue, readBriefAt, writeBriefAt } from "./testnetBrief"
@@ -52,12 +52,12 @@ import { useSideBook } from "./useSideBook"
 import { grantWaitStatus, loginStatus, loginSteps, loginStepState, SIGN_PROMPT } from "./phantomConnect"
 import { useSession } from "./wallet"
 
-export function App() {
+export function App({ initialConfig }: { initialConfig: Config }) {
   const { lang, text } = useI18n()
   const langRef = useRef(lang)
   langRef.current = lang
   const session = useSession()
-  const market = useMarket(session.token, session.signedYou)
+  const market = useMarket(session.token, session.signedYou, initialConfig)
   const expireRef = useRef(session.expire)
   expireRef.current = session.expire
   const canvasRef = useRef<HTMLCanvasElement>(null)

@@ -3,12 +3,12 @@ import { dirname } from "node:path"
 import { privateKeyToAccount } from "viem/accounts"
 import { requireSepoliaToken } from "../shared/chain"
 import { botEnrollMessage, nearBotEnrollMessage } from "../shared/login"
-import { loadMarket, marketPreferences } from "../shared/market"
+import { loadMarket, marketPreferences, requireExplicitChain } from "../shared/market"
 import { requireNearToken } from "../shared/near"
 import { accountFromSecret, signNearMessage } from "../shared/nearKey"
 import { feeBps, windowMs } from "../server/config"
 import { configuredChain, loadEnv } from "../server/env"
-import { getDb } from "../server/db"
+import { getDb, importLegacySwarm } from "../server/db"
 import { assertQmMetadata, fundedAgents, inspectNear, NearConfigError, readTokenMetadata } from "../server/near"
 import { bankAction, seedMicros } from "./bank"
 import { checkConfig, swarmConfig, type TapeStats } from "./config"
@@ -103,6 +103,7 @@ function apiRoot(): string {
 
 async function main() {
   try {
+    requireExplicitChain()
     loadMarket()
   } catch (error) {
     console.error(error instanceof Error ? error.message : error)
@@ -149,7 +150,9 @@ async function main() {
     requireSepoliaToken(chain)
   }
 
-  const db = openSwarm(getDb())
+  const db = getDb()
+  importLegacySwarm(db, loadEnv().dbPath)
+  openSwarm(db)
   pruneUnenrolled(db)
   let keys: { address: string; privateKey: string }[]
   if (near) {

@@ -1,6 +1,6 @@
 # Quick Market
 
-Bitcoin up/down pools. One shared buy-in window, two sides, pari-mutuel payout. Buy-ins stay in the ledger. The default launch uses QM on NEAR Testnet; Base and Base Sepolia remain selectable.
+Bitcoin up/down pools. One shared buy-in window, two sides, pari-mutuel payout. Buy-ins stay in the ledger. Base, Base Sepolia, and NEAR Testnet are selectable at runtime.
 
 ## Progress
 
@@ -22,13 +22,13 @@ Open http://127.0.0.1:5173. The API listens on http://127.0.0.1:3001. Vite proxi
 
 `WINDOW_SECONDS` and `MARKET_SECONDS` both default to 10. `VIEW_SECONDS` defaults to 5. That is the width of a struck bet's chart, and how long a quiet socket waits before the tape reloads. The price starts on Binance. `FEE_BPS` defaults to 0. `DB_PATH` defaults to `data/quick-market.sqlite`.
 
-The default chain is `near-testnet`. The launcher reads `CHAIN`, then loads `.env.near-testnet`, `.env.base-sepolia`, or `.env.base`. It creates the selected file and fills missing defaults without replacing non-empty keys or addresses. Explicit process environment values win. The legacy `.env` remains the chain selector and a fallback for existing installs. For a production chain switch, run `CHAIN=base-sepolia bun run build` followed by `CHAIN=base-sepolia bun run start`; development only needs `CHAIN=base-sepolia bun run dev`.
+Set `CHAIN` explicitly to `base`, `base-sepolia`, or `near-testnet` in one `.env` file. Bun loads it for the server, agent, and utility commands. The browser fetches `GET /api/config` before rendering, so `bun run build` is chain-agnostic and the same production image works with any supported runtime chain. The server and agent refuse to start without an explicit `CHAIN`.
 
-On NEAR, `TOKEN_ACCOUNT` is the quick-market NEP-141 contract (`QM`, 6 decimals), and the current UI connects through My NEAR Wallet. `bun run treasury` generates a missing treasury key in the selected network file. `bun run token` builds on the existing deployment flow and writes the NEAR token account/key, or Base Sepolia `USDC_ADDRESS`, back to that same file. The server checks treasury NEAR, treasury QM, and each agent account on NEAR startup. A short balance keeps the process listening; a missing key or a token that is not six-decimal QM stops it before listening.
+On NEAR, `TOKEN_ACCOUNT` is the quick-market NEP-141 contract (`QM`, 6 decimals), and the UI connects through My NEAR Wallet. `bun run treasury` generates a missing treasury key in `.env`. `bun run token` writes the NEAR token account/key, or Base Sepolia `USDC_ADDRESS`, back to `.env`. The server checks treasury NEAR, treasury QM, and each agent account on NEAR startup. A short balance keeps the process listening; a missing key or a token that is not six-decimal QM stops it before listening.
 
-Base custody is dormant during a NEAR launch. When Base Sepolia is selected, the existing Phantom flow, quick-market USDC grants, deposits, withdrawals, and token deployment remain available. Base mainnet uses Circle USDC and does not grant test funds. Use a different mainnet treasury key. `RPC_URL` in each network file overrides that network's public RPC.
+Base custody is dormant during a NEAR launch. When Base Sepolia is selected, the existing Phantom flow, quick-market USDC grants, deposits, withdrawals, and token deployment remain available. Base mainnet uses Circle USDC and does not grant test funds. Use a different mainnet treasury key. `RPC_URL` overrides the selected network's public RPC.
 
-`bun run agent` uses `agent/keys.near.json` and the NEAR treasury by default. Base Sepolia uses `agent/keys.json`; Base mainnet refuses the swarm. Agents enroll, trade, refill, and burn through the selected chain. `AGENT_SECRET` authorizes the agent API. `bun run agents` is the terminal dashboard for the swarm: crowd, book, money, and roster, with clock, pin, buy-in pause, and bleed. `bun run feeds` shows the live source and backup venues. Closing either dashboard leaves the server up.
+With `CHAIN=near-testnet`, `bun run agent` uses `agent/keys.near.json` and the NEAR treasury. Base Sepolia uses `agent/keys.json`; Base mainnet refuses the swarm. Agents enroll, trade, refill, and burn through the selected chain. `AGENT_SECRET` authorizes the agent API. `bun run agents` is the terminal dashboard for the swarm: crowd, book, money, and roster, with clock, pin, buy-in pause, and bleed. `bun run feeds` shows the live source and backup venues. Closing either dashboard leaves the server up.
 
 ## Architecture
 

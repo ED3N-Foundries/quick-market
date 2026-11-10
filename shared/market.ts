@@ -43,6 +43,27 @@ export type PublicConfig = {
 const seconds = z.int().min(1).max(120)
 const positive = z.int().positive()
 
+export const publicConfigSchema = z.strictObject({
+  windowSeconds: seconds,
+  marketSeconds: seconds,
+  viewSeconds: seconds,
+  feeBps: z.int().min(0).max(10_000),
+  minStakeMicros: positive,
+  source: z.enum(priceSources),
+  chainId: z.int().nonnegative(),
+  chainKey: z.enum(["base", "base-sepolia", "near-testnet"]),
+  chainName: z.string().min(1),
+  usdc: z.string(),
+  treasury: z.string(),
+  moneyLabel: z.string().min(1),
+  tokenKind: z.enum(["circle", "qm"]),
+  tokenLabel: z.string().min(1),
+  grantMicros: z.int().nonnegative(),
+  grantIntervalMs: z.int().nonnegative(),
+})
+
+type _publicConfig = Assert<Equal<z.infer<typeof publicConfigSchema>, PublicConfig>>
+
 export const marketSchema = z.strictObject({
   chain: z.enum(["base", "base-sepolia", "near-testnet"]),
   windowSeconds: seconds,
@@ -114,6 +135,10 @@ function ambientPreferences(): PreferenceEnv {
   const proc = (globalThis as { process?: { env?: PreferenceEnv } }).process
   const meta = (import.meta as ImportMeta & { env?: PreferenceEnv }).env
   return { ...meta, ...proc?.env }
+}
+
+export function requireExplicitChain(env: PreferenceEnv = ambientPreferences()): void {
+  if (!env.CHAIN?.trim()) throw new Error("CHAIN must be set to base, base-sepolia, or near-testnet.")
 }
 
 /** Environment values override product defaults; invalid explicit values fail at startup. */

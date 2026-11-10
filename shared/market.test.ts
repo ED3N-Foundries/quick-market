@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import { feeBps, windowMs } from "../server/config"
-import { loadMarket } from "./market"
+import { loadMarket, publicConfigSchema, requireExplicitChain } from "./market"
 
 test("environment preferences replace defaults and NEAR is the default chain", () => {
   const loaded = loadMarket({
@@ -38,4 +38,11 @@ test("loaded preferences do not change after a later env write", () => {
   expect(feeBps()).toBe(0)
   if (previous === undefined) delete process.env.WINDOW_SECONDS
   else process.env.WINDOW_SECONDS = previous
+})
+
+test("server and agent require an explicit chain and public config is validated", () => {
+  expect(() => requireExplicitChain({})).toThrow("CHAIN")
+  expect(() => requireExplicitChain({ CHAIN: "  " })).toThrow("CHAIN")
+  expect(() => requireExplicitChain({ CHAIN: "base-sepolia" })).not.toThrow()
+  expect(publicConfigSchema.safeParse({}).success).toBe(false)
 })
