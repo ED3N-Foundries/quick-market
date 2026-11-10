@@ -10,16 +10,14 @@ import {
   SETTLING_MS,
   tickNotices,
 } from "./resultNotice"
-import type { Board, SettledMessage } from "./types"
+import type { AccountResult, Board } from "./types"
 
 function bet(roundId: number, settlesAt: number, stakeMicros = 10_000_000) {
   return { roundId, side: "up" as const, stakeMicros, settlesAt }
 }
 
-function message(over: Partial<SettledMessage> = {}): SettledMessage {
+function message(over: Partial<AccountResult> = {}): AccountResult {
   return {
-    type: "settled",
-    serverNow: 20_000,
     roundId: 1,
     status: "settled",
     resolution: "paid",
@@ -27,8 +25,9 @@ function message(over: Partial<SettledMessage> = {}): SettledMessage {
     strike: "100",
     settle: "101",
     feeMicros: 0,
-    payouts: [{ address: "me", side: "up", stakeMicros: 10_000_000, payoutMicros: 18_500_000 }],
-    balances: [],
+    side: "up",
+    stakeMicros: 10_000_000,
+    payoutMicros: 18_500_000,
     ...over,
   }
 }
@@ -72,7 +71,7 @@ test("a buy-in opens one settling card at its settle time and not before", () =>
 test("a result replaces the settling card and a fast result never shows the loading line", () => {
   const bets = [bet(1, 20_000)]
   const opened = tickNotices(emptyNotices(), bets, 20_000, 50_000)
-  const replaced = settleNotice(opened, message(), "me", 51_000)
+  const replaced = settleNotice(opened, message(), 51_000)
   expect(replaced.cards).toEqual([
     {
       kind: "result",
@@ -87,7 +86,7 @@ test("a result replaces the settling card and a fast result never shows the load
   const lateTick = tickNotices(replaced, bets, 22_000, 52_000)
   expect(lateTick).toBe(replaced)
 
-  const first = settleNotice(emptyNotices(), message(), "me", 19_000)
+  const first = settleNotice(emptyNotices(), message(), 19_000)
   expect(first.cards.map((card) => card.kind)).toEqual(["result"])
   const after = tickNotices(first, bets, 20_000, 20_000)
   expect(after).toBe(first)
@@ -109,12 +108,7 @@ test("a settling card drops after the wait, and a late result still shows", () =
   expect(dropped.cards).toEqual([])
   const late = settleNotice(
     dropped,
-    message({
-      resolution: "paid",
-      winningSide: "down",
-      payouts: [{ address: "me", side: "up", stakeMicros: 10_000_000, payoutMicros: 0 }],
-    }),
-    "me",
+    message({ resolution: "paid", winningSide: "down", payoutMicros: 0 }),
     70_000,
   )
   expect(late.cards).toEqual([
@@ -137,29 +131,13 @@ test("a win shows the gain, and push, void, and a loss show the stake", () => {
   expect(
     settleNotice(
       state,
-      message({
-        resolution: "void",
-        status: "void",
-        winningSide: null,
-        payouts: [{ address: "me", side: "up", stakeMicros: 10_000_000, payoutMicros: 10_000_000 }],
-      }),
-      "me",
+      message({ resolution: "void", status: "void", winningSide: null, payoutMicros: 10_000_000 }),
       1,
     ).cards[0],
   ).toMatchObject({ tone: "void", amountMicros: 10_000_000, signed: false, stakeReturned: true })
   expect(
-    settleNotice(
-      state,
-      message({
-        resolution: "refund",
-        winningSide: "push",
-        payouts: [{ address: "me", side: "up", stakeMicros: 10_000_000, payoutMicros: 10_000_000 }],
-      }),
-      "me",
-      1,
-    ).cards[0],
+    settleNotice(state, message({ resolution: "refund", winningSide: "push", payoutMicros: 10_000_000 }), 1).cards[0],
   ).toMatchObject({ tone: "push", amountMicros: 10_000_000, signed: false, stakeReturned: true })
-  expect(settleNotice(state, message(), "other", 1)).toBe(state)
 })
 
 test("due buy-ins take the settle time from the live card, the join card, or a band", () => {

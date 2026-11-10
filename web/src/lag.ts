@@ -320,3 +320,9 @@ export function probeDue(probe: Probe, now: number): boolean {
   if (probe.sentAt === 0) return true
   return now - probe.sentAt >= LAG_PROBE_MS
 }
+
+export function reconnectDelay(failures: number, random = Math.random()): number {
+  const attempt = Math.max(0, Math.floor(failures))
+  const ceiling = Math.min(10_000, 250 * 2 ** Math.min(attempt, 6))
+  return Math.floor(ceiling * Math.min(1, Math.max(0, random)))
+}

@@ -18,6 +18,7 @@ import {
   noteProbeSent,
   noteWakeProbe,
   readEcho,
+  reconnectDelay,
   silenceMs,
   socketPhase,
   supervise,
@@ -28,7 +29,8 @@ import { grantLanded } from "./grantWatch"
 import type { Handoff, Ticker } from "../../shared/source"
 import { tickerFor } from "../../shared/source"
 import { dismissRound, dueBuyIns, emptyNotices, settleNotice, tickNotices } from "./resultNotice"
-import type { Board, Config, SettledMessage, Side, You } from "./types"
+import { applyBookPatch } from "./boardStream"
+import type { AccountMessage, Board, Config, ServerStreamMessage, Side, SnapshotMessage, You } from "./types"
 
 function readTape(value: unknown): TapePoint[] | null {
   if (!Array.isArray(value)) return null
@@ -90,7 +92,20 @@ export function useMarket(token: string | null, seed: You | null = null, initial
   const bufferRef = useRef<TapePoint[]>([])
   const seededRef = useRef(false)
   const betLock = useRef(false)
-  const betIntent = useRef(0)
+  const pendingBetRef = useRef<{
+    requestId: string
+    side: Side
+    stake: string
+    roundId: number
+    token: string
+    snapshot: You
+    windowOpen: boolean
+  } | null>(null)
+  const sendBetRef = useRef<() => void>(() => {})
+  const epochRef = useRef<string | null>(null)
+  const seqRef = useRef(0)
+  const needsSnapshotRef = useRef(false)
+  const tapeRequestsRef = useRef(new Set<string>())
   const confirmedRef = useRef(false)
   const youEpoch = useRef(0)
   tokenRef.current = token
@@ -123,11 +138,62 @@ export function useMarket(token: string | null, seed: You | null = null, initial
   }, [])
 
   const acceptYou = useCallback((next: You | null) => {
+    youRef.current = next
     youEpoch.current += 1
     if (next) writeCachedBalance(next)
     setYou(next)
     return next
   }, [])
+
+  const acceptAccount = useCallback(
+    (message: Pick<AccountMessage, "you" | "unauthorized" | "result" | "results">) => {
+      const outstanding = new Set(youRef.current?.openBuyIns.map((bet) => bet.roundId) ?? [])
+      if (message.unauthorized) {
+        setUnauthorized(true)
+        acceptYou(null)
+        markConfirmed(false)
+        return
+      }
+      if (message.you) {
+        acceptYou(message.you)
+        markConfirmed(true)
+      }
+      const results = message.result
+        ? [message.result]
+        : (message.results ?? []).filter((result) => outstanding.has(result.roundId))
+      if (results.length === 0) return
+      const arrival = Date.now()
+      setNoticeState((state) => results.reduce((next, result) => settleNotice(next, result, arrival), state))
+      setHistoryVersion((value) => value + 1)
+    },
+    [acceptYou, markConfirmed],
+  )
+
+  const acceptSnapshot = useCallback(
+    (message: SnapshotMessage) => {
+      epochRef.current = message.epoch
+      seqRef.current = message.seq
+      needsSnapshotRef.current = false
+      boardRef.current = message.board
+      setBoard(message.board)
+      setFeed(message.feed)
+      setTicker(message.ticker)
+      setHandoff(message.handoff)
+      const points = readTape(message.tape)
+      if (points) {
+        const chart = chartRef.current
+        if (chart && seededRef.current) chart.merge(points)
+        else {
+          seedRef.current = points
+          if (chart) applySeed(chart)
+        }
+      }
+      if ("you" in message) {
+        acceptAccount({ you: message.you ?? null, results: message.results })
+      }
+    },
+    [acceptAccount, applySeed],
+  )
 
   const noteServerNow = useCallback((serverNow: number) => {
     clockRef.current = noteClock(clockRef.current, serverNow, Date.now())
@@ -172,6 +238,26 @@ export function useMarket(token: string | null, seed: You | null = null, initial
     return body.you ?? null
   }, [acceptYou, applySeed, markConfirmed, noteServerNow])
   reloadRef.current = reload
+
+  const loadTape = useCallback(async (from: number, to: number) => {
+    const chart = chartRef.current
+    if (!chart || !chart.needsBefore(from) || !Number.isFinite(from) || !Number.isFinite(to)) return
+    const start = Math.floor(from / 1_000) * 1_000
+    const end = Math.ceil(to / 1_000) * 1_000
+    const key = `${start}:${end}`
+    if (tapeRequestsRef.current.has(key)) return
+    tapeRequestsRef.current.add(key)
+    try {
+      const response = await fetch(`/api/tape?from=${start}&to=${end}`)
+      if (!response.ok) return
+      const points = readTape((await response.json()).tape)
+      if (points) chartRef.current?.merge(points)
+    } catch {
+      return
+    } finally {
+      tapeRequestsRef.current.delete(key)
+    }
+  }, [])
 
   const waitForBalance = useCallback(
     async (minMicros: number) => {
@@ -294,7 +380,7 @@ export function useMarket(token: string | null, seed: You | null = null, initial
     let socket: WebSocket | null = null
     let retry = 0
     let generation = 0
-    let resyncAt = 0
+    let failures = 0
     let wokeAt = 0
 
     const detach = (current: WebSocket) => {
@@ -309,23 +395,42 @@ export function useMarket(token: string | null, seed: You | null = null, initial
       }
     }
 
-    const resync = () => {
-      if (betLock.current) return
-      const hole = silenceMs(lastInboundRef.current, openedAtRef.current, Date.now())
-      const viewMs = Math.max(1_000, configRef.current.viewSeconds * 1000)
-      if (hole == null || hole < viewMs) return
-      const now = Date.now()
-      if (now - resyncAt < 2_000) return
-      resyncAt = now
-      seededRef.current = false
-      void reloadRef
-        .current({ tape: true })
-        .then(() => {
-          if (!seededRef.current && seedRef.current && chartRef.current) applySeed(chartRef.current)
-        })
-        .catch(() => {
-          if (seedRef.current && chartRef.current) applySeed(chartRef.current)
-        })
+    const scheduleRetry = () => {
+      if (stopped) return
+      retryPendingRef.current = true
+      retry = window.setTimeout(() => {
+        retryPendingRef.current = false
+        connect()
+      }, reconnectDelay(failures++))
+    }
+
+    const sendPending = (current: WebSocket) => {
+      const bet = pendingBetRef.current
+      if (!bet || current.readyState !== WebSocket.OPEN) return
+      if (bet.token !== tokenRef.current) {
+        pendingBetRef.current = null
+        betLock.current = false
+        setPending(false)
+        return
+      }
+      try {
+        current.send(JSON.stringify({
+          type: "buy-in",
+          requestId: bet.requestId,
+          side: bet.side,
+          stake: bet.stake,
+          roundId: bet.roundId,
+        }))
+      } catch {
+        connect()
+      }
+    }
+
+    const requestSnapshot = () => {
+      needsSnapshotRef.current = true
+      const current = socketRef.current
+      if (current?.readyState === WebSocket.OPEN) current.send(JSON.stringify({ type: "resync" }))
+      else connect()
     }
 
     function sendProbe(current: WebSocket, wakeProbe: boolean) {
@@ -352,26 +457,25 @@ export function useMarket(token: string | null, seed: You | null = null, initial
       lagRef.current = createLag()
       probeRef.current = createProbe()
       openedAtRef.current = null
+      needsSnapshotRef.current = true
       connectingSinceRef.current = Date.now()
       const protocol = location.protocol === "https:" ? "wss" : "ws"
       let current: WebSocket
       try {
         current = new WebSocket(`${protocol}://${location.host}/ws`)
       } catch {
-        retryPendingRef.current = true
-        retry = window.setTimeout(() => {
-          retryPendingRef.current = false
-          connect()
-        }, 400)
+        scheduleRetry()
         return
       }
       socket = current
       socketRef.current = current
       current.onopen = () => {
         if (gen !== generation || socket !== current) return
-        resync()
+        failures = 0
         openedAtRef.current = Date.now()
         connectingSinceRef.current = null
+        current.send(JSON.stringify({ type: "hello", ...(tokenRef.current ? { token: tokenRef.current } : {}) }))
+        sendPending(current)
         sendProbe(current, false)
       }
       current.onmessage = (event) => {
@@ -379,11 +483,18 @@ export function useMarket(token: string | null, seed: You | null = null, initial
         const arrival = Date.now()
         lastInboundRef.current = arrival
         probeRef.current = noteProbeInbound(probeRef.current)
-        const message = JSON.parse(String(event.data)) as
-          | { type: "tick"; price: string; exchangeTs: number; serverNow: number; feed: "live" | "stale" }
-          | { type: "round"; serverNow: number; feed: "live" | "stale"; board: Board; ticker?: Ticker; handoff?: Handoff | null }
-          | { type: "lag" }
-          | SettledMessage
+        let message: ServerStreamMessage
+        try {
+          const parsed = JSON.parse(String(event.data)) as unknown
+          if (!parsed || typeof parsed !== "object") {
+            requestSnapshot()
+            return
+          }
+          message = parsed as ServerStreamMessage
+        } catch {
+          requestSnapshot()
+          return
+        }
         if (message.type === "lag") {
           const echo = readEcho(message)
           if (echo) {
@@ -396,29 +507,53 @@ export function useMarket(token: string | null, seed: You | null = null, initial
           noteServerNow(message.serverNow)
           lagRef.current = noteDown(lagRef.current, message.serverNow, arrival)
         }
+        if (message.type === "snapshot") {
+          acceptSnapshot(message)
+          return
+        }
+        if (message.type === "account") {
+          acceptAccount(message)
+          return
+        }
+        if (message.type === "buy-in-result") {
+          const bet = pendingBetRef.current
+          if (!bet || bet.requestId !== message.requestId) return
+          pendingBetRef.current = null
+          betLock.current = false
+          setPending(false)
+          if (message.ok && message.you) {
+            acceptYou(message.you)
+            markConfirmed(true)
+            setError(null)
+            return
+          }
+          if (bet.windowOpen) acceptYou(bet.snapshot)
+          if (message.code === LATE_BUY_IN_CODE) setLateNotices((current) => (current.length > 0 ? current : [1]))
+          else setError(message.error ?? "Buy-in failed")
+          return
+        }
+        if (needsSnapshotRef.current) return
+        if (message.epoch !== epochRef.current || message.seq !== seqRef.current + 1) {
+          requestSnapshot()
+          return
+        }
+        seqRef.current = message.seq
         if (message.type === "tick") {
           setFeed(message.feed)
           pushTick(message.exchangeTs, message.price)
-        } else if (message.type === "round") {
+        } else if (message.type === "book") {
+          const currentBoard = boardRef.current
+          if (!currentBoard) {
+            requestSnapshot()
+            return
+          }
+          const next = applyBookPatch(currentBoard, message.board)
+          boardRef.current = next
+          setBoard(next)
           setFeed(message.feed)
-          setBoard(message.board)
-          if (message.ticker) setTicker(message.ticker)
-          setHandoff(message.handoff ?? null)
+          setTicker(message.ticker)
+          setHandoff(message.handoff)
         } else if (message.type === "settled") {
-          const address = youRef.current?.address ?? null
-          const balance = address ? message.balances.find((row) => row.address === address) : null
-          setYou((row) => {
-            if (!row) return row
-            const next = {
-              ...row,
-              balanceMicros: balance?.balanceMicros ?? row.balanceMicros,
-              openBuyIns: row.openBuyIns.filter((bet) => bet.roundId !== message.roundId),
-            }
-            youEpoch.current += 1
-            writeCachedBalance(next)
-            return next
-          })
-          if (address) setNoticeState((state) => settleNotice(state, message, address, arrival))
           setHistoryVersion((value) => value + 1)
         }
       }
@@ -430,12 +565,7 @@ export function useMarket(token: string | null, seed: You | null = null, initial
           openedAtRef.current = null
           connectingSinceRef.current = null
         }
-        if (stopped) return
-        retryPendingRef.current = true
-        retry = window.setTimeout(() => {
-          retryPendingRef.current = false
-          connect()
-        }, 400)
+        scheduleRetry()
       }
     }
 
@@ -458,8 +588,7 @@ export function useMarket(token: string | null, seed: You | null = null, initial
         return
       }
       const hole = silenceMs(lastInboundRef.current, openedAtRef.current, now)
-      const viewMs = Math.max(1_000, configRef.current.viewSeconds * 1000)
-      if (hole != null && hole >= viewMs) resync()
+      if (hole != null && hole >= 5_000 && socket?.readyState === WebSocket.OPEN) requestSnapshot()
       if (action === "probe" && socket && socket.readyState === WebSocket.OPEN) sendProbe(socket, true)
     }
 
@@ -472,6 +601,9 @@ export function useMarket(token: string | null, seed: You | null = null, initial
     }
     const onResume: EventListener = () => wake()
 
+    sendBetRef.current = () => {
+      if (socket?.readyState === WebSocket.OPEN) sendPending(socket)
+    }
     replaceRef.current = connect
     document.addEventListener("visibilitychange", onVisibility)
     window.addEventListener("pageshow", wake)
@@ -483,6 +615,7 @@ export function useMarket(token: string | null, seed: You | null = null, initial
       generation += 1
       window.clearTimeout(retry)
       retryPendingRef.current = false
+      sendBetRef.current = () => {}
       replaceRef.current = () => {}
       document.removeEventListener("visibilitychange", onVisibility)
       window.removeEventListener("pageshow", wake)
@@ -492,7 +625,7 @@ export function useMarket(token: string | null, seed: You | null = null, initial
       socketRef.current = null
       connectingSinceRef.current = null
     }
-  }, [pushTick, noteServerNow])
+  }, [pushTick, noteServerNow, token, acceptAccount, acceptSnapshot, acceptYou, markConfirmed])
 
   const openKey = you?.openBuyIns.map((bet) => bet.roundId).join(",") ?? ""
   const caught = useRef("")
@@ -509,10 +642,6 @@ export function useMarket(token: string | null, seed: You | null = null, initial
     caught.current = stuck
     reload().catch(() => {})
   }, [token, board, openKey, you?.openBuyIns, reload])
-
-  const pushLate = useCallback(() => {
-    setLateNotices((current) => (current.length > 0 ? current : [1]))
-  }, [])
 
   /** Dynamic check: recompute link + feed at call time so a socket that died
    * after render still blocks the attempt. Returns an English error or null. */
@@ -531,14 +660,13 @@ export function useMarket(token: string | null, seed: You | null = null, initial
 
   const place = useCallback(
     async (side: Side, stake: string, roundId: number) => {
-      if (!confirmedRef.current || !tokenRef.current || betLock.current) return
+      const token = tokenRef.current
+      if (!confirmedRef.current || !token || betLock.current) return
       const offline = connectionErrorNow()
       if (offline) {
         setError(offline)
         return
       }
-      // The id is the market painted with this click. A clock that has already
-      // crossed still posts it. The server rejects a window that is not open.
       if (!Number.isSafeInteger(roundId) || roundId < 0) return
       const current = youRef.current
       if (!current) return
@@ -560,56 +688,21 @@ export function useMarket(token: string | null, seed: You | null = null, initial
       const now = Date.now() + offsetRef.current
       const windowOpen = windowMs > 0 && now >= openAt && now < openAt + windowMs
       betLock.current = true
-      const intent = ++betIntent.current
-      const snapshot = current
-      if (windowOpen) {
-        youEpoch.current += 1
-        setYou(applyBuyIn(current, { side, stakeMicros, roundId }))
+      pendingBetRef.current = {
+        requestId: crypto.randomUUID(),
+        side,
+        stake,
+        roundId,
+        token,
+        snapshot: current,
+        windowOpen,
       }
+      if (windowOpen) acceptYou(applyBuyIn(current, { side, stakeMicros, roundId }))
       setPending(true)
       setError(null)
-      const stale = () => intent !== betIntent.current
-      const restore = () => {
-        if (!windowOpen) return
-        youEpoch.current += 1
-        setYou(snapshot)
-      }
-      try {
-        const response = await fetch("/api/buy-ins", {
-          method: "POST",
-          headers: headers(tokenRef.current, true),
-          body: JSON.stringify({ side, stake, roundId }),
-        })
-        const body = (await response.json()) as { error?: string; code?: string; you?: You; board?: Board }
-        if (stale()) return
-        if (response.status === 401) {
-          restore()
-          setUnauthorized(true)
-          return
-        }
-        if (!response.ok) {
-          restore()
-          if (body.code === LATE_BUY_IN_CODE) {
-            pushLate()
-            return
-          }
-          setError(body.error ?? "Buy-in failed")
-          return
-        }
-        if (body.you) acceptYou(body.you)
-        if (body.board) setBoard(body.board)
-      } catch {
-        if (stale()) return
-        restore()
-        setError("Can't reach the market server")
-      } finally {
-        if (!stale()) {
-          betLock.current = false
-          setPending(false)
-        }
-      }
+      sendBetRef.current()
     },
-    [acceptYou, pushLate, connectionErrorNow],
+    [acceptYou, connectionErrorNow],
   )
 
   const claimGrant = useCallback(async (): Promise<
@@ -736,6 +829,7 @@ export function useMarket(token: string | null, seed: You | null = null, initial
     withdrawWallet,
     reload,
     waitForBalance,
+    loadTape,
     bindChart,
     token,
     link,

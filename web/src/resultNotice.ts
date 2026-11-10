@@ -1,4 +1,4 @@
-import type { Board, OpenBuyIn, SettledMessage, Side } from "./types"
+import type { AccountResult, Board, OpenBuyIn, Side } from "./types"
 
 /** How long the loading card stays up when the server has not answered. */
 export const SETTLING_MS = 15_000
@@ -101,19 +101,17 @@ export function tickNotices(state: NoticeState, bets: readonly DueBuyIn[], clock
 }
 
 /** The server result replaces a settling card, or stands alone when it arrives first. */
-export function settleNotice(state: NoticeState, message: SettledMessage, address: string, wallNow: number): NoticeState {
-  const mine = message.payouts.find((payout) => payout.address === address)
-  if (!mine) return state
+export function settleNotice(state: NoticeState, message: AccountResult, wallNow: number): NoticeState {
   const existing = state.cards.find((card) => card.roundId === message.roundId)
   if (existing?.kind === "result") return state
-  const tone = resultTone(message.resolution, message.winningSide, mine.payoutMicros)
+  const tone = resultTone(message.resolution, message.winningSide, message.payoutMicros)
   const result: MarketNotice = {
     kind: "result",
     roundId: message.roundId,
     tone,
-    amountMicros: resultAmount(tone, mine.stakeMicros, mine.payoutMicros),
-    signed: tone === "credit" && mine.payoutMicros > mine.stakeMicros,
-    stakeReturned: stakeCameBack(mine.stakeMicros, mine.payoutMicros),
+    amountMicros: resultAmount(tone, message.stakeMicros, message.payoutMicros),
+    signed: tone === "credit" && message.payoutMicros > message.stakeMicros,
+    stakeReturned: stakeCameBack(message.stakeMicros, message.payoutMicros),
     shownAt: wallNow,
   }
   const cards = existing

@@ -110,6 +110,8 @@ export type TapeSample = { price: number; at: number; previous: number | null }
 
 export type TapeChart = {
   reset(points: TapePoint[]): void
+  merge(points: TapePoint[]): void
+  needsBefore(t: number): boolean
   push(t: number, price: number, text?: string): void
   destroy(): void
   subscribe(listener: () => void): () => void
@@ -372,6 +374,22 @@ export function mountChart(
   return {
     reset(next) {
       points = next.filter((point) => Number.isFinite(point.t) && Number.isFinite(point.price))
+    },
+    merge(next) {
+      const byTime = new Map<number, TapePoint>()
+      for (const point of points) byTime.set(point.t, point)
+      for (const point of next) {
+        if (Number.isFinite(point.t) && Number.isFinite(point.price)) byTime.set(point.t, point)
+      }
+      points = [...byTime.values()].sort((left, right) => left.t - right.t)
+      const latest = points[points.length - 1]?.t ?? 0
+      const cutoff = latest - TAPE_MS
+      const first = points.findIndex((point) => point.t >= cutoff)
+      if (first > 0) points = points.slice(first)
+      if (points.length > 20_000) points = points.slice(points.length - 20_000)
+    },
+    needsBefore(t) {
+      return points.length === 0 || points[0]!.t > t + 1_000
     },
     push(t, price, text?: string) {
       if (!Number.isFinite(t) || !Number.isFinite(price)) return

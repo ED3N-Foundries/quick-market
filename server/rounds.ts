@@ -6,83 +6,29 @@ import { clockAt, feeBps, LIVE_MS, marketBounds, MIN_STAKE_MICROS, priceSource, 
 import { getDb } from "./db"
 import { grantWaiting } from "./grantWait"
 import { normalizeAccount, normalizeAddress } from "./money"
-import { settleRound, type Resolution, type Side } from "./settle"
+import { settleRound, type Resolution } from "./settle"
 
-export type { Side }
+import type {
+  AccountResult,
+  Band,
+  Board,
+  GrantPending,
+  OpenBuyIn,
+  PoolCard,
+  SettlementEvent,
+  Side,
+  TrayRow,
+  You,
+} from "../shared/stream"
+
+export type { Band, Board, OpenBuyIn, PoolCard, Side, TrayRow, You }
+export type SettledEvent = SettlementEvent
 
 export type Print = {
   price: string
   exchangeTs: number
   receivedAt: number
   source: PriceSource
-}
-
-export type TrayRow = {
-  address: string
-  side: Side
-  stakeMicros: number
-}
-
-export type Band = {
-  id: number
-  buyInOpen: number
-  strikeAt: number
-  settlesAt: number
-  strike: string | null
-  status: "open" | "settled" | "void"
-  poolUpMicros: number
-  poolDownMicros: number
-  playersUp: number
-  playersDown: number
-}
-
-export type PoolCard = Band & { tray: TrayRow[] }
-
-export type Board = {
-  blockStart: number
-  blockEnd: number
-  windowEndsAt: number
-  phase: "buy-in" | "market"
-  join: PoolCard | null
-  live: PoolCard | null
-  bands: Band[]
-}
-
-export type OpenBuyIn = {
-  roundId: number
-  side: Side
-  stakeMicros: number
-}
-
-export type GrantPending = {
-  startedAt: number
-  txHash: string | null
-  confirmations: number
-}
-
-export type You = {
-  address: string
-  balanceMicros: number
-  grantAt: number | null
-  grantPending: GrantPending | null
-  openBuyIns: OpenBuyIn[]
-}
-
-export type SettledEvent = {
-  roundId: number
-  status: "settled" | "void"
-  resolution: Resolution
-  winningSide: Side | "push" | null
-  strike: string | null
-  settle: string | null
-  feeMicros: number
-  payouts: {
-    address: string
-    side: Side
-    stakeMicros: number
-    payoutMicros: number
-  }[]
-  balances: { address: string; balanceMicros: number }[]
 }
 
 type RoundRow = {
@@ -229,6 +175,28 @@ function priceAt(boundary: number, maxAge: number): Print | null {
     | null
   if (!row || boundary - row.exchange_ts > maxAge) return null
   return { price: row.price, exchangeTs: row.exchange_ts, receivedAt: row.exchange_ts, source: row.source }
+}
+
+export function tapeRange(from: number, to: number): { t: number; price: string }[] {
+  if (!Number.isFinite(from) || !Number.isFinite(to) || from < 0 || to < from) return []
+  const byTime = new Map<number, string>()
+  const held = priceAt(from, TAPE_MS)
+  if (held) byTime.set(held.exchangeTs, held.price)
+  const rows = getDb()
+    .query(
+      `SELECT exchange_ts AS t, price FROM ticks
+       WHERE second_ts >= ? AND second_ts <= ?
+       ORDER BY second_ts ASC`,
+    )
+    .all(Math.floor(from / 1000), Math.floor(to / 1000)) as { t: number; price: string }[]
+  for (const row of rows) {
+    if (row.t >= from && row.t <= to) byTime.set(row.t, row.price)
+  }
+  for (const print of prints) {
+    if (print.exchangeTs < from || print.exchangeTs > to) continue
+    byTime.set(print.exchangeTs, print.price)
+  }
+  return [...byTime.entries()].sort((left, right) => left[0] - right[0]).map(([t, price]) => ({ t, price }))
 }
 
 function recordSecond(print: Print) {
@@ -509,6 +477,7 @@ export function placeBuyIn(input: {
   stakeMicros: number
   roundId: number
   now: number
+  requestId?: string
 }): { ok: true; you: You } | { ok: false; error: string; code?: typeof LATE_BUY_IN_CODE } {
   try {
     if (!feedHeld(input.now)) reviveJoin(input.now)
@@ -516,6 +485,20 @@ export function placeBuyIn(input: {
       if (input.side !== "up" && input.side !== "down") throw new BuyInError("Side is invalid")
       if (!Number.isSafeInteger(input.stakeMicros) || input.stakeMicros < MIN_STAKE_MICROS) {
         throw new BuyInError("Minimum stake is 1 USDC")
+      }
+      if (input.requestId !== undefined && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(input.requestId)) {
+        throw new BuyInError("Request id is invalid")
+      }
+      if (input.requestId) {
+        const previous = getDb()
+          .query("SELECT round_id, side, stake_micros FROM buy_in_requests WHERE chain_key = ? AND address = ? AND id = ?")
+          .get(activeChainKey(), input.address, input.requestId) as { round_id: number; side: Side; stake_micros: number } | null
+        if (previous) {
+          if (previous.round_id !== input.roundId || previous.side !== input.side || previous.stake_micros !== input.stakeMicros) {
+            throw new BuyInError("Request id was already used")
+          }
+          return youFor(input.address)!
+        }
       }
 
       if (handoff && feedHeld(input.now)) throw new BuyInError(handoffBanner(handoff.from, handoff.to))
@@ -573,6 +556,11 @@ export function placeBuyIn(input: {
       getDb()
         .query("UPDATE users SET balance_micros = balance_micros - ? WHERE chain_key = ? AND address = ?")
         .run(input.stakeMicros, activeChainKey(), input.address)
+      if (input.requestId) {
+        getDb()
+          .query("INSERT INTO buy_in_requests (chain_key, address, id, round_id, side, stake_micros, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+          .run(activeChainKey(), input.address, input.requestId, id, input.side, input.stakeMicros, input.now)
+      }
 
       const openBuyIns = opens.map((bet) =>
         bet.roundId === id ? { ...bet, stakeMicros: bet.stakeMicros + input.stakeMicros } : bet,
@@ -809,6 +797,44 @@ export function listRounds(limit: number, address?: string | null, mine = false)
     .query("SELECT * FROM rounds WHERE chain_key = ? AND status != 'open' ORDER BY starts_at DESC, id DESC LIMIT ?")
     .all(activeChainKey(), capped) as RoundRow[]
   return rows.map(mapHistory)
+}
+
+export function accountResults(address: string, limit = 10): AccountResult[] {
+  const capped = Math.min(Math.max(limit, 1), 50)
+  const rows = getDb()
+    .query(
+      `SELECT r.id, r.status, r.resolution, r.winning_side, r.strike, r.settle, r.fee_micros,
+              b.side, b.stake_micros, b.payout_micros
+       FROM rounds r
+       JOIN buy_ins b ON b.chain_key = r.chain_key AND b.round_id = r.id AND b.address = ?
+       WHERE r.chain_key = ? AND r.status != 'open' AND b.payout_micros IS NOT NULL
+       ORDER BY r.starts_at DESC, r.id DESC
+       LIMIT ?`,
+    )
+    .all(address, activeChainKey(), capped) as {
+    id: number
+    status: "settled" | "void"
+    resolution: "paid" | "refund" | "void"
+    winning_side: Side | "push" | null
+    strike: string | null
+    settle: string | null
+    fee_micros: number
+    side: Side
+    stake_micros: number
+    payout_micros: number
+  }[]
+  return rows.map((row) => ({
+    roundId: row.id,
+    status: row.status,
+    resolution: row.resolution,
+    winningSide: row.winning_side,
+    strike: row.strike,
+    settle: row.settle,
+    feeMicros: row.fee_micros,
+    side: row.side,
+    stakeMicros: row.stake_micros,
+    payoutMicros: row.payout_micros,
+  }))
 }
 
 function roundTape(round: RoundRow): { t: number; price: string }[] {

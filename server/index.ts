@@ -10,7 +10,8 @@ import { startChainRuntime, type ChainRuntime } from "./chainRuntime"
 import { MINT_CONFIRMATIONS } from "../shared/mint"
 import { grantOnSignIn, grantSettings, noteGrantTx, settleGrantRequest, startGrant } from "./grant"
 import { hub } from "./hub"
-import { LAG_MAX_BYTES, lagEcho } from "./lag"
+import { MarketStream } from "./stream"
+import { lagEcho } from "./lag"
 import { parseMicros } from "./money"
 import {
   heartbeatProcessHealth,
@@ -26,8 +27,24 @@ import {
 } from "./processHealth"
 import { feedsNow } from "./feeds"
 import { oracleView, startOracle } from "./oracle"
-import { adoptFeed, advance, board, failFeed, feedStatus, handoffNow, listRounds, noteAlive, notePrint, placeBuyIn, roundDetail, tapePoints, tickerNow, youFor } from "./rounds"
-import { agentAuthorized, endSession, openSession, readSession } from "./session"
+import {
+  accountResults,
+  adoptFeed,
+  advance,
+  board,
+  failFeed,
+  feedStatus,
+  handoffNow,
+  listRounds,
+  noteAlive,
+  notePrint,
+  placeBuyIn,
+  roundDetail,
+  tapeRange,
+  tickerNow,
+  youFor,
+} from "./rounds"
+import { agentAuthorized, endSession, openSession, readSession, readSessionToken } from "./session"
 
 let activeChain: ChainRuntime
 let chain: ReturnType<typeof configuredChain>
@@ -90,6 +107,20 @@ let pending: { price: string; exchangeTs: number; source: PriceSource } | null =
 let lastTickAt = 0
 let lastFeed: "live" | "stale" | null = null
 
+const stream = new MarketStream({
+  board: () => board(),
+  tape: () => {
+    const now = Date.now()
+    const tailMs = Math.max(30_000, windowMs() * 2, viewMs() * 2)
+    return tapeRange(now - tailMs, now)
+  },
+  feed: () => feedStatus(Date.now()),
+  ticker: tickerNow,
+  handoff: handoffNow,
+  youFor,
+  accountResults,
+})
+
 const runtime = globalThis as unknown as {
   quickMarketTimer?: ReturnType<typeof setInterval>
   quickMarketStopOracle?: () => void
@@ -110,7 +141,7 @@ runtime.quickMarketStopOracle = startOracle({
     } catch {
       // ignore
     }
-    for (const item of settled) hub.broadcast({ type: "settled", serverNow: event.at, ...item })
+    for (const item of settled) stream.settled(item, event.at)
     publishRound(event.at)
   },
   onAdopt(event) {
@@ -134,16 +165,7 @@ function publishRound(now = Date.now()) {
   roundDirty = false
   const feed = feedStatus(now)
   lastFeed = feed
-  const ticker = tickerNow()
-  hub.broadcast({
-    type: "round",
-    serverNow: now,
-    feed,
-    source: ticker.venue,
-    ticker,
-    handoff: handoffNow(),
-    board: board(now),
-  })
+  stream.book(now, feed)
 }
 
 if (runtime.quickMarketTimer) clearInterval(runtime.quickMarketTimer)
@@ -174,10 +196,10 @@ runtime.quickMarketTimer = setInterval(() => {
       if (due.send) {
         pending = null
         lastTickAt = due.lastSentAt
-        hub.broadcast({ type: "tick", ...due.send, serverNow: now, feed })
+        stream.tick(due.send.price, due.send.exchangeTs, now, feed)
       }
     }
-    for (const event of settled) hub.broadcast({ type: "settled", serverNow: now, ...event })
+    for (const event of settled) stream.settled(event, now)
     if (broadcastRound || roundDirty || feed !== lastFeed) publishRound(now)
   } catch (error) {
     try {
@@ -249,6 +271,7 @@ async function handle(req: Request): Promise<Response> {
       reason: proc?.reason ?? null,
       process: proc,
       previous: proc?.previous ?? null,
+      stream: stream.metrics(),
     })
   }
 
@@ -282,10 +305,22 @@ async function handle(req: Request): Promise<Response> {
     )
   }
 
+  if (req.method === "GET" && url.pathname === "/api/tape") {
+    const now = Date.now()
+    const to = Math.min(now, Number(url.searchParams.get("to") ?? now))
+    const requestedFrom = Number(url.searchParams.get("from") ?? to - 30_000)
+    if (!Number.isFinite(to) || !Number.isFinite(requestedFrom) || to < 0 || requestedFrom < 0 || requestedFrom > to) {
+      return json({ error: "Tape range is invalid" }, 400)
+    }
+    const from = Math.max(requestedFrom, to - 15 * 60 * 1000)
+    return json({ tape: tapeRange(from, to) })
+  }
+
   if (req.method === "GET" && url.pathname === "/api/state") {
     const now = Date.now()
     const session = readSession(req, now)
     if (session.rejected) return json({ error: "Sign in again" }, 401)
+    const tailMs = Math.max(30_000, windowMs() * 2, viewMs() * 2)
     return json({
       serverNow: now,
       feed: feedStatus(now),
@@ -294,7 +329,7 @@ async function handle(req: Request): Promise<Response> {
       handoff: handoffNow(),
       board: board(now),
       you: session.address ? youFor(session.address) : null,
-      tape: tapePoints(),
+      tape: tapeRange(now - tailMs, now),
     })
   }
 
@@ -430,7 +465,8 @@ async function handle(req: Request): Promise<Response> {
     if (!side) return json({ error: "Side is invalid" }, 400)
     if (stake === null) return json({ error: "Stake is invalid" }, 400)
     if (typeof roundId !== "number") return json({ error: "Market is invalid" }, 400)
-    const result = placeBuyIn({ address: session.address, side, stakeMicros: stake, roundId, now })
+    const requestId = typeof body?.requestId === "string" ? body.requestId : undefined
+    const result = placeBuyIn({ address: session.address, side, stakeMicros: stake, roundId, requestId, now })
     if (!result.ok) return json(result.code ? { error: result.error, code: result.code } : { error: result.error }, 400)
     markRoundDirty()
     return json({ you: result.you })
@@ -500,7 +536,7 @@ async function serveAsset(file: Bun.BunFile, html: boolean, lang: Lang | null): 
 
 const host = process.env.HOST?.trim() || "127.0.0.1"
 
-Bun.serve({
+Bun.serve<{ address: string | null }>({
   port,
   hostname: host,
   // Default is 10s. A mint submit plus three blocks can run longer, and cutting
@@ -509,7 +545,7 @@ Bun.serve({
   fetch(req, server) {
     const url = new URL(req.url)
     if (url.pathname === "/ws") {
-      if (server.upgrade(req)) return undefined as unknown as Response
+      if (server.upgrade(req, { data: { address: null } })) return undefined as unknown as Response
       return new Response("Expected websocket", { status: 400 })
     }
     return handleSafe(req).catch((error) => {
@@ -522,28 +558,57 @@ Bun.serve({
     // The browser answers without page timers. A frozen tab cannot, and the socket closes.
     idleTimeout: 48,
     sendPings: true,
+    perMessageDeflate: true,
     open(ws) {
       hub.add(ws)
-      const now = Date.now()
-      ws.send(
-        JSON.stringify({
-          type: "round",
-          serverNow: now,
-          feed: feedStatus(now),
-          source: tickerNow().venue,
-          ticker: tickerNow(),
-          handoff: handoffNow(),
-          board: board(now),
-        }),
-      )
+      stream.snapshot(ws)
     },
     message(ws, raw) {
       const size = typeof raw === "string" ? raw.length : raw.byteLength
-      if (size > LAG_MAX_BYTES) return
+      if (size > 2_048) return
       const text = typeof raw === "string" ? raw : raw.toString()
       const recv = Date.now()
       const reply = lagEcho(text, recv, Date.now())
-      if (reply) ws.send(reply)
+      if (reply) {
+        ws.send(reply)
+        return
+      }
+      let body: Record<string, unknown>
+      try {
+        const parsed = JSON.parse(text) as unknown
+        if (!parsed || typeof parsed !== "object") return
+        body = parsed as Record<string, unknown>
+      } catch {
+        return
+      }
+      if (body.type === "hello") {
+        const session = readSessionToken(body.token)
+        ws.data.address = session.address
+        stream.account(ws, session.rejected)
+        return
+      }
+      if (body.type === "resync") {
+        stream.snapshot(ws)
+        return
+      }
+      if (body.type !== "buy-in") return
+      const requestId = typeof body.requestId === "string" ? body.requestId : ""
+      const replyTo = (result: { ok: boolean; you?: ReturnType<typeof youFor>; error?: string; code?: string }) => {
+        hub.send(ws, { type: "buy-in-result", requestId, ...result })
+      }
+      if (!ws.data.address) {
+        replyTo({ ok: false, error: "Connect a wallet first" })
+        return
+      }
+      const side = body.side === "up" || body.side === "down" ? body.side : null
+      const stake = parseMicros(body.stake)
+      if (!side || stake === null || typeof body.roundId !== "number") {
+        replyTo({ ok: false, error: !side ? "Side is invalid" : stake === null ? "Stake is invalid" : "Market is invalid" })
+        return
+      }
+      const result = placeBuyIn({ address: ws.data.address, side, stakeMicros: stake, roundId: body.roundId, requestId, now: recv })
+      replyTo(result)
+      if (result.ok) markRoundDirty()
     },
     close(ws) {
       hub.remove(ws)

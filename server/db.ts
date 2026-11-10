@@ -44,6 +44,16 @@ const CHAIN_TABLES: Record<string, string> = {
     created_at INTEGER NOT NULL,
     UNIQUE(chain_key, round_id, address)
   )`,
+  buy_in_requests: `CREATE TABLE IF NOT EXISTS buy_in_requests (
+    chain_key TEXT NOT NULL,
+    address TEXT NOT NULL,
+    id TEXT NOT NULL,
+    round_id INTEGER NOT NULL,
+    side TEXT NOT NULL,
+    stake_micros INTEGER NOT NULL,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (chain_key, address, id)
+  )`,
   sessions: `CREATE TABLE IF NOT EXISTS sessions (
     chain_key TEXT NOT NULL,
     token TEXT PRIMARY KEY,

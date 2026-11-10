@@ -17,6 +17,7 @@ import {
   noteWakeProbe,
   probeDue,
   readEcho,
+  reconnectDelay,
   silenceMs,
   supervise,
   wakeAction,
@@ -222,6 +223,13 @@ test("the button names the state and the round trip", () => {
   expect(formatLag(-3)).toBe("0 ms")
   expect(lagButtonName("Live", 80.4)).toBe("Connection, live, 80 milliseconds")
   expect(lagButtonName("Reconnecting", null)).toBe("Connection, reconnecting")
+})
+
+test("reconnect backs off with jitter and a ten-second ceiling", () => {
+  expect(reconnectDelay(0, 0)).toBe(0)
+  expect(reconnectDelay(0, 0.999)).toBe(249)
+  expect(reconnectDelay(3, 1)).toBe(2_000)
+  expect(reconnectDelay(20, 1)).toBe(10_000)
 })
 
 test("connectionState blocks on down link or stale feed, warns on slow", () => {

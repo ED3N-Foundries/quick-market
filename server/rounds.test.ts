@@ -172,6 +172,24 @@ test("windowAccepts is the half-open betting window", () => {
   expect(windowAccepts(1.5, T)).toBe(false)
 })
 
+test("an accepted request replays after window close without another debit", () => {
+  const who = address(16)
+  grant(who)
+  notePrint(print("100", T - 20))
+  advance(T + 10)
+  const requestId = crypto.randomUUID()
+  const input = { address: who, side: "up" as const, stakeMicros: USDC, now: T + 100, roundId: MARKET_ID, requestId }
+  const first = placeBuyIn(input)
+  expect(first.ok).toBe(true)
+  const replay = placeBuyIn({ ...input, now: T + WINDOW + 1 })
+  expect(replay.ok).toBe(true)
+  expect(youFor(who)?.balanceMicros).toBe(10_000 * USDC - USDC)
+  expect(youFor(who)?.openBuyIns).toEqual([{ roundId: MARKET_ID, side: "up", stakeMicros: USDC }])
+  const mismatch = placeBuyIn({ ...input, stakeMicros: 2 * USDC })
+  expect(mismatch.ok).toBe(false)
+  expect(youFor(who)?.balanceMicros).toBe(10_000 * USDC - USDC)
+})
+
 test("placeBuyIn returns the debited balance and the open stake", () => {
   const you = address(15)
   grant(you)

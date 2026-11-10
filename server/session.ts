@@ -117,16 +117,21 @@ export async function openSession(input: {
   return { ok: true, token, you: youFor(address)! }
 }
 
+export function readSessionToken(token: unknown, now = Date.now()): { address: string | null; rejected: boolean } {
+  if (typeof token !== "string" || !/^[0-9a-f]{64}$/i.test(token)) return { address: null, rejected: true }
+  const row = getDb()
+    .query("SELECT address, expires_at FROM sessions WHERE chain_key = ? AND token = ?")
+    .get(configuredChain().key, token) as { address: string; expires_at: number } | null
+  if (!row || row.expires_at <= now) return { address: null, rejected: true }
+  return { address: row.address, rejected: false }
+}
+
 export function readSession(req: Request, now = Date.now()): { address: string | null; rejected: boolean } {
   const header = req.headers.get("authorization") ?? ""
   if (!header) return { address: null, rejected: false }
   const match = /^Bearer\s+([0-9a-f]{64})$/i.exec(header)
   if (!match) return { address: null, rejected: true }
-  const row = getDb()
-    .query("SELECT address, expires_at FROM sessions WHERE chain_key = ? AND token = ?")
-    .get(configuredChain().key, match[1]!) as { address: string; expires_at: number } | null
-  if (!row || row.expires_at <= now) return { address: null, rejected: true }
-  return { address: row.address, rejected: false }
+  return readSessionToken(match[1], now)
 }
 
 export function endSession(req: Request) {

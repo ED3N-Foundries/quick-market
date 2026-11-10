@@ -418,6 +418,7 @@ export function App({ initialConfig }: { initialConfig: Config }) {
       const span = origin.end - origin.start
       const shift = (-(ev.clientX - originX) / origin.width) * span
       viewRef.current = { follow: false, start: origin.start + shift, end: origin.end + shift }
+      void market.loadTape(viewRef.current.start, viewRef.current.end)
       setFollowing(false)
     }
     const up = () => {
