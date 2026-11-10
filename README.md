@@ -60,6 +60,16 @@ Connect opens the Phantom modal. The stake amount is white. The balance carries 
 
 A result toast appears only for a round this address played. It shows what was bought and what came back. A win also shows the profit in parentheses. A loss shows $0.00 back. Clicking a previous round opens a still replay from the buy-in open through the settle. Escape, the backdrop, or Close dismisses it. Previous markets list the feed for each round. My trades adds Bought and Back.
 
+## Migration
+
+On 2026-11-10 the chain-scoped schema (`chain_key` on users, rounds, buy-ins, custody, sessions, and agent state) cut over on `project-ed3n.local`, and trading history was reset: rounds, buy-ins, and ticks were wiped while users, balances ($380,536.55 across 5,368 wallets), deposits, withdrawals, burns, sessions, and meta were kept. The treasury and `deploy/quick-market.env` were untouched (0.0285 Base Sepolia ETH, ~$753k QM USDC on-chain, so no faucet top-up was needed). Rollback image `ed3n/quick-market:pre-multichain-20261110` is on the host.
+
+Backups on `project-ed3n.local`:
+
+* `/home/admin/backups/quick-market-multichain-20261110/` — pre-migration volume tarball, table baselines, and rehearsal copy
+* `/home/admin/backups/quick-market-prewipe-20261110-1603/` — full pre-wipe database copy
+* `ed3n_qm_data` volume `quick-market.sqlite.bak-full*` — shelved 3.1 GB original (remove after trading looks normal)
+
 ## Brief
 
 I want to make a quick polymarket like interface trading app, where it's focused on "betting" feel and simplicity. Starting with just one thing: bitcoin price, which we will aggregate from trading view, but initially is there a free way? We need to get second by second prices and chart that. the premise is two buttons, up or down, every 5/10s (we configure this server side) you bet up or down with an amount of money you specify which is a %, so if you are like 50% of your side of the bet, you get 50% of the money from the losers. Platform takes 0.25% fees off of each concluded trade. For now we want to simulate but this will all be smart contracts soon. We want to place hold wallet connect, fund, withdraw, etc. but not wire it up yet just have the buttons and simulate in React for now. We want to use Bun + SQLite as the backend. We want to tables for previous bets and also a current bet tray that shows the current time we are on for what pub addresses (truncated) are playing in this pool and how much they bet. We can view the pools and addresses of our previous plays, too.
