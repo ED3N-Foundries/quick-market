@@ -263,6 +263,19 @@ function addMoney(left: string, right: string): string {
   return formatMoney(scaleMoney(a.n, a.scale, scale) + scaleMoney(b.n, b.scale, scale), scale)
 }
 
+/** Subtract `right` from `left`, floored at zero. Both sides are exact decimal strings. */
+function subMoney(left: string, right: string): string {
+  const a = moneyParts(left)
+  const b = moneyParts(right)
+  if (!a) return "0"
+  if (!b) return left
+  const scale = Math.max(a.scale, b.scale)
+  const x = scaleMoney(a.n, a.scale, scale)
+  const y = scaleMoney(b.n, b.scale, scale)
+  if (y >= x) return "0"
+  return formatMoney(x - y, scale)
+}
+
 function compareMoney(left: string, right: string): number {
   const a = moneyParts(left)
   const b = moneyParts(right)
@@ -422,7 +435,94 @@ export type OracleHandlers = {
   onAdopt: (event: { to: PriceSource; at: number }) => void
 }
 
-type Leg = { price: string | null; at: number; bookAt: number; movedAt: number; samples: SwingSample[] }
+export type Leg = { price: string | null; at: number; bookAt: number; movedAt: number; samples: SwingSample[]; swing: string; head: number }
+
+/** Rebuild a leg from scratch. Only used when the clock moved backwards; the fast path is prefix eviction. */
+export function rebuildLeg(leg: Leg, now: number): void {
+  const live = leg.samples.slice(leg.head).filter((sample) => sample.at <= now && now - sample.at <= RATE_MS)
+  live.sort((a, b) => a.at - b.at)
+  let total = "0"
+  for (const sample of live) total = addMoney(total, sample.dollars)
+  leg.samples = live
+  leg.head = 0
+  leg.swing = total
+}
+
+/**
+ * Drop expired prefix samples and subtract them from the cached total.
+ * Amortized O(1): each sample is added once and evicted once. A full rescan
+ * only happens when `now` moved backwards past the last sample.
+ */
+export function pruneLeg(leg: Leg, now: number): void {
+  if (leg.head >= leg.samples.length) {
+    if (leg.head > 0) {
+      leg.samples = []
+      leg.head = 0
+    }
+    if (leg.swing !== "0") leg.swing = "0"
+    return
+  }
+  const last = leg.samples[leg.samples.length - 1]!
+  if (now < last.at) {
+    rebuildLeg(leg, now)
+    return
+  }
+  let head = leg.head
+  let swing = leg.swing
+  let changed = false
+  while (head < leg.samples.length) {
+    const sample = leg.samples[head]!
+    if (sample.at > now) break
+    if (now - sample.at <= RATE_MS) break
+    swing = subMoney(swing, sample.dollars)
+    head += 1
+    changed = true
+  }
+  if (changed) leg.swing = swing
+  leg.head = head
+  if (head >= leg.samples.length) {
+    if (leg.samples.length > 0) leg.samples = []
+    leg.head = 0
+    return
+  }
+  if (head > 1024 && head * 2 >= leg.samples.length) {
+    leg.samples = leg.samples.slice(head)
+    leg.head = 0
+  }
+}
+
+/** Cached swing as of `now`, expiring stale samples first. Replaces per-publish `swingScore` rescans. */
+export function legSwing(leg: Leg, now: number): string {
+  pruneLeg(leg, now)
+  return leg.swing
+}
+
+/**
+ * Incremental replacement for `noteMove` on the hot path. Prunes expired
+ * samples, then adds one movement. Returns true when `movedAt` changed.
+ */
+export function noteLeg(leg: Leg, nextPrice: string | null, now: number): boolean {
+  pruneLeg(leg, now)
+  const prev = leg.price
+  if (!nextPrice) return false
+  if (!prev) {
+    leg.price = nextPrice
+    leg.movedAt = now
+    return true
+  }
+  if (!priceChanged(prev, nextPrice)) return false
+  const dollars = dollarGap(prev, nextPrice)
+  if (!dollars) {
+    leg.price = nextPrice
+    leg.movedAt = now
+    return true
+  }
+  leg.samples.push({ at: now, dollars })
+  leg.swing = addMoney(leg.swing, dollars)
+  leg.price = nextPrice
+  leg.movedAt = now
+  return true
+}
 
 type ConnectGate = {
   allow: (now: number) => { ok: boolean; waitMs: number }
@@ -447,8 +547,8 @@ export function startOracle(handlers: OracleHandlers): () => void {
   let switches: SwitchEvent[] = []
   let binanceAttempts: BinanceAttempt[] = []
   const legs = Object.fromEntries(
-    VENUE_ORDER.map((venue) => [venue, { price: null, at: 0, bookAt: 0, movedAt: 0, samples: [] }]),
-  ) as Record<PriceSource, Leg>
+    VENUE_ORDER.map((venue) => [venue, { price: null, at: 0, bookAt: 0, movedAt: 0, samples: [], swing: "0", head: 0 }]),
+  ) as unknown as Record<PriceSource, Leg>
   const sockets = Object.fromEntries(VENUE_ORDER.map((venue) => [venue, { feed: null as string | null, up: false }])) as Record<
     PriceSource,
     { feed: string | null; up: boolean }
@@ -489,15 +589,18 @@ export function startOracle(handlers: OracleHandlers): () => void {
       active,
       anchor,
       switches,
-      venues: VENUE_ORDER.map((venue) => ({
-        venue,
-        price: legs[venue].price,
-        at: legs[venue].at,
-        movedAt: legs[venue].movedAt,
-        swing: swingScore(legs[venue].samples, now),
-        feed: sockets[venue].feed,
-        up: sockets[venue].up,
-      })),
+      venues: VENUE_ORDER.map((venue) => {
+        const leg = legs[venue]
+        return {
+          venue,
+          price: leg.price,
+          at: leg.at,
+          movedAt: leg.movedAt,
+          swing: legSwing(leg, now),
+          feed: sockets[venue].feed,
+          up: sockets[venue].up,
+        }
+      }),
     }
   }
 
@@ -509,13 +612,18 @@ export function startOracle(handlers: OracleHandlers): () => void {
     lastEmitAt = 0
   }
 
-  const snapshot = (): Standby[] =>
-    VENUE_ORDER.map((venue) => ({
-      venue,
-      price: legs[venue].price,
-      at: legs[venue].movedAt,
-      swing: swingScore(legs[venue].samples, Date.now()),
-    }))
+  const snapshot = (): Standby[] => {
+    const now = Date.now()
+    return VENUE_ORDER.map((venue) => {
+      const leg = legs[venue]
+      return {
+        venue,
+        price: leg.price,
+        at: leg.movedAt,
+        swing: legSwing(leg, now),
+      }
+    })
+  }
 
   const armBreak = (fromAt: number) => {
     if (fromAt <= 0) return
@@ -616,26 +724,21 @@ export function startOracle(handlers: OracleHandlers): () => void {
     if (stopped) return
     const now = Date.now()
     const leg = legs[venue]
-    const prevPrice = leg.price
-    const prevMoved = leg.movedAt
     leg.at = now
-    let nextPrice = prevPrice
+    let nextPrice = leg.price
     if (quote.kind === "book") {
       leg.bookAt = now
       nextPrice = quote.price
     } else if (now - leg.bookAt > BREAK_MS) {
       nextPrice = quote.price
     }
-    const moved = noteMove({ price: prevPrice, movedAt: prevMoved, samples: leg.samples }, nextPrice, now)
-    leg.price = moved.price
-    leg.movedAt = moved.movedAt
-    leg.samples = moved.samples
+    const moved = noteLeg(leg, nextPrice, now)
     if (venue !== active) {
       if (waiting) tryAdopt(now)
       publish()
       return
     }
-    if (moved.movedAt !== prevMoved) {
+    if (moved) {
       recoveryTried = false
       armBreak(leg.movedAt)
     }
