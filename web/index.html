@@ -4,9 +4,64 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Quick Market</title>
+    <style>
+      html, body { margin: 0; background: #090a0c; }
+      #root { min-height: 100vh; }
+      .boot-splash {
+        min-height: 100vh;
+        min-height: 100dvh;
+        display: grid;
+        place-items: center;
+        padding: 24px;
+        box-sizing: border-box;
+        background:
+          radial-gradient(900px 420px at 50% -8%, rgba(76, 141, 255, 0.12), transparent 55%),
+          radial-gradient(1100px 480px at 50% 112%, rgba(47, 206, 134, 0.08), transparent 55%),
+          #090a0c;
+        color: #f3f0e8;
+        font-family: ui-sans-serif, system-ui, sans-serif;
+      }
+      .boot-card { display: flex; flex-direction: column; align-items: center; gap: 20px; text-align: center; }
+      .boot-brand {
+        display: inline-flex; align-items: center; gap: 10px;
+        font-family: Iowan Old Style, Palatino, ui-serif, serif;
+        font-size: 34px; letter-spacing: -0.03em; line-height: 1; white-space: nowrap;
+      }
+      .boot-mark { font-size: 32px; line-height: 1; animation: boot-bob 2.4s ease-in-out infinite; }
+      .boot-spinner { position: relative; width: 84px; height: 84px; display: grid; place-items: center; }
+      .boot-track { position: absolute; inset: 0; border-radius: 50%; border: 1px solid rgba(243,240,232,0.1); background: rgba(18,20,26,0.7); }
+      .boot-ring {
+        position: absolute; inset: -1px; border-radius: 50%;
+        background: conic-gradient(from 0deg, rgba(47,206,134,0) 0deg, #2fce86 70deg, #4c8dff 160deg, #e2b340 250deg, rgba(47,206,134,0) 340deg);
+        -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 7px), #000 calc(100% - 6px));
+        mask: radial-gradient(farthest-side, transparent calc(100% - 7px), #000 calc(100% - 6px));
+        animation: boot-spin 1.05s linear infinite;
+      }
+      .boot-orbit { position: absolute; inset: 9px; border-radius: 50%; border: 1px dashed rgba(243,240,232,0.28); animation: boot-spin-rev 3.2s linear infinite; }
+      .boot-core {
+        position: relative; display: grid; place-items: center; width: 40px; height: 40px;
+        border-radius: 50%; background: #0c0d11; border: 1px solid rgba(243,240,232,0.1);
+        color: #2fce86; font-size: 15px; animation: boot-pulse 1.6s ease-in-out infinite;
+      }
+      .boot-copy { margin: 0; font-size: 16px; font-weight: 550; }
+      .boot-bar { width: 220px; max-width: 60vw; height: 3px; border-radius: 999px; overflow: hidden; background: rgba(243,240,232,0.1); }
+      .boot-bar span { display: block; width: 40%; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #2fce86, #4c8dff, #e2b340); animation: boot-slide 1.15s ease-in-out infinite; }
+      .boot-powered { margin: 2px 0 0; display: inline-flex; align-items: center; gap: 8px; color: #8f8a80; font-size: 13px; }
+      .boot-powered strong { color: #f3f0e8; }
+      .boot-powered svg { border-radius: 4px; box-shadow: 0 2px 10px rgba(0,0,255,0.45); display: block; }
+      @keyframes boot-spin { to { transform: rotate(360deg); } }
+      @keyframes boot-spin-rev { to { transform: rotate(-360deg); } }
+      @keyframes boot-slide { 0% { transform: translateX(-110%); } 100% { transform: translateX(280%); } }
+      @keyframes boot-pulse { 0%,100% { transform: scale(1); } 50% { transform: scale(1.06); } }
+      @keyframes boot-bob { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-3px); } }
+      @media (prefers-reduced-motion: reduce) {
+        .boot-mark, .boot-core, .boot-bar span { animation: none; }
+        .boot-ring, .boot-orbit { animation-duration: 2.4s; }
+      }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root"><div class="boot-splash" role="status" aria-label="Loading Quick Market"><div class="boot-card"><div class="boot-brand"><span class="boot-mark">😭</span><span>Quick Market</span></div><div class="boot-spinner" aria-hidden="true"><span class="boot-track"></span><span class="boot-ring"></span><span class="boot-orbit"></span><span class="boot-core">◆</span></div><p class="boot-copy">Warming up the market…</p><div class="boot-bar" aria-hidden="true"><span></span></div><p class="boot-powered"><span>Powered by</span><svg width="18" height="18" viewBox="0 0 1280 1280" role="img" aria-label="Base logo"><path fill="#0000FF" d="M0,101.12c0-34.64,0-51.95,6.53-65.28,6.25-12.76,16.56-23.07,29.32-29.32C49.17,0,66.48,0,101.12,0h1077.76c34.63,0,51.96,0,65.28,6.53,12.75,6.25,23.06,16.56,29.32,29.32,6.52,13.32,6.52,30.64,6.52,65.28v1077.76c0,34.63,0,51.96-6.52,65.28-6.26,12.75-16.57,23.06-29.32,29.32-13.32,6.52-30.65,6.52-65.28,6.52H101.12c-34.64,0-51.95,0-65.28-6.52-12.76-6.26-23.07-16.57-29.32-29.32-6.53-13.32-6.53-30.65-6.53-65.28V101.12Z"/></svg><strong>Base</strong></p></div></div></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
