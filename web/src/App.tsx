@@ -15,7 +15,6 @@ import {
   formatPrice,
   formatSigned,
   formatGrantDollars,
-  formatGrantTimer,
   handoffBanner,
   grantButtonLabel,
   grantNextLabel,
@@ -49,7 +48,9 @@ import { useMarket } from "./useMarket"
 import { FeedBadge } from "./venues"
 import { prefersReducedMotion } from "./sideFigures"
 import { useSideBook } from "./useSideBook"
-import { grantWaitStatus, loginStatus, loginSteps, loginStepState, shortWalletFault, SIGN_PROMPT } from "./phantomConnect"
+import { grantWaitStatus, loginStatus, shortWalletFault, SIGN_PROMPT } from "./phantomConnect"
+import { ChainLogo, NearLogo, PhantomLogo } from "./logos"
+import { ToastStack, useToasts } from "./toasts"
 import { useSession } from "./wallet"
 
 export function App({ initialConfig }: { initialConfig: Config }) {
@@ -79,7 +80,6 @@ export function App({ initialConfig }: { initialConfig: Config }) {
   const [grantTx, setGrantTx] = useState<string | null>(null)
   const [grantSeen, setGrantSeen] = useState(0)
   const [grantNeeded, setGrantNeeded] = useState(MINT_CONFIRMATIONS)
-  const [grantStartedAt, setGrantStartedAt] = useState<number | null>(null)
   const [fundPhase, setFundPhase] = useState<"idle" | "phantom" | "confirming" | "pending">("idle")
   const [fundHash, setFundHash] = useState<string | null>(null)
   const [withdrawOpen, setWithdrawOpen] = useState(false)
@@ -91,6 +91,12 @@ export function App({ initialConfig }: { initialConfig: Config }) {
   const [briefOpen, setBriefOpen] = useState(false)
   const briefChecked = useRef(false)
   const scrub = useScrub(chart)
+  const { toasts, upsert: upsertToast, dismiss: dismissToast } = useToasts()
+  // Short inline mark + transient toast share one source: the full detail lives
+  // in the mark's popover, so nothing below the button ever resizes.
+  const connectRawError =
+    session.connectError ??
+    (!session.token && session.signError && session.signError !== SIGN_PROMPT ? session.signError : null)
   boardRef.current = market.board
   openBuyInsRef.current = market.you?.openBuyIns ?? []
   viewSecondsRef.current = market.config.viewSeconds
@@ -166,11 +172,25 @@ export function App({ initialConfig }: { initialConfig: Config }) {
       setGrantTx(null)
       setFundError(null)
       setFundOpen(false)
+      upsertToast({ id: "grant-ok", kind: "ok", text: text.grantedToast })
       return
     }
     setGrantTx(null)
-    setFundError("The grant did not land. Try again.")
-  }, [market.you])
+    upsertToast({ id: "grant-error", kind: "error", text: text.grantMissed })
+  }, [market.you, text, upsertToast])
+
+  // A connect failure toasts once, then lives on as the ⓘ mark next to the
+  // button. Retrying clears the session error, which re-arms the toast.
+  const toastedConnectError = useRef<string | null>(null)
+  useEffect(() => {
+    if (!connectRawError) {
+      toastedConnectError.current = null
+      return
+    }
+    if (connectRawError === toastedConnectError.current) return
+    toastedConnectError.current = connectRawError
+    upsertToast({ id: "wallet-error", kind: "error", text: localize(lang, shortWalletFault(connectRawError)) })
+  }, [connectRawError, lang, upsertToast])
 
   useEffect(() => {
     if (!walletMenuOpen) return
@@ -309,14 +329,47 @@ export function App({ initialConfig }: { initialConfig: Config }) {
   const grantInFlight = funding || grantPending !== null
   const holdStake = session.signing || grantPending !== null
   const grantReady = grantKnown && testnet && market.config.grantIntervalMs > 0 && grantWait.due && !grantInFlight
+  const isNearChain = market.config.chainKey === "near-testnet"
+  // Minting status lives in a toast with a clickable confirmation link, so the
+  // stake column never resizes while a grant is in flight.
+  useEffect(() => {
+    const active = grantPending !== null || (testnet && funding)
+    if (!active) {
+      dismissToast("grant")
+      return
+    }
+    const txHash = grantPending?.txHash || grantTx
+    upsertToast({
+      id: "grant",
+      kind: "progress",
+      text: txHash
+        ? grantWaitStatus({ seen: grantSeen, needed: grantPending?.confirmations ?? grantNeeded }, lang, market.config.chainKey)
+        : grantWaitStatus(undefined, lang, market.config.chainKey),
+      txHash,
+      txUrl: txHash ? grantTxUrl(market.config.chainId, txHash, market.config.chainKey) : null,
+    })
+  }, [
+    grantPending,
+    testnet,
+    funding,
+    grantTx,
+    grantSeen,
+    grantNeeded,
+    lang,
+    market.config.chainId,
+    market.config.chainKey,
+    upsertToast,
+    dismissToast,
+  ])
   const wrongChain =
     session.address !== null && session.chainId !== undefined && session.chainId !== market.config.chainId
   const walletTone = wrongChain || session.signing ? "warn" : "ok"
-  const loginLabel = session.signing
-    ? text.pleaseWait
-    : !session.address && session.connectMode === "deeplink"
+  const loginLabel =
+    !session.address && session.connectMode === "deeplink"
       ? text.openInPhantom
-      : text.connectPhantom
+      : isNearChain
+        ? text.connectNear
+        : text.connectPhantom
 
   async function onWithdraw() {
     if (withdrawing) return
@@ -520,13 +573,37 @@ export function App({ initialConfig }: { initialConfig: Config }) {
                 <button
                   type="button"
                   className="primary connect-pill"
+                  data-busy={session.signing ? "1" : "0"}
                   title={session.chainError ?? undefined}
                   onClick={session.login}
                   disabled={session.signing || session.chainError !== null}
                 >
-                  <PhantomMark />
-                  <span>{loginLabel}</span>
+                  {session.signing && session.loginPhase ? (
+                    <>
+                      <span className="wait-spin" aria-hidden="true" />
+                      <span
+                        key={session.loginPhase}
+                        className="connect-label"
+                        role="status"
+                        title={loginStatus(session.loginPhase, testnet, lang, market.config.chainKey)}
+                      >
+                        {loginStatus(session.loginPhase, testnet, lang, market.config.chainKey)}
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      {isNearChain ? (
+                        <NearLogo className="logo-mark" />
+                      ) : (
+                        <PhantomLogo className="logo-mark" />
+                      )}
+                      <span className="connect-label">{loginLabel}</span>
+                    </>
+                  )}
                 </button>
+                {connectRawError && (
+                  <ErrorDot short={shortWalletFault(connectRawError)} detail={connectRawError} />
+                )}
               </span>
             ) : (
               <span className="who" ref={walletMenuRef}>
@@ -558,6 +635,9 @@ export function App({ initialConfig }: { initialConfig: Config }) {
                 >
                   {"+"}
                 </button>
+                {session.connectError && (
+                  <ErrorDot short={shortWalletFault(session.connectError)} detail={session.connectError} />
+                )}
                 {walletMenuOpen && (
                   <div className="wallet-menu" role="menu">
                     {session.label && <p className="wallet-menu-label">{session.label}</p>}
@@ -567,6 +647,7 @@ export function App({ initialConfig }: { initialConfig: Config }) {
                     <div className="wallet-menu-net">
                       <TokenBadge kind={testnet ? "qm" : "circle"} chainKey={market.config.chainKey} />
                       <span className="net-badge" data-testnet={isTestnetChain(market.config.chainId, market.config.chainKey) ? "1" : "0"}>
+                        <ChainLogo chainKey={market.config.chainKey} className="chain-mark" />
                         {session.signing ? text.pleaseWait : chainMenuLabel(market.config.chainId, market.config.chainName, lang, market.config.chainKey)}
                       </span>
                       {wrongChain && market.config.chainKey !== "near-testnet" && (
@@ -602,43 +683,6 @@ export function App({ initialConfig }: { initialConfig: Config }) {
               </span>
             )}
           </div>
-          {(() => {
-            const loginPhase = !grantPending ? session.loginPhase : null
-            const signing = session.signing && loginPhase !== null
-            const granting = grantPending || (testnet && funding)
-            const txOnly = testnet && grantTx && !grantPending && !funding
-            const rawError =
-              session.connectError ??
-              (!session.token && session.signError && session.signError !== SIGN_PROMPT ? session.signError : null)
-            const state = signing ? "signing" : granting ? "grant" : rawError ? "error" : txOnly ? "tx" : "idle"
-            return (
-              <div className="wallet-status" data-state={state}>
-                {signing && loginPhase && (
-                  <WaitNote
-                    text={loginStatus(loginPhase, testnet, lang, market.config.chainKey)}
-                    steps={loginSteps(testnet, lang)}
-                    phase={loginPhase}
-                  />
-                )}
-                {granting && (
-                  <GrantFollow
-                    startedAt={grantPending?.startedAt ?? grantStartedAt ?? now}
-                    txHash={grantPending?.txHash || grantTx}
-                    seen={grantSeen}
-                    needed={grantPending?.confirmations ?? grantNeeded}
-                    chainId={market.config.chainId}
-                    chainKey={market.config.chainKey}
-                    now={now}
-                  />
-                )}
-                {txOnly && (
-                  <GrantTxLink chainId={market.config.chainId} chainKey={market.config.chainKey} txHash={grantTx} />
-                )}
-                {rawError && <WalletError short={shortWalletFault(rawError)} detail={rawError} />}
-                {state === "idle" && <span className="wallet-status-idle" aria-hidden="true" />}
-              </div>
-            )
-          })()}
           <BalanceFigure micros={shownMicros} markRef={balanceMark} />
           {!holdStake && testnet && market.config.grantIntervalMs > 0 && grantKnown &&
             (grantWait.due ? (
@@ -717,7 +761,6 @@ export function App({ initialConfig }: { initialConfig: Config }) {
             if (!funding) {
               setGrantTx(null)
               setGrantSeen(0)
-              setGrantStartedAt(null)
               setFundError(null)
             }
           }}
@@ -729,8 +772,9 @@ export function App({ initialConfig }: { initialConfig: Config }) {
             setFundError(null)
             setGrantTx(null)
             setGrantSeen(0)
-            setGrantStartedAt(Date.now() + market.offsetRef.current)
             setGrantNeeded(MINT_CONFIRMATIONS)
+            const grantTxUrlFor = (txHash: string | null) =>
+              txHash ? grantTxUrl(market.config.chainId, txHash, market.config.chainKey) : null
             void (async () => {
               const result = await market.claimGrant()
               if (result.txHash) setGrantTx(result.txHash)
@@ -741,6 +785,13 @@ export function App({ initialConfig }: { initialConfig: Config }) {
                 if (landed) {
                   setGrantTx(null)
                   setFundOpen(false)
+                  upsertToast({
+                    id: "grant-ok",
+                    kind: "ok",
+                    text: text.grantedToast,
+                    txHash: result.txHash,
+                    txUrl: grantTxUrlFor(result.txHash),
+                  })
                   return true
                 }
                 return false
@@ -748,13 +799,20 @@ export function App({ initialConfig }: { initialConfig: Config }) {
               if (!result.ok) {
                 if (result.dropped && (await follow())) return
                 setFunding(false)
-                setFundError(result.message)
+                upsertToast({ id: "grant-error", kind: "error", text: localize(lang, result.message) })
                 return
               }
               if (result.granted) {
                 setFunding(false)
                 setGrantTx(null)
                 setFundOpen(false)
+                upsertToast({
+                  id: "grant-ok",
+                  kind: "ok",
+                  text: text.grantedToast,
+                  txHash: result.txHash,
+                  txUrl: grantTxUrlFor(result.txHash),
+                })
                 return
               }
               if (!result.pending) {
@@ -763,7 +821,7 @@ export function App({ initialConfig }: { initialConfig: Config }) {
               }
               if (await follow()) return
               setFunding(false)
-              setFundError("The grant did not land. Try again.")
+              upsertToast({ id: "grant-error", kind: "error", text: text.grantMissed })
             })()
           }}
         />
@@ -874,6 +932,8 @@ export function App({ initialConfig }: { initialConfig: Config }) {
           }}
         />
       )}
+
+      <ToastStack toasts={toasts} onClose={dismissToast} />
 
       <footer className="footer">
         <div className="footer-bar">
@@ -1282,23 +1342,12 @@ function QmMark() {
   )
 }
 
-function PhantomMark() {
-  return (
-    <svg className="phantom-mark" viewBox="0 0 24 24" aria-hidden="true">
-      <path
-        fill="#AB9FF2"
-        d="M12 2C7.6 2 4 5.6 4 10c0 1.9.7 3.6 1.8 5 .3.4.4.9.3 1.4l-.6 2.4c-.1.5.4.9.9.7l2.1-1c.4-.2.9-.2 1.3 0l1.2.6c.6.3 1.4.3 2 0l1.2-.6c.4-.2.9-.2 1.3 0l2.1 1c.5.2 1-.2.9-.7l-.6-2.4c-.1-.5 0-1 .3-1.4 1.1-1.4 1.8-3.1 1.8-5 0-4.4-3.6-8-8-8Z"
-      />
-      <circle cx="9.2" cy="10" r="1.3" fill="#0c0d11" />
-      <circle cx="14.8" cy="10" r="1.3" fill="#0c0d11" />
-    </svg>
-  )
-}
-
-function WalletError({ short, detail }: { short: string; detail: string }) {
+/** Persistent inline mark for a connect failure. The error toast times out;
+ * this dot stays next to the button with the full detail in its popover. */
+function ErrorDot({ short, detail }: { short: string; detail: string }) {
   const { lang, text } = useI18n()
   const [open, setOpen] = useState(false)
-  const ref = useRef<HTMLDivElement>(null)
+  const ref = useRef<HTMLSpanElement>(null)
   useEffect(() => {
     if (!open) return
     const onPointerDown = (event: PointerEvent) => {
@@ -1314,16 +1363,12 @@ function WalletError({ short, detail }: { short: string; detail: string }) {
       window.removeEventListener("keydown", onKeyDown)
     }
   }, [open])
-  const shortText = localize(lang, short)
-  const fullText = localize(lang, detail)
   return (
-    <div className="wallet-error" ref={ref} data-open={open ? "1" : "0"}>
-      <span className="wallet-error-text note bad" title={fullText}>
-        {shortText}
-      </span>
+    <span className="error-dot" ref={ref} data-open={open ? "1" : "0"}>
       <button
         type="button"
-        className="plain error-info"
+        className="plain error-dot-btn"
+        title={localize(lang, short)}
         aria-label={text.errorDetails}
         aria-expanded={open}
         aria-haspopup="dialog"
@@ -1333,10 +1378,10 @@ function WalletError({ short, detail }: { short: string; detail: string }) {
       </button>
       {open && (
         <div className="error-pop" role="dialog" aria-label={text.errorDetails}>
-          <p>{fullText}</p>
+          <p>{localize(lang, detail)}</p>
         </div>
       )}
-    </div>
+    </span>
   )
 }
 
@@ -1402,6 +1447,7 @@ function FundOverlay({
             <h2>{text.deposit}</h2>
             <TokenBadge kind="circle" />
             <span className="net-badge" data-testnet="0">
+              <ChainLogo chainKey="base" className="chain-mark" />
               {chainBadgeText(chainId, chainName, lang)}
             </span>
           </div>
@@ -1502,6 +1548,7 @@ function GrantOverlay({
             <h2>{text.grant}</h2>
             <TokenBadge kind="qm" chainKey={chainKey} />
             <span className="net-badge" data-testnet="1">
+              <ChainLogo chainKey={chainKey} className="chain-mark" />
               {chainBadgeText(chainId, chainName, lang, chainKey as "base" | "base-sepolia" | "near-testnet")}
             </span>
           </div>
@@ -1578,6 +1625,7 @@ function WithdrawOverlay({
             <h2>{text.withdraw}</h2>
             <TokenBadge kind={testnet ? "qm" : "circle"} chainKey={chainKey} />
             <span className="net-badge" data-testnet={testnet ? "1" : "0"}>
+              <ChainLogo chainKey={chainKey} className="chain-mark" />
               {chainBadgeText(chainId, chainName, lang, chainKey as "base" | "base-sepolia" | "near-testnet")}
             </span>
           </div>
@@ -1677,90 +1725,6 @@ function SideCard(props: {
         <span>{up ? text.buyUp : text.buyDown}</span>
       </button>
     </article>
-  )
-}
-
-function GrantTxLink({ chainId, txHash, chainKey }: { chainId: number; txHash: string; chainKey: string }) {
-  const txUrl = grantTxUrl(chainId, txHash, chainKey)
-  if (txUrl) {
-    return (
-      <a className="grant-tx" href={txUrl} target="_blank" rel="noreferrer" title={txHash}>
-        {txHash}
-      </a>
-    )
-  }
-  return (
-    <p className="grant-tx" title={txHash}>
-      {txHash}
-    </p>
-  )
-}
-
-function GrantFollow({
-  startedAt,
-  txHash,
-  seen,
-  needed,
-  chainId,
-  chainKey,
-  now,
-}: {
-  startedAt: number
-  txHash: string | null
-  seen: number
-  needed: number
-  chainId: number
-  chainKey: string
-  now: number
-}) {
-  const { lang, text } = useI18n()
-  if (!txHash) return <WaitNote text={grantWaitStatus(undefined, lang, chainKey)} />
-  const elapsed = Math.max(0, now - startedAt)
-  return (
-    <div className="grant-progress">
-      <WaitNote text={grantWaitStatus({ seen, needed }, lang, chainKey)} />
-      <p className="grant-timer" aria-label={text.elapsed(formatGrantTimer(elapsed))}>
-        {formatGrantTimer(elapsed)}
-      </p>
-      <GrantTxLink chainId={chainId} chainKey={chainKey} txHash={txHash} />
-    </div>
-  )
-}
-
-function WaitNote({
-  text,
-  steps,
-  phase,
-}: {
-  text: string
-  steps?: readonly string[]
-  phase?: "phantom" | "sign" | "session"
-}) {
-  const { text: copy } = useI18n()
-  const current = phase === "phantom" ? 0 : phase === "sign" ? 1 : 2
-  const active = steps && phase ? steps[current] : null
-  return (
-    <p className="wait-status" role="status" aria-live="polite">
-      <span className="wait-spin" aria-hidden="true" />
-      <span className="wait-body">
-        <span key={text} className="wait-copy">
-          {text}
-        </span>
-        {steps && phase && active && (
-          <span className="wait-carousel">
-            <span key={`${phase}-${active}`} className="wait-step">
-              <span className="wait-eyebrow">{copy.stepOf(current + 1, steps.length)}</span>
-              <span className="wait-current">{active}</span>
-            </span>
-            <span className="wait-dots" aria-hidden="true">
-              {steps.map((step, index) => (
-                <span key={step} data-state={loginStepState(index, phase)} />
-              ))}
-            </span>
-          </span>
-        )}
-      </span>
-    </p>
   )
 }
 

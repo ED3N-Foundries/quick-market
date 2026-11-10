@@ -156,6 +156,8 @@ export type Copy = {
   waitingOne: string
   waitingMany: (left: number) => string
   connectPhantom: string
+  connectNear: string
+  grantedToast: string
   phantomNotFound: string
   phantomConnectFailed: string
   errorDetails: string
@@ -327,6 +329,8 @@ const en: Copy = {
   waitingOne: "Waiting on 1 confirmation",
   waitingMany: (left) => `Waiting on ${left} confirmations`,
   connectPhantom: "Connect Phantom",
+  connectNear: "Connect NEAR",
+  grantedToast: "Grant credited",
   phantomNotFound: "Phantom Wallet not found",
   phantomConnectFailed: "Phantom connection failed",
   errorDetails: "Error details",
@@ -498,6 +502,8 @@ const zhTW: Copy = {
   waitingOne: "還差 1 次確認",
   waitingMany: (left) => `還差 ${left} 次確認`,
   connectPhantom: "連接 Phantom",
+  connectNear: "連接 NEAR",
+  grantedToast: "撥款已入帳",
   phantomNotFound: "找不到 Phantom 錢包",
   phantomConnectFailed: "Phantom 連線失敗",
   errorDetails: "錯誤詳情",
