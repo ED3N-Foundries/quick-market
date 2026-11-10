@@ -12,6 +12,18 @@ import { grantOnSignIn, grantSettings, noteGrantTx, settleGrantRequest, startGra
 import { hub } from "./hub"
 import { LAG_MAX_BYTES, lagEcho } from "./lag"
 import { parseMicros } from "./money"
+import {
+  heartbeatProcessHealth,
+  initProcessHealth,
+  noteBootFailure,
+  noteFeedAdopt,
+  noteFeedBreak,
+  noteFeedLive,
+  noteRequestError,
+  noteTickError,
+  noteTickOk,
+  snapshotProcessHealth,
+} from "./processHealth"
 import { feedsNow } from "./feeds"
 import { oracleView, startOracle } from "./oracle"
 import { adoptFeed, advance, board, failFeed, feedStatus, handoffNow, listRounds, noteAlive, notePrint, placeBuyIn, roundDetail, tapePoints, tickerNow, youFor } from "./rounds"
@@ -21,9 +33,30 @@ let activeChain: ChainRuntime
 let chain: ReturnType<typeof configuredChain>
 let treasury: string
 
-const port = loadEnv().port
+const bootEnv = (() => {
+  try {
+    return loadEnv()
+  } catch {
+    return null
+  }
+})()
+const dbPathHint = process.env.DB_PATH?.trim() || bootEnv?.dbPath || "data/quick-market.sqlite"
+try {
+  initProcessHealth({ dbPath: dbPathHint })
+} catch {
+  // Health tracking must never prevent boot.
+}
+function bootPort(): number {
+  if (bootEnv) return bootEnv.port
+  const raw = Number(process.env.PORT)
+  return Number.isInteger(raw) && raw >= 1 && raw <= 65535 ? raw : 3001
+}
+function bootNodeEnv(): string | undefined {
+  return bootEnv?.nodeEnv ?? process.env.NODE_ENV
+}
+const port = bootPort()
 const distDir = join(import.meta.dir, "..", "dist")
-const serveUi = loadEnv().nodeEnv === "production"
+const serveUi = bootNodeEnv() === "production"
 
 async function bootServer() {
   requireExplicitChain()
@@ -36,6 +69,11 @@ async function bootServer() {
 try {
   await bootServer()
 } catch (error) {
+  try {
+    noteBootFailure(error)
+  } catch {
+    // ignore
+  }
   console.error(error instanceof Error ? error.message : error)
   process.exit(1)
 }
@@ -67,11 +105,21 @@ runtime.quickMarketStopOracle = startOracle({
   },
   onBreak(event) {
     const settled = failFeed(event.from, event.to, event.at)
+    try {
+      noteFeedBreak(event.from, event.to, event.to ? "switched" : "waiting for a fresh venue")
+    } catch {
+      // ignore
+    }
     for (const item of settled) hub.broadcast({ type: "settled", serverNow: event.at, ...item })
     publishRound(event.at)
   },
   onAdopt(event) {
     adoptFeed(event.to, event.at)
+    try {
+      noteFeedAdopt(event.to)
+    } catch {
+      // ignore
+    }
     publishRound(event.at)
   },
 })
@@ -104,6 +152,23 @@ runtime.quickMarketTimer = setInterval(() => {
     const now = Date.now()
     const { settled, broadcastRound } = advance(now)
     const feed = feedStatus(now)
+    try {
+      noteTickOk(feed)
+    } catch {
+      // ignore
+    }
+    if (feed === "live") {
+      try {
+        noteFeedLive()
+      } catch {
+        // ignore
+      }
+    }
+    try {
+      heartbeatProcessHealth()
+    } catch {
+      // ignore
+    }
     if (pending) {
       const due = takeTick(pending, lastTickAt, now, TICK_MS)
       if (due.send) {
@@ -115,6 +180,11 @@ runtime.quickMarketTimer = setInterval(() => {
     for (const event of settled) hub.broadcast({ type: "settled", serverNow: now, ...event })
     if (broadcastRound || roundDirty || feed !== lastFeed) publishRound(now)
   } catch (error) {
+    try {
+      noteTickError(error)
+    } catch {
+      // ignore
+    }
     console.error(error)
   }
 }, 16)
@@ -164,7 +234,40 @@ async function handle(req: Request): Promise<Response> {
   }
 
   if (req.method === "GET" && url.pathname === "/api/health") {
-    return json({ ok: true, source: priceSource(), chain: chain.key, treasury: activeChain.treasuryReport() })
+    let proc: ReturnType<typeof snapshotProcessHealth> | null = null
+    try {
+      proc = snapshotProcessHealth()
+    } catch {
+      proc = null
+    }
+    return json({
+      ok: true,
+      source: priceSource(),
+      chain: chain.key,
+      treasury: activeChain.treasuryReport(),
+      status: proc?.status ?? "ok",
+      reason: proc?.reason ?? null,
+      process: proc,
+      previous: proc?.previous ?? null,
+    })
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/status") {
+    const now = Date.now()
+    let proc: ReturnType<typeof snapshotProcessHealth> | null = null
+    try {
+      proc = snapshotProcessHealth()
+    } catch {
+      proc = null
+    }
+    return json({
+      serverNow: now,
+      status: proc?.status ?? "ok",
+      reason: proc?.reason ?? null,
+      feed: feedStatus(now),
+      process: proc,
+      previous: proc?.previous ?? null,
+    })
   }
 
   if (req.method === "GET" && url.pathname === "/api/feeds") {
@@ -356,6 +459,20 @@ async function handle(req: Request): Promise<Response> {
   return json({ error: "Not found" }, 404)
 }
 
+async function handleSafe(req: Request): Promise<Response> {
+  try {
+    return await handle(req)
+  } catch (error) {
+    try {
+      const url = new URL(req.url)
+      noteRequestError(error, url.pathname)
+    } catch {
+      // ignore
+    }
+    throw error
+  }
+}
+
 async function staticFile(url: URL): Promise<Response | null> {
   if (!existsSync(distDir)) return null
   const pathname = url.pathname
@@ -395,7 +512,7 @@ Bun.serve({
       if (server.upgrade(req)) return undefined as unknown as Response
       return new Response("Expected websocket", { status: 400 })
     }
-    return handle(req).catch((error) => {
+    return handleSafe(req).catch((error) => {
       console.error(error)
       return json({ error: "Server error" }, 500)
     })
