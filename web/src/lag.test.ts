@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test"
 import {
   ageProbe,
+  connectionState,
   createLag,
   createProbe,
   formatLag,
@@ -221,4 +222,13 @@ test("the button names the state and the round trip", () => {
   expect(formatLag(-3)).toBe("0 ms")
   expect(lagButtonName("Live", 80.4)).toBe("Connection, live, 80 milliseconds")
   expect(lagButtonName("Reconnecting", null)).toBe("Connection, reconnecting")
+})
+
+test("connectionState blocks on down link or stale feed, warns on slow", () => {
+  expect(connectionState({ tone: "down" }, "live")).toEqual({ blocked: true, slow: false, reason: "reconnecting" })
+  expect(connectionState({ tone: "live" }, "stale")).toEqual({ blocked: true, slow: false, reason: "delayed" })
+  expect(connectionState({ tone: "down" }, "stale")).toEqual({ blocked: true, slow: false, reason: "reconnecting" })
+  expect(connectionState({ tone: "slow" }, "live")).toEqual({ blocked: false, slow: true, reason: null })
+  expect(connectionState({ tone: "slow" }, "stale").blocked).toBe(true)
+  expect(connectionState({ tone: "live" }, "live")).toEqual({ blocked: false, slow: false, reason: null })
 })

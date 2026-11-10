@@ -99,6 +99,8 @@ export type Copy = {
   live: string
   slow: string
   reconnecting: string
+  reconnectingMarket: string
+  reconnectingHint: string
   lagUp: string
   lagDown: string
   roundTrip: string
@@ -261,6 +263,8 @@ const en: Copy = {
   live: "Live",
   slow: "Slow",
   reconnecting: "Reconnecting",
+  reconnectingMarket: "Reconnecting… market is paused",
+  reconnectingHint: "Buy-ins, grants, deposits and replays resume when live.",
   lagUp: "Up",
   lagDown: "Down",
   roundTrip: "Round trip",
@@ -434,6 +438,8 @@ const zhTW: Copy = {
   live: "正常",
   slow: "偏慢",
   reconnecting: "重新連線",
+  reconnectingMarket: "重新連線中…市場已暫停",
+  reconnectingHint: "連線恢復後才能下注、領取、存入和重播。",
   lagUp: "上行",
   lagDown: "下行",
   roundTrip: "往返",
@@ -541,6 +547,7 @@ const zhFixed: Record<string, string> = {
   [en.depositSent]: zhTW.depositSent,
   [LATE_BUY_IN_ERROR]: zhTW.lateBuyIn,
   "Price feed is delayed": "報價延遲",
+  "Reconnecting to the market": "正在重新連線到市場",
   "Buy-in is closed": "下注已結束",
   "Side is invalid": "方向無效",
   "Stake is invalid": "金額無效",

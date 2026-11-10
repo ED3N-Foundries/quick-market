@@ -188,6 +188,32 @@ export function lagLabel(tone: LagTone): LinkStatus["label"] {
   return "Reconnecting"
 }
 
+export type ConnectionState = {
+  /** True when market info is out of date or mega-lagging: block buy-ins, grants, etc. */
+  blocked: boolean
+  /** True when degraded (slow) but still interactive: warn only. */
+  slow: boolean
+  reason: "reconnecting" | "delayed" | null
+}
+
+/** Dynamic check: combine client link tone with server feed status.
+ * blocked = link down OR server feed stale. slow = link slow but feed live.
+ * Call this at render time AND inside place/claimGrant to close TOCTOU gaps. */
+export function connectionState(
+  link: Pick<LinkStatus, "tone">,
+  feed: "live" | "stale",
+): ConnectionState {
+  if (link.tone === "down" || feed === "stale") {
+    return {
+      blocked: true,
+      slow: false,
+      reason: link.tone === "down" ? "reconnecting" : "delayed",
+    }
+  }
+  if (link.tone === "slow") return { blocked: false, slow: true, reason: null }
+  return { blocked: false, slow: false, reason: null }
+}
+
 export function linkStatus(
   state: LagState,
   now: number,

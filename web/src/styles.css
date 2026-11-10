@@ -806,6 +806,69 @@ a.toast-tx:hover { opacity: 1; }
   letter-spacing: 0.16em;
   text-transform: uppercase;
 }
+.reconnect-banner {
+  position: absolute;
+  z-index: 4;
+  top: 50%;
+  left: 50%;
+  right: auto;
+  transform: translate(-50%, -50%);
+  max-width: calc(100% - 32px);
+  margin: 0;
+  padding: 22px 28px;
+  border-radius: 16px;
+  background: rgba(9, 10, 12, 0.94);
+  border: 1px solid var(--down);
+  color: var(--text);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+  text-align: center;
+}
+.reconnect-banner .wait-spin {
+  width: 22px;
+  height: 22px;
+  border-width: 2px;
+}
+.reconnect-title { font-size: 22px; }
+.reconnect-sub {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0;
+  font-variant-numeric: tabular-nums;
+}
+.feed-flag[data-tone="slow"] {
+  background: rgba(226, 179, 64, 0.16);
+  color: var(--warn);
+}
+.link-quality {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  padding: 3px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--raise);
+  font-size: 11px;
+  line-height: 1;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  width: fit-content;
+}
+.link-quality[data-tone="slow"] { border-color: rgba(226, 179, 64, 0.5); color: var(--warn); }
+.link-quality[data-tone="down"] { border-color: rgba(255, 90, 79, 0.6); color: var(--down); }
+.link-quality .connection-dot { width: 6px; height: 6px; }
+.link-quality-label { font-weight: 650; letter-spacing: 0.04em; text-transform: uppercase; }
+.link-quality-ping { opacity: 0.9; }
+.link-quality .wait-spin { width: 10px; height: 10px; margin-top: 0; border-width: 1.5px; }
+.history tr[data-disabled="1"] { cursor: not-allowed; opacity: 0.55; }
 
 .trade {
   display: grid;
@@ -1666,6 +1729,8 @@ tr.open td { color: var(--text); }
   .clock { font-size: 40px; }
   .chart-wrap { height: 220px; }
   .handoff-banner { font-size: 22px; padding: 16px 18px; }
+  .reconnect-banner { font-size: 18px; padding: 16px 18px; }
+  .reconnect-title { font-size: 18px; }
   .chart-skeleton { gap: 14px; padding: 28px 18px; }
   .trade {
     grid-template-columns: 1fr 1fr;

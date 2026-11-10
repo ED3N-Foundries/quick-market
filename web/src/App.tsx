@@ -311,6 +311,8 @@ export function App({ initialConfig }: { initialConfig: Config }) {
     downQuote,
   })
   const betRoundId = figures.book.roundId
+  const reconnecting = market.blocked
+  const degraded = market.slow
   const canBet =
     market.confirmed &&
     !!you &&
@@ -318,7 +320,8 @@ export function App({ initialConfig }: { initialConfig: Config }) {
     betRoundId !== null &&
     market.feed === "live" &&
     !market.pending &&
-    !handoff
+    !handoff &&
+    !reconnecting
   const ticketWin = held ? payoutMicros(held.stakeMicros, held.side, focus?.poolUpMicros ?? 0, focus?.poolDownMicros ?? 0, market.config.feeBps) : 0
   const fundMicros = parseAmountMicros(fundAmount)
   const testnet = market.config.tokenKind === "qm" || isTestnetChain(market.config.chainId)
@@ -393,11 +396,15 @@ export function App({ initialConfig }: { initialConfig: Config }) {
   function openGrant() {
     setWalletMenuOpen(false)
     setFundError(null)
+    if (market.blocked) {
+      setFundError("Reconnecting to the market")
+      return
+    }
     setFundOpen(true)
   }
 
   function onPointerDown(event: ReactPointerEvent<HTMLElement>) {
-    if (handoffRef.current) return
+    if (handoffRef.current || market.blocked) return
     const riding = boardRef.current
     if (riding && chartMarket(riding, openBuyInsRef.current, Date.now() + market.offsetRef.current)) return
     const current = chartRef.current?.getScale()
@@ -429,6 +436,9 @@ export function App({ initialConfig }: { initialConfig: Config }) {
             <span className="logomark" aria-hidden="true">😭</span>
             Quick Market
           </span>
+          {(reconnecting || degraded) && (
+            <LinkQualityBadge link={market.link} blocked={reconnecting} />
+          )}
         </div>
         <div className="clock-cluster" data-move={heldSpan?.strike ? "1" : "0"}>
           <PriceReadout
@@ -462,17 +472,17 @@ export function App({ initialConfig }: { initialConfig: Config }) {
 
       <section
         className="chart-wrap"
-        data-loading={handoff ? "1" : undefined}
-        aria-busy={handoff ? true : undefined}
+        data-loading={handoff || reconnecting ? "1" : undefined}
+        aria-busy={handoff || reconnecting ? true : undefined}
         onPointerDown={onPointerDown}
         onPointerMove={(event) => {
-          if (handoffRef.current) return
+          if (handoffRef.current || reconnecting) return
           scrub.move(event)
         }}
         onPointerLeave={scrub.clear}
       >
         <canvas ref={canvasRef} />
-        {chart && !handoff && (
+        {chart && !handoff && !reconnecting && (
           <ChartOverlay
             chart={chart}
             board={board}
@@ -482,7 +492,7 @@ export function App({ initialConfig }: { initialConfig: Config }) {
             offsetRef={market.offsetRef}
           />
         )}
-        {handoff && (
+        {(handoff || reconnecting) && (
           <div className="chart-skeleton" aria-hidden="true">
             <span />
             <span />
@@ -496,8 +506,22 @@ export function App({ initialConfig }: { initialConfig: Config }) {
             <span>{handoffBanner(handoff.from, handoff.to, lang)}</span>
           </p>
         )}
-        {market.feed === "stale" && !handoff && <p className="feed-flag">{text.priceDelayed}</p>}
-        {!following && !rideChart && (
+        {reconnecting && !handoff && (
+          <p className="reconnect-banner" role="status">
+            <span className="wait-spin" aria-hidden="true" />
+            <span className="reconnect-title">{text.reconnectingMarket}</span>
+            <span className="reconnect-sub">
+              {text.reconnectingHint} {text.roundTrip} {formatLag(market.link.rttMs)}
+            </span>
+          </p>
+        )}
+        {market.feed === "stale" && !handoff && !reconnecting && <p className="feed-flag">{text.priceDelayed}</p>}
+        {degraded && !reconnecting && !handoff && (
+          <p className="feed-flag" data-tone="slow">
+            {text.slow} · ↑ {formatLag(market.link.upMs)} ↓ {formatLag(market.link.downMs)}
+          </p>
+        )}
+        {!following && !rideChart && !reconnecting && (
           <button
             type="button"
             className="now-jump"
@@ -649,9 +673,15 @@ export function App({ initialConfig }: { initialConfig: Config }) {
                         onClick={() => {
                           setWalletMenuOpen(false)
                           setWithdrawError(null)
+                          if (market.blocked) {
+                            setWithdrawError("Reconnecting to the market")
+                            setWithdrawOpen(true)
+                            return
+                          }
                           setWithdrawOpen(true)
                         }}
                         disabled={!you}
+                        title={reconnecting ? text.reconnectingMarket : undefined}
                       >
                         {text.withdraw}
                       </button>
@@ -673,12 +703,23 @@ export function App({ initialConfig }: { initialConfig: Config }) {
           <BalanceFigure micros={shownMicros} markRef={balanceMark} />
           {!holdStake && testnet && market.config.grantIntervalMs > 0 && grantKnown &&
             (grantWait.due ? (
-              <button type="button" className="grant-status" onClick={openGrant} disabled={!session.token || grantInFlight}>
+              <button
+                type="button"
+                className="grant-status"
+                onClick={openGrant}
+                disabled={!session.token || grantInFlight || reconnecting}
+                title={reconnecting ? text.reconnectingMarket : undefined}
+              >
                 {grantStatusLabel(grantWait, market.config.grantMicros, lang)}
               </button>
             ) : (
               <p className="grant-status">{grantStatusLabel(grantWait, market.config.grantMicros, lang)}</p>
             ))}
+          {reconnecting && (
+            <p className="note warn" role="status">
+              {text.reconnectingMarket} · {text.reconnectingHint}
+            </p>
+          )}
           {held && (
             <div className="ticket">
               <p className={held.side}>{held.side === "up" ? `▲ ${text.up}` : `▼ ${text.down}`}</p>
@@ -698,17 +739,17 @@ export function App({ initialConfig }: { initialConfig: Config }) {
                   inputMode="decimal"
                   value={stake}
                   onChange={(event) => setStake(event.target.value)}
-                  disabled={!you}
+                  disabled={!you || reconnecting}
                 />
               </label>
               <div className="chips">
-                <button type="button" onClick={() => chip(25)} disabled={!you}>
+                <button type="button" onClick={() => chip(25)} disabled={!you || reconnecting}>
                   25%
                 </button>
-                <button type="button" onClick={() => chip(50)} disabled={!you}>
+                <button type="button" onClick={() => chip(50)} disabled={!you || reconnecting}>
                   50%
                 </button>
-                <button type="button" onClick={() => chip(100)} disabled={!you}>
+                <button type="button" onClick={() => chip(100)} disabled={!you || reconnecting}>
                   100%
                 </button>
               </div>
@@ -742,6 +783,7 @@ export function App({ initialConfig }: { initialConfig: Config }) {
           grantAt={grantAt}
           now={now}
           granting={funding}
+          blocked={reconnecting}
           error={fundError}
           onClose={() => {
             setFundOpen(false)
@@ -753,6 +795,10 @@ export function App({ initialConfig }: { initialConfig: Config }) {
           }}
           onGrant={() => {
             if (funding) return
+            if (market.blocked) {
+              setFundError("Reconnecting to the market")
+              return
+            }
             const before = grantAt
             setFunding(true)
             setFundOpen(false)
@@ -821,14 +867,19 @@ export function App({ initialConfig }: { initialConfig: Config }) {
           chainId={market.config.chainId}
           chainName={market.config.chainName}
           amount={fundAmount}
-          disabled={!session.token || funding}
-          customDisabled={!session.token || funding || fundMicros === null}
+          disabled={!session.token || funding || reconnecting}
+          customDisabled={!session.token || funding || fundMicros === null || reconnecting}
+          blocked={reconnecting}
           error={fundError}
           phase={fundPhase}
           hash={fundHash}
           onAmount={setFundAmount}
           onClose={() => setFundOpen(false)}
           onFund={(amount) => {
+            if (market.blocked) {
+              setFundError("Reconnecting to the market")
+              return
+            }
             const micros = parseAmountMicros(amount)
             if (micros === null) return
             const target = (you?.balanceMicros ?? 0) + micros
@@ -881,6 +932,7 @@ export function App({ initialConfig }: { initialConfig: Config }) {
           chainName={market.config.chainName}
           amount={withdrawAmount}
           pending={withdrawing}
+          blocked={reconnecting}
           error={withdrawError}
           onAmount={(value) => {
             setWithdrawAmount(value)
@@ -896,7 +948,12 @@ export function App({ initialConfig }: { initialConfig: Config }) {
         />
       )}
 
-      <History token={session.token} version={market.historyVersion} windowMs={market.config.windowSeconds * 1000} />
+      <History
+        token={session.token}
+        version={market.historyVersion}
+        windowMs={market.config.windowSeconds * 1000}
+        blocked={reconnecting}
+      />
       {(market.notices.length > 0 || market.lateNotices.length > 0) && (
         <PricePops anchorRef={balanceMark}>
           {market.notices.map((notice) => (
@@ -936,6 +993,32 @@ export function App({ initialConfig }: { initialConfig: Config }) {
         <LanguageSelect />
       </footer>
     </div>
+  )
+}
+
+function LinkQualityBadge({ link, blocked }: { link: LinkStatus; blocked: boolean }) {
+  const { lang, text } = useI18n()
+  const label =
+    link.tone === "down" || blocked
+      ? text.reconnecting
+      : link.tone === "slow"
+        ? text.slow
+        : text.live
+  return (
+    <span
+      className="link-quality"
+      data-tone={blocked ? "down" : link.tone}
+      role="status"
+      title={`${text.lagUp} ${formatLag(link.upMs)} · ${text.lagDown} ${formatLag(link.downMs)} · ${text.roundTrip} ${formatLag(link.rttMs)}`}
+      aria-label={lagButtonName(label, link.rttMs, lang)}
+    >
+      <span className="connection-dot" data-tone={blocked ? "down" : link.tone} aria-hidden="true" />
+      <span className="link-quality-label">{label}</span>
+      <span className="link-quality-ping">
+        ↑ {formatLag(link.upMs)} ↓ {formatLag(link.downMs)}
+      </span>
+      {blocked && <span className="wait-spin" aria-hidden="true" />}
+    </span>
   )
 }
 
@@ -1396,6 +1479,7 @@ function FundOverlay({
   amount,
   disabled,
   customDisabled,
+  blocked,
   error,
   phase,
   hash,
@@ -1411,6 +1495,7 @@ function FundOverlay({
   amount: string
   disabled: boolean
   customDisabled: boolean
+  blocked: boolean
   error: string | null
   phase: "idle" | "phantom" | "confirming" | "pending"
   hash: string | null
@@ -1486,6 +1571,11 @@ function FundOverlay({
             {text.ledgerWait(hash ? briefTx(hash) : "")}
           </p>
         )}
+        {blocked && (
+          <p className="note warn" role="status">
+            {text.reconnectingMarket} · {text.reconnectingHint}
+          </p>
+        )}
         {error && <p className="note bad">{localize(lang, error)}</p>}
       </div>
     </div>
@@ -1501,6 +1591,7 @@ function GrantOverlay({
   grantAt,
   now,
   granting,
+  blocked,
   error,
   onClose,
   onGrant,
@@ -1513,6 +1604,7 @@ function GrantOverlay({
   grantAt: number | null
   now: number
   granting: boolean
+  blocked: boolean
   error: string | null
   onClose: () => void
   onGrant: () => void
@@ -1554,9 +1646,20 @@ function GrantOverlay({
             <dd>{grantNextLabel(timing, lang)}</dd>
           </div>
         </dl>
-        <button type="button" className="primary grant-submit" onClick={onGrant} disabled={granting || !timing.due}>
+        <button
+          type="button"
+          className="primary grant-submit"
+          onClick={onGrant}
+          disabled={granting || !timing.due || blocked}
+          title={blocked ? text.reconnectingMarket : undefined}
+        >
           {granting ? text.granting : grantButtonLabel(timing, grantMicros, lang)}
         </button>
+        {blocked && (
+          <p className="note warn" role="status">
+            {text.reconnectingMarket} · {text.reconnectingHint}
+          </p>
+        )}
         {error && <p className="note bad">{localize(lang, error)}</p>}
       </div>
     </div>
@@ -1573,6 +1676,7 @@ function WithdrawOverlay({
   chainName,
   amount,
   pending,
+  blocked,
   error,
   onAmount,
   onMax,
@@ -1588,6 +1692,7 @@ function WithdrawOverlay({
   chainName: string
   amount: string
   pending: boolean
+  blocked: boolean
   error: string | null
   onAmount: (value: string) => void
   onMax: () => void
@@ -1603,7 +1708,7 @@ function WithdrawOverlay({
     return () => window.removeEventListener("keydown", onKey)
   }, [onClose])
   const parsed = parseAmountMicros(amount)
-  const submitDisabled = pending || parsed === null || parsed > balanceMicros
+  const submitDisabled = pending || blocked || parsed === null || parsed > balanceMicros
   return (
     <div className="fund-back" onClick={onClose}>
       <div className="fund-overlay" role="dialog" aria-modal="true" aria-label={chainKey === "near-testnet" ? text.withdrawNear : testnet ? text.withdrawQm : text.withdrawUsdc} onClick={(event) => event.stopPropagation()}>
@@ -1638,9 +1743,9 @@ function WithdrawOverlay({
               placeholder={text.amount}
               value={amount}
               onChange={(event) => onAmount(event.target.value)}
-              disabled={pending}
+              disabled={pending || blocked}
             />
-            <button type="button" className="max-btn" onClick={onMax} disabled={pending || balanceMicros <= 0}>
+            <button type="button" className="max-btn" onClick={onMax} disabled={pending || blocked || balanceMicros <= 0}>
               {text.max}
             </button>
           </div>
@@ -1649,6 +1754,11 @@ function WithdrawOverlay({
           </button>
         </div>
         {chainKey === "near-testnet" ? <p className="note">{text.paysNear}</p> : testnet ? <p className="note">{text.paysQm}</p> : null}
+        {blocked && (
+          <p className="note warn" role="status">
+            {text.reconnectingMarket} · {text.reconnectingHint}
+          </p>
+        )}
         {error && <p className="note bad">{localize(lang, error)}</p>}
       </div>
     </div>
@@ -1715,7 +1825,17 @@ function SideCard(props: {
   )
 }
 
-function History({ token, version, windowMs }: { token: string | null; version: number; windowMs: number }) {
+function History({
+  token,
+  version,
+  windowMs,
+  blocked,
+}: {
+  token: string | null
+  version: number
+  windowMs: number
+  blocked: boolean
+}) {
   const { lang, text } = useI18n()
   const [mine, setMine] = useState(false)
   const [publicRows, setPublicRows] = useState<HistoryRound[]>([])
@@ -1776,10 +1896,15 @@ function History({ token, version, windowMs }: { token: string | null; version: 
         <button type="button" className={!mine ? "on" : ""} onClick={() => setMine(false)}>
           {text.all}
         </button>
-        <button type="button" className={mine ? "on" : ""} onClick={() => setMine(true)} disabled={!token}>
+        <button type="button" className={mine ? "on" : ""} onClick={() => setMine(true)} disabled={!token || blocked}>
           {text.myTrades}
         </button>
       </div>
+      {blocked && (
+        <p className="note warn" role="status">
+          {text.reconnectingMarket} · {text.reconnectingHint}
+        </p>
+      )}
       {rows.length === 0 ? (
         <p className="empty">{text.noRounds}</p>
       ) : (
@@ -1803,7 +1928,16 @@ function History({ token, version, windowMs }: { token: string | null; version: 
           </thead>
           <tbody>
             {rows.map((row) => (
-              <tr key={row.id} onClick={() => setReplay(row)} className={replay?.id === row.id ? "open" : ""}>
+              <tr
+                key={row.id}
+                onClick={() => {
+                  if (blocked) return
+                  setReplay(row)
+                }}
+                className={replay?.id === row.id ? "open" : ""}
+                data-disabled={blocked ? "1" : undefined}
+                title={blocked ? text.reconnectingMarket : undefined}
+              >
                 <td>{formatClock(row.startsAt, lang)}</td>
                 <td className={resultTone(row)}>{resultText(row, text)}</td>
                 <td>{row.strike ? formatPrice(row.strike) : "—"}</td>

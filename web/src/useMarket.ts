@@ -6,6 +6,7 @@ import { applyBuyIn } from "./buyInIntent"
 import type { TapeChart, TapePoint } from "./chart"
 import { createClock, easeClock, noteClock } from "./clock"
 import {
+  connectionState,
   createLag,
   createProbe,
   lagProbe,
@@ -83,6 +84,8 @@ export function useMarket(token: string | null, seed: You | null = null, initial
   const youRef = useRef<You | null>(null)
   const boardRef = useRef<Board | null>(null)
   const configRef = useRef(config)
+  const feedRef = useRef<"live" | "stale">(feed)
+  feedRef.current = feed
   const seedRef = useRef<TapePoint[] | null>(null)
   const bufferRef = useRef<TapePoint[]>([])
   const seededRef = useRef(false)
@@ -511,9 +514,29 @@ export function useMarket(token: string | null, seed: You | null = null, initial
     setLateNotices((current) => (current.length > 0 ? current : [1]))
   }, [])
 
+  /** Dynamic check: recompute link + feed at call time so a socket that died
+   * after render still blocks the attempt. Returns an English error or null. */
+  const connectionErrorNow = useCallback((): string | null => {
+    const live = linkStatus(
+      lagRef.current,
+      Date.now(),
+      socketRef.current?.readyState === WebSocket.OPEN,
+      lastInboundRef.current,
+      openedAtRef.current,
+    )
+    const state = connectionState(live, feedRef.current)
+    if (!state.blocked) return null
+    return state.reason === "delayed" ? "Price feed is delayed" : "Reconnecting to the market"
+  }, [])
+
   const place = useCallback(
     async (side: Side, stake: string, roundId: number) => {
       if (!confirmedRef.current || !tokenRef.current || betLock.current) return
+      const offline = connectionErrorNow()
+      if (offline) {
+        setError(offline)
+        return
+      }
       // The id is the market painted with this click. A clock that has already
       // crossed still posts it. The server rejects a window that is not open.
       if (!Number.isSafeInteger(roundId) || roundId < 0) return
@@ -586,7 +609,7 @@ export function useMarket(token: string | null, seed: You | null = null, initial
         }
       }
     },
-    [acceptYou, pushLate],
+    [acceptYou, pushLate, connectionErrorNow],
   )
 
   const claimGrant = useCallback(async (): Promise<
@@ -594,6 +617,8 @@ export function useMarket(token: string | null, seed: You | null = null, initial
     | { ok: false; message: string; dropped: boolean; txHash: string | null }
   > => {
     if (!tokenRef.current) return { ok: false, message: "Sign in to receive a grant.", dropped: false, txHash: null }
+    const offline = connectionErrorNow()
+    if (offline) return { ok: false, message: offline, dropped: false, txHash: null }
     try {
       const response = await fetch("/api/grant", {
         method: "POST",
@@ -629,7 +654,7 @@ export function useMarket(token: string | null, seed: You | null = null, initial
     } catch {
       return { ok: false, message: "Can't reach the market server", dropped: true, txHash: null }
     }
-  }, [acceptYou, markConfirmed])
+  }, [acceptYou, markConfirmed, connectionErrorNow])
 
   const waitForGrant = useCallback(
     async (beforeGrantAt: number | null) => {
@@ -646,6 +671,8 @@ export function useMarket(token: string | null, seed: You | null = null, initial
 
   const withdrawWallet = useCallback(async (amount: string): Promise<string | null> => {
     if (!tokenRef.current) return "Connect a wallet first"
+    const offline = connectionErrorNow()
+    if (offline) return offline
     try {
       const response = await fetch("/api/withdraw", {
         method: "POST",
@@ -663,7 +690,7 @@ export function useMarket(token: string | null, seed: You | null = null, initial
     } catch {
       return "Can't reach the market server"
     }
-  }, [acceptYou])
+  }, [acceptYou, connectionErrorNow])
 
   const now = Date.now() + offsetRef.current
   void pulse
@@ -674,6 +701,9 @@ export function useMarket(token: string | null, seed: You | null = null, initial
     lastInboundRef.current,
     openedAtRef.current,
   )
+  const connection = connectionState(link, feed)
+  const blocked = connection.blocked
+  const slow = connection.slow
 
   return {
     address: you?.address ?? null,
@@ -709,5 +739,9 @@ export function useMarket(token: string | null, seed: You | null = null, initial
     bindChart,
     token,
     link,
+    blocked,
+    slow,
+    connectionReason: connection.reason,
+    connectionErrorNow,
   }
 }
