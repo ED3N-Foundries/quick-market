@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs"
-import { join, normalize, sep } from "node:path"
+import { dirname, join, normalize, sep } from "node:path"
 import { parseLang, stampHtml, type Lang } from "../shared/lang"
 import { loadMarket, requireExplicitChain, TICK_MS, type PublicConfig } from "../shared/market"
 import { feeBps, marketMs, MIN_STAKE_MICROS, priceSource, viewMs, windowMs, type PriceSource } from "./config"
@@ -23,8 +23,26 @@ import {
   noteRequestError,
   noteTickError,
   noteTickOk,
+  setProcessStatus,
   snapshotProcessHealth,
 } from "./processHealth"
+import {
+  averageQueryStats,
+  flushHealthSample,
+  hangStats,
+  HEALTH_SAMPLE_MS,
+  noteRequest,
+  noteTickSample,
+  queryPercentiles,
+  readRecentHangs,
+  readRecentHealth,
+  rollupHealthMinute,
+  routePercentiles,
+  startLagWatchdog,
+  timedQuery,
+} from "./selfHealth"
+import { archiveOldHealth, archiveOldTicks, archivesSizeBytes, listArchives } from "./archive"
+import { getDb } from "./db"
 import { feedsNow } from "./feeds"
 import { oracleView, startOracle } from "./oracle"
 import {
@@ -108,17 +126,17 @@ let lastTickAt = 0
 let lastFeed: "live" | "stale" | null = null
 
 const stream = new MarketStream({
-  board: () => board(),
+  board: () => timedQuery("board", () => board()),
   tape: () => {
     const now = Date.now()
     const tailMs = Math.max(30_000, windowMs() * 2, viewMs() * 2)
-    return tapeRange(now - tailMs, now)
+    return timedQuery("tape", () => tapeRange(now - tailMs, now))
   },
   feed: () => feedStatus(Date.now()),
   ticker: tickerNow,
   handoff: handoffNow,
-  youFor,
-  accountResults,
+  youFor: (address) => timedQuery("you", () => youFor(address)),
+  accountResults: (address) => timedQuery("results", () => accountResults(address)),
 })
 
 const runtime = globalThis as unknown as {
@@ -170,9 +188,10 @@ function publishRound(now = Date.now()) {
 
 if (runtime.quickMarketTimer) clearInterval(runtime.quickMarketTimer)
 runtime.quickMarketTimer = setInterval(() => {
+  const tickStart = performance.now()
   try {
     const now = Date.now()
-    const { settled, broadcastRound } = advance(now)
+    const { settled, broadcastRound } = timedQuery("advance", () => advance(now))
     const feed = feedStatus(now)
     try {
       noteTickOk(feed)
@@ -201,7 +220,17 @@ runtime.quickMarketTimer = setInterval(() => {
     }
     for (const event of settled) stream.settled(event, now)
     if (broadcastRound || roundDirty || feed !== lastFeed) publishRound(now)
+    try {
+      noteTickSample(performance.now() - tickStart)
+    } catch {
+      // ignore
+    }
   } catch (error) {
+    try {
+      noteTickSample(performance.now() - tickStart)
+    } catch {
+      // ignore
+    }
     try {
       noteTickError(error)
     } catch {
@@ -262,6 +291,15 @@ async function handle(req: Request): Promise<Response> {
     } catch {
       proc = null
     }
+    let self: { samples: Record<string, unknown>[]; routes: Record<string, unknown>[] } = { samples: [], routes: [] }
+    let archives: Record<string, unknown>[] = []
+    try {
+      const db = getDb()
+      self = readRecentHealth(db, { limit: 12 })
+      archives = listArchives(db, 10)
+    } catch {
+      // ignore
+    }
     return json({
       ok: true,
       source: priceSource(),
@@ -272,7 +310,55 @@ async function handle(req: Request): Promise<Response> {
       process: proc,
       previous: proc?.previous ?? null,
       stream: stream.metrics(),
+      selfHealth: self,
+      queryStats: (() => {
+        try {
+          return averageQueryStats(getDb(), Date.now() - 60 * 60 * 1000)
+        } catch {
+          return {}
+        }
+      })(),
+      routePctl: (() => {
+        try {
+          return routePercentiles(getDb(), Date.now() - 60 * 60 * 1000)
+        } catch {
+          return {}
+        }
+      })(),
+      queryPctl: (() => {
+        try {
+          return queryPercentiles(getDb(), Date.now() - 60 * 60 * 1000)
+        } catch {
+          return {}
+        }
+      })(),
+      hangs: (() => {
+        try {
+          const db = getDb()
+          return { recent: readRecentHangs(db, 20), hour: hangStats(db, Date.now() - 60 * 60 * 1000) }
+        } catch {
+          return { recent: [], hour: { count: 0, maxMs: 0, lastTs: null } }
+        }
+      })(),
+      archives,
     })
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/health/history") {
+    const limit = Number(url.searchParams.get("limit") ?? 36)
+    const bootId = url.searchParams.get("bootId") ?? undefined
+    try {
+      const db = getDb()
+      const health = readRecentHealth(db, { limit: Number.isFinite(limit) ? limit : 36, bootId })
+      return json({
+        ...health,
+        hangs: readRecentHangs(db, 20),
+        queryPctl: queryPercentiles(db, Date.now() - 60 * 60 * 1000),
+        routePctl: routePercentiles(db, Date.now() - 60 * 60 * 1000),
+      })
+    } catch {
+      return json({ samples: [], routes: [] })
+    }
   }
 
   if (req.method === "GET" && url.pathname === "/api/status") {
@@ -283,6 +369,18 @@ async function handle(req: Request): Promise<Response> {
     } catch {
       proc = null
     }
+    let self: { samples: Record<string, unknown>[]; routes: Record<string, unknown>[] } = { samples: [], routes: [] }
+    let hangs: { recent: unknown[]; hour: { count: number; maxMs: number; lastTs: number | null } } = {
+      recent: [],
+      hour: { count: 0, maxMs: 0, lastTs: null },
+    }
+    try {
+      const db = getDb()
+      self = readRecentHealth(db, { limit: 6 })
+      hangs = { recent: readRecentHangs(db, 5), hour: hangStats(db, now - 60 * 60 * 1000) }
+    } catch {
+      // ignore
+    }
     return json({
       serverNow: now,
       status: proc?.status ?? "ok",
@@ -290,6 +388,8 @@ async function handle(req: Request): Promise<Response> {
       feed: feedStatus(now),
       process: proc,
       previous: proc?.previous ?? null,
+      selfHealth: self,
+      hangs,
     })
   }
 
@@ -313,7 +413,7 @@ async function handle(req: Request): Promise<Response> {
       return json({ error: "Tape range is invalid" }, 400)
     }
     const from = Math.max(requestedFrom, to - 15 * 60 * 1000)
-    return json({ tape: tapeRange(from, to) })
+    return json({ tape: timedQuery("tape", () => tapeRange(from, to)) })
   }
 
   if (req.method === "GET" && url.pathname === "/api/state") {
@@ -327,9 +427,9 @@ async function handle(req: Request): Promise<Response> {
       config: publicConfig(),
       ticker: tickerNow(),
       handoff: handoffNow(),
-      board: board(now),
-      you: session.address ? youFor(session.address) : null,
-      tape: tapeRange(now - tailMs, now),
+      board: timedQuery("board", () => board(now)),
+      you: session.address ? timedQuery("you", () => youFor(session.address!)) : null,
+      tape: timedQuery("tape", () => tapeRange(now - tailMs, now)),
     })
   }
 
@@ -466,7 +566,7 @@ async function handle(req: Request): Promise<Response> {
     if (stake === null) return json({ error: "Stake is invalid" }, 400)
     if (typeof roundId !== "number") return json({ error: "Market is invalid" }, 400)
     const requestId = typeof body?.requestId === "string" ? body.requestId : undefined
-    const result = placeBuyIn({ address: session.address, side, stakeMicros: stake, roundId, requestId, now })
+    const result = timedQuery("buy_in", () => placeBuyIn({ address: session.address, side, stakeMicros: stake, roundId, requestId, now }))
     if (!result.ok) return json(result.code ? { error: result.error, code: result.code } : { error: result.error }, 400)
     markRoundDirty()
     return json({ you: result.you })
@@ -477,12 +577,12 @@ async function handle(req: Request): Promise<Response> {
     const mine = url.searchParams.get("mine") === "1"
     const session = mine ? readSession(req) : { address: null, rejected: false }
     if (mine && !session.address) return json({ error: "Connect a wallet first" }, 401)
-    return json({ rounds: listRounds(Number.isFinite(limit) ? limit : 10, session.address, mine) })
+    return json({ rounds: timedQuery("rounds", () => listRounds(Number.isFinite(limit) ? limit : 10, session.address, mine)) })
   }
 
   const detailMatch = url.pathname.match(/^\/api\/rounds\/(\d+)$/)
   if (req.method === "GET" && detailMatch) {
-    const detail = roundDetail(Number(detailMatch[1]))
+    const detail = timedQuery("round_detail", () => roundDetail(Number(detailMatch[1])))
     if (!detail) return json({ error: "Round not found" }, 404)
     return json(detail)
   }
@@ -495,8 +595,19 @@ async function handle(req: Request): Promise<Response> {
   return json({ error: "Not found" }, 404)
 }
 
+function routeTemplate(method: string, pathname: string): string {
+  if (/^\/api\/rounds\/\d+$/.test(pathname)) return `${method} /api/rounds/:id`
+  if (pathname.startsWith("/api/agents/")) return `${method} /api/agents/*`
+  if (pathname === "/ws") return "WS /ws"
+  return `${method} ${pathname}`
+}
+
 async function handleSafe(req: Request): Promise<Response> {
+  const started = performance.now()
+  let route = "unknown"
   try {
+    const url = new URL(req.url)
+    route = routeTemplate(req.method, url.pathname)
     return await handle(req)
   } catch (error) {
     try {
@@ -506,6 +617,120 @@ async function handleSafe(req: Request): Promise<Response> {
       // ignore
     }
     throw error
+  } finally {
+    try {
+      noteRequest(route, performance.now() - started)
+    } catch {
+      // ignore
+    }
+  }
+}
+
+// --- self-health sampler: host + self + query stats into the ledger DB ------
+
+let wsPeers = 0
+
+function selfHealthPaths(): { dataDir: string; dbPath: string } {
+  const resolved = (() => {
+    try {
+      return loadEnv().dbPath
+    } catch {
+      return process.env.DB_PATH?.trim() || "data/quick-market.sqlite"
+    }
+  })()
+  const dataDir = resolved === ":memory:" ? join(process.cwd(), "data") : dirname(resolved)
+  return { dataDir, dbPath: resolved }
+}
+
+function noteDiskPressure(level: "warn" | "down", fraction: number, free: number): void {
+  try {
+    const pct = (fraction * 100).toFixed(1)
+    const freeMb = Math.round(free / 1024 / 1024)
+    if (level === "down") {
+      const snap = snapshotProcessHealth()
+      if (snap.status !== "down" || !snap.reason?.includes("disk")) {
+        setProcessStatus("down", `disk critically full (${pct}% used, ${freeMb}MB free) — archive or free space`)
+      }
+      return
+    }
+    const snap = snapshotProcessHealth()
+    if (snap.status === "ok") {
+      setProcessStatus("degraded", `disk filling (${pct}% used, ${freeMb}MB free)`)
+    }
+  } catch {
+    // ignore
+  }
+}
+
+const selfHealthRuntime = globalThis as unknown as {
+  qmSelfHealthTimer?: ReturnType<typeof setInterval>
+}
+if (selfHealthRuntime.qmSelfHealthTimer) clearInterval(selfHealthRuntime.qmSelfHealthTimer)
+if (process.env.QM_HEALTH_LOG !== "0") {
+  let lastMinute = 0
+  let lastArchive = 0
+  selfHealthRuntime.qmSelfHealthTimer = setInterval(() => {
+    try {
+      const now = Date.now()
+      const { dataDir, dbPath } = selfHealthPaths()
+      const db = getDb()
+      flushHealthSample({
+        db,
+        dataDir,
+        dbPath,
+        now,
+        peers: wsPeers,
+        feed: (() => {
+          try {
+            return feedStatus(now)
+          } catch {
+            return undefined
+          }
+        })(),
+        streamBoard: (() => {
+          try {
+            return stream.metrics().boardBuilds
+          } catch {
+            return null
+          }
+        })(),
+        onDiskPressure: noteDiskPressure,
+      })
+      if (now - lastMinute >= 60_000) {
+        lastMinute = now
+        try {
+          rollupHealthMinute(db, now)
+        } catch {
+          // ignore
+        }
+      }
+      if (now - lastArchive >= 60 * 60 * 1000) {
+        lastArchive = now
+        try {
+          archiveOldHealth(db, dataDir, now)
+        } catch {
+          // ignore
+        }
+        try {
+          archiveOldTicks(db, dataDir, now)
+        } catch {
+          // ignore
+        }
+        try {
+          void archivesSizeBytes(dataDir)
+        } catch {
+          // ignore
+        }
+      }
+    } catch {
+      // sampler must never break the market
+    }
+  }, HEALTH_SAMPLE_MS)
+  ;(selfHealthRuntime.qmSelfHealthTimer as unknown as { unref?: () => void }).unref?.()
+  try {
+    startLagWatchdog()
+  } catch {
+    // stall probe is best effort
   }
 }
 
@@ -560,6 +785,7 @@ Bun.serve<{ address: string | null }>({
     sendPings: true,
     perMessageDeflate: true,
     open(ws) {
+      wsPeers += 1
       hub.add(ws)
       stream.snapshot(ws)
     },
@@ -606,11 +832,14 @@ Bun.serve<{ address: string | null }>({
         replyTo({ ok: false, error: !side ? "Side is invalid" : stake === null ? "Stake is invalid" : "Market is invalid" })
         return
       }
-      const result = placeBuyIn({ address: ws.data.address, side, stakeMicros: stake, roundId: body.roundId, requestId, now: recv })
+      const result = timedQuery("buy_in", () =>
+        placeBuyIn({ address: ws.data.address!, side, stakeMicros: stake, roundId: body.roundId as number, requestId, now: recv }),
+      )
       replyTo(result)
       if (result.ok) markRoundDirty()
     },
     close(ws) {
+      wsPeers = Math.max(0, wsPeers - 1)
       hub.remove(ws)
     },
   },

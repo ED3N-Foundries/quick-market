@@ -149,9 +149,201 @@ CREATE TABLE IF NOT EXISTS ticks (
   exchange_ts INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS ticks_minute (
+  min_ts INTEGER PRIMARY KEY,
+  open TEXT NOT NULL,
+  high TEXT NOT NULL,
+  low TEXT NOT NULL,
+  close TEXT NOT NULL,
+  count INTEGER NOT NULL,
+  source TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS meta (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS qm_health_sample (
+  ts INTEGER PRIMARY KEY,
+  boot_id TEXT NOT NULL,
+  boot_count INTEGER NOT NULL,
+  status TEXT NOT NULL,
+  reason TEXT,
+  mem_total INTEGER NOT NULL,
+  mem_used INTEGER NOT NULL,
+  swap_used INTEGER NOT NULL,
+  cpu_user INTEGER NOT NULL,
+  cpu_sys INTEGER NOT NULL,
+  cpu_iowait INTEGER NOT NULL,
+  load1 INTEGER NOT NULL,
+  disk_size INTEGER NOT NULL,
+  disk_used INTEGER NOT NULL,
+  db_bytes INTEGER NOT NULL,
+  self_rss INTEGER NOT NULL,
+  self_heap INTEGER NOT NULL,
+  self_external INTEGER NOT NULL,
+  self_cpu_ms REAL NOT NULL,
+  lag_ms REAL,
+  lag_max REAL NOT NULL DEFAULT 0,
+  lag_p50 REAL NOT NULL DEFAULT 0,
+  lag_p90 REAL NOT NULL DEFAULT 0,
+  lag_p95 REAL NOT NULL DEFAULT 0,
+  lag_p99 REAL NOT NULL DEFAULT 0,
+  uptime_ms INTEGER NOT NULL,
+  peers INTEGER NOT NULL,
+  feed TEXT,
+  req_count INTEGER NOT NULL,
+  req_avg_ms REAL NOT NULL,
+  req_max_ms REAL NOT NULL,
+  req_p50 REAL NOT NULL DEFAULT 0,
+  req_p90 REAL NOT NULL DEFAULT 0,
+  req_p95 REAL NOT NULL DEFAULT 0,
+  req_p99 REAL NOT NULL DEFAULT 0,
+  q_count INTEGER NOT NULL,
+  q_avg_ms REAL NOT NULL,
+  q_max_ms REAL NOT NULL,
+  q_p50 REAL NOT NULL DEFAULT 0,
+  q_p90 REAL NOT NULL DEFAULT 0,
+  q_p95 REAL NOT NULL DEFAULT 0,
+  q_p99 REAL NOT NULL DEFAULT 0,
+  tick_count INTEGER NOT NULL,
+  tick_avg_ms REAL NOT NULL,
+  tick_max_ms REAL NOT NULL,
+  tick_p50 REAL NOT NULL DEFAULT 0,
+  tick_p90 REAL NOT NULL DEFAULT 0,
+  tick_p95 REAL NOT NULL DEFAULT 0,
+  tick_p99 REAL NOT NULL DEFAULT 0,
+  board_count INTEGER NOT NULL,
+  board_avg_ms REAL NOT NULL,
+  board_max_ms REAL NOT NULL,
+  board_p50 REAL NOT NULL DEFAULT 0,
+  board_p90 REAL NOT NULL DEFAULT 0,
+  board_p95 REAL NOT NULL DEFAULT 0,
+  board_p99 REAL NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS qm_health_route (
+  ts INTEGER NOT NULL,
+  route TEXT NOT NULL,
+  count INTEGER NOT NULL,
+  total_ms REAL NOT NULL,
+  max_ms REAL NOT NULL,
+  p50 REAL NOT NULL DEFAULT 0,
+  p90 REAL NOT NULL DEFAULT 0,
+  p95 REAL NOT NULL DEFAULT 0,
+  p99 REAL NOT NULL DEFAULT 0,
+  hist TEXT,
+  PRIMARY KEY (ts, route)
+);
+
+CREATE TABLE IF NOT EXISTS qm_health_query (
+  ts INTEGER NOT NULL,
+  grp TEXT NOT NULL,
+  count INTEGER NOT NULL,
+  total_ms REAL NOT NULL,
+  max_ms REAL NOT NULL,
+  p50 REAL NOT NULL DEFAULT 0,
+  p90 REAL NOT NULL DEFAULT 0,
+  p95 REAL NOT NULL DEFAULT 0,
+  p99 REAL NOT NULL DEFAULT 0,
+  hist TEXT,
+  PRIMARY KEY (ts, grp)
+);
+
+CREATE TABLE IF NOT EXISTS qm_health_minute (
+  ts INTEGER PRIMARY KEY,
+  samples INTEGER NOT NULL,
+  boot_count INTEGER NOT NULL,
+  mem_avg INTEGER NOT NULL,
+  mem_max INTEGER NOT NULL,
+  self_rss_avg INTEGER NOT NULL,
+  self_rss_max INTEGER NOT NULL,
+  cpu_avg INTEGER NOT NULL,
+  cpu_max INTEGER NOT NULL,
+  lag_avg REAL,
+  lag_max REAL,
+  lag_p50 REAL NOT NULL DEFAULT 0,
+  lag_p90 REAL NOT NULL DEFAULT 0,
+  lag_p95 REAL NOT NULL DEFAULT 0,
+  lag_p99 REAL NOT NULL DEFAULT 0,
+  disk_used INTEGER NOT NULL,
+  disk_size INTEGER NOT NULL,
+  db_bytes INTEGER NOT NULL,
+  req_count INTEGER NOT NULL,
+  req_avg_ms REAL NOT NULL,
+  req_max_ms REAL NOT NULL,
+  req_p50 REAL NOT NULL DEFAULT 0,
+  req_p90 REAL NOT NULL DEFAULT 0,
+  req_p95 REAL NOT NULL DEFAULT 0,
+  req_p99 REAL NOT NULL DEFAULT 0,
+  q_count INTEGER NOT NULL,
+  q_avg_ms REAL NOT NULL,
+  q_max_ms REAL NOT NULL,
+  q_p50 REAL NOT NULL DEFAULT 0,
+  q_p90 REAL NOT NULL DEFAULT 0,
+  q_p95 REAL NOT NULL DEFAULT 0,
+  q_p99 REAL NOT NULL DEFAULT 0,
+  tick_avg_ms REAL NOT NULL,
+  tick_max_ms REAL NOT NULL,
+  tick_p50 REAL NOT NULL DEFAULT 0,
+  tick_p90 REAL NOT NULL DEFAULT 0,
+  tick_p95 REAL NOT NULL DEFAULT 0,
+  tick_p99 REAL NOT NULL DEFAULT 0,
+  board_avg_ms REAL NOT NULL,
+  board_max_ms REAL NOT NULL,
+  board_p50 REAL NOT NULL DEFAULT 0,
+  board_p90 REAL NOT NULL DEFAULT 0,
+  board_p95 REAL NOT NULL DEFAULT 0,
+  board_p99 REAL NOT NULL DEFAULT 0,
+  peers_max INTEGER NOT NULL,
+  feed TEXT
+);
+
+CREATE TABLE IF NOT EXISTS qm_health_route_minute (
+  ts INTEGER NOT NULL,
+  route TEXT NOT NULL,
+  count INTEGER NOT NULL,
+  avg_ms REAL NOT NULL,
+  max_ms REAL NOT NULL,
+  p50 REAL NOT NULL DEFAULT 0,
+  p90 REAL NOT NULL DEFAULT 0,
+  p95 REAL NOT NULL DEFAULT 0,
+  p99 REAL NOT NULL DEFAULT 0,
+  PRIMARY KEY (ts, route)
+);
+
+CREATE TABLE IF NOT EXISTS qm_health_query_minute (
+  ts INTEGER NOT NULL,
+  grp TEXT NOT NULL,
+  count INTEGER NOT NULL,
+  avg_ms REAL NOT NULL,
+  max_ms REAL NOT NULL,
+  p50 REAL NOT NULL DEFAULT 0,
+  p90 REAL NOT NULL DEFAULT 0,
+  p95 REAL NOT NULL DEFAULT 0,
+  p99 REAL NOT NULL DEFAULT 0,
+  PRIMARY KEY (ts, grp)
+);
+
+CREATE TABLE IF NOT EXISTS qm_hangs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts INTEGER NOT NULL,
+  duration_ms REAL NOT NULL,
+  kind TEXT NOT NULL,
+  name TEXT NOT NULL,
+  detail TEXT
+);
+CREATE INDEX IF NOT EXISTS qm_hangs_ts ON qm_hangs(ts DESC);
+
+CREATE TABLE IF NOT EXISTS qm_archives (
+  name TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,
+  from_ts INTEGER NOT NULL,
+  to_ts INTEGER NOT NULL,
+  rows INTEGER NOT NULL,
+  bytes INTEGER NOT NULL,
+  created_at INTEGER NOT NULL
 );
 `
 
@@ -181,6 +373,8 @@ function openDatabase(path: string): Database {
   ensureBuyInIndexes(db)
   migrateRoundSource(db)
   ensureRoundIndexes(db)
+  ensureHealthIndexes(db)
+  ensureHealthPxxColumns(db)
   migrateCustody(db)
   return db
 }
@@ -274,6 +468,39 @@ function ensureBuyInIndexes(db: Database) {
 /** Closed markets are read by start time. Round ids are not time order across a window change. */
 function ensureRoundIndexes(db: Database) {
   db.exec("CREATE INDEX IF NOT EXISTS rounds_closed_starts ON rounds(chain_key, starts_at DESC) WHERE status != 'open'")
+}
+
+function ensureHealthIndexes(db: Database) {
+  db.exec("CREATE INDEX IF NOT EXISTS qm_health_route_ts ON qm_health_route(ts DESC)")
+  db.exec("CREATE INDEX IF NOT EXISTS qm_health_query_ts ON qm_health_query(ts DESC)")
+  db.exec("CREATE INDEX IF NOT EXISTS qm_health_sample_boot ON qm_health_sample(boot_id, ts DESC)")
+  db.exec("CREATE INDEX IF NOT EXISTS qm_hangs_ts ON qm_hangs(ts DESC)")
+}
+
+/** Existing ledger files predate percentile/histogram columns. Add them. */
+function ensureHealthPxxColumns(db: Database) {
+  const add = (table: string, column: string, ddl: string): void => {
+    try {
+      if (tableColumns(db, table).includes(column)) return
+      db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`)
+    } catch {
+      // best effort
+    }
+  }
+  const pxx = ["p50", "p90", "p95", "p99"]
+  for (const col of ["lag_max", ...pxx.map((p) => `lag_${p}`), ...pxx.map((p) => `req_${p}`), ...pxx.map((p) => `q_${p}`), ...pxx.map((p) => `tick_${p}`), ...pxx.map((p) => `board_${p}`)]) {
+    add("qm_health_sample", col, "REAL NOT NULL DEFAULT 0")
+  }
+  for (const col of [...pxx, "hist"]) {
+    add("qm_health_route", col, col === "hist" ? "TEXT" : "REAL NOT NULL DEFAULT 0")
+    add("qm_health_query", col, col === "hist" ? "TEXT" : "REAL NOT NULL DEFAULT 0")
+  }
+  for (const table of ["qm_health_minute", "qm_health_route_minute", "qm_health_query_minute"]) {
+    const cols = table === "qm_health_minute"
+      ? [...pxx.map((p) => `lag_${p}`), ...pxx.map((p) => `req_${p}`), ...pxx.map((p) => `q_${p}`), ...pxx.map((p) => `tick_${p}`), ...pxx.map((p) => `board_${p}`)]
+      : [...pxx]
+    for (const col of cols) add(table, col, "REAL NOT NULL DEFAULT 0")
+  }
 }
 
 function migrateRoundSource(db: Database) {
