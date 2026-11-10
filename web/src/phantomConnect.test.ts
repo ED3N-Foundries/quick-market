@@ -14,6 +14,7 @@ import {
   phantomInjected,
   providerFault,
   requestPhantomAccounts,
+  shortWalletFault,
   shouldAddChain,
   SIGN_PROMPT,
   swallowedConnectError,
@@ -137,6 +138,20 @@ test("providerFault names Phantom and keeps the unexpected error", () => {
   expect(providerFault(new Error("Failed to connect to any supported wallet provider"), "Phantom eth_requestAccounts")).toBe(
     "Phantom eth_requestAccounts: Failed to connect to any supported wallet provider",
   )
+})
+
+test("shortWalletFault keeps a stable short line and the full detail", () => {
+  expect(shortWalletFault("Phantom eth_requestAccounts: Ethereum provider not found on window.phantom.")).toBe(
+    "Phantom Wallet not found",
+  )
+  expect(shortWalletFault("Phantom is not ready")).toBe("Phantom Wallet not found")
+  expect(shortWalletFault("Phantom eth_requestAccounts: Failed to connect to any supported wallet provider")).toBe(
+    "Phantom connection failed",
+  )
+  expect(shortWalletFault("Quick Market: Sign-in expired")).toBe("Quick Market: Sign-in expired")
+  const long = `Phantom personal_sign: ${"x".repeat(200)}`
+  expect(shortWalletFault(long).endsWith("...")).toBe(true)
+  expect(shortWalletFault(long).length).toBeLessThanOrEqual(80)
 })
 
 test("requestPhantomAccounts reads the injected provider and drops empty entries", async () => {

@@ -49,7 +49,7 @@ import { useMarket } from "./useMarket"
 import { FeedBadge } from "./venues"
 import { prefersReducedMotion } from "./sideFigures"
 import { useSideBook } from "./useSideBook"
-import { grantWaitStatus, loginStatus, loginSteps, loginStepState, SIGN_PROMPT } from "./phantomConnect"
+import { grantWaitStatus, loginStatus, loginSteps, loginStepState, shortWalletFault, SIGN_PROMPT } from "./phantomConnect"
 import { useSession } from "./wallet"
 
 export function App({ initialConfig }: { initialConfig: Config }) {
@@ -316,7 +316,7 @@ export function App({ initialConfig }: { initialConfig: Config }) {
     ? text.pleaseWait
     : !session.address && session.connectMode === "deeplink"
       ? text.openInPhantom
-      : text.signIn
+      : text.connectPhantom
 
   async function onWithdraw() {
     if (withdrawing) return
@@ -524,7 +524,8 @@ export function App({ initialConfig }: { initialConfig: Config }) {
                   onClick={session.login}
                   disabled={session.signing || session.chainError !== null}
                 >
-                  {loginLabel}
+                  <PhantomMark />
+                  <span>{loginLabel}</span>
                 </button>
               </span>
             ) : (
@@ -601,27 +602,43 @@ export function App({ initialConfig }: { initialConfig: Config }) {
               </span>
             )}
           </div>
-          {session.signing && session.loginPhase && !grantPending && (
-            <WaitNote text={loginStatus(session.loginPhase, testnet, lang, market.config.chainKey)} steps={loginSteps(testnet, lang)} phase={session.loginPhase} />
-          )}
-          {(grantPending || (testnet && funding)) && (
-            <GrantFollow
-              startedAt={grantPending?.startedAt ?? grantStartedAt ?? now}
-              txHash={grantPending?.txHash || grantTx}
-              seen={grantSeen}
-              needed={grantPending?.confirmations ?? grantNeeded}
-              chainId={market.config.chainId}
-              chainKey={market.config.chainKey}
-              now={now}
-            />
-          )}
-          {testnet && grantTx && !grantPending && !funding && (
-            <GrantTxLink chainId={market.config.chainId} chainKey={market.config.chainKey} txHash={grantTx} />
-          )}
-          {session.connectError && <p className="note bad connect-error">{localize(lang, session.connectError)}</p>}
-          {!session.token && session.signError && session.signError !== SIGN_PROMPT && (
-            <p className="note bad connect-error">{localize(lang, session.signError)}</p>
-          )}
+          {(() => {
+            const loginPhase = !grantPending ? session.loginPhase : null
+            const signing = session.signing && loginPhase !== null
+            const granting = grantPending || (testnet && funding)
+            const txOnly = testnet && grantTx && !grantPending && !funding
+            const rawError =
+              session.connectError ??
+              (!session.token && session.signError && session.signError !== SIGN_PROMPT ? session.signError : null)
+            const state = signing ? "signing" : granting ? "grant" : rawError ? "error" : txOnly ? "tx" : "idle"
+            return (
+              <div className="wallet-status" data-state={state}>
+                {signing && loginPhase && (
+                  <WaitNote
+                    text={loginStatus(loginPhase, testnet, lang, market.config.chainKey)}
+                    steps={loginSteps(testnet, lang)}
+                    phase={loginPhase}
+                  />
+                )}
+                {granting && (
+                  <GrantFollow
+                    startedAt={grantPending?.startedAt ?? grantStartedAt ?? now}
+                    txHash={grantPending?.txHash || grantTx}
+                    seen={grantSeen}
+                    needed={grantPending?.confirmations ?? grantNeeded}
+                    chainId={market.config.chainId}
+                    chainKey={market.config.chainKey}
+                    now={now}
+                  />
+                )}
+                {txOnly && (
+                  <GrantTxLink chainId={market.config.chainId} chainKey={market.config.chainKey} txHash={grantTx} />
+                )}
+                {rawError && <WalletError short={shortWalletFault(rawError)} detail={rawError} />}
+                {state === "idle" && <span className="wallet-status-idle" aria-hidden="true" />}
+              </div>
+            )
+          })()}
           <BalanceFigure micros={shownMicros} markRef={balanceMark} />
           {!holdStake && testnet && market.config.grantIntervalMs > 0 && grantKnown &&
             (grantWait.due ? (
@@ -1265,6 +1282,64 @@ function QmMark() {
   )
 }
 
+function PhantomMark() {
+  return (
+    <svg className="phantom-mark" viewBox="0 0 24 24" aria-hidden="true">
+      <path
+        fill="#AB9FF2"
+        d="M12 2C7.6 2 4 5.6 4 10c0 1.9.7 3.6 1.8 5 .3.4.4.9.3 1.4l-.6 2.4c-.1.5.4.9.9.7l2.1-1c.4-.2.9-.2 1.3 0l1.2.6c.6.3 1.4.3 2 0l1.2-.6c.4-.2.9-.2 1.3 0l2.1 1c.5.2 1-.2.9-.7l-.6-2.4c-.1-.5 0-1 .3-1.4 1.1-1.4 1.8-3.1 1.8-5 0-4.4-3.6-8-8-8Z"
+      />
+      <circle cx="9.2" cy="10" r="1.3" fill="#0c0d11" />
+      <circle cx="14.8" cy="10" r="1.3" fill="#0c0d11" />
+    </svg>
+  )
+}
+
+function WalletError({ short, detail }: { short: string; detail: string }) {
+  const { lang, text } = useI18n()
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!open) return
+    const onPointerDown = (event: PointerEvent) => {
+      if (ref.current && !ref.current.contains(event.target as Node)) setOpen(false)
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false)
+    }
+    document.addEventListener("pointerdown", onPointerDown)
+    window.addEventListener("keydown", onKeyDown)
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown)
+      window.removeEventListener("keydown", onKeyDown)
+    }
+  }, [open])
+  const shortText = localize(lang, short)
+  const fullText = localize(lang, detail)
+  return (
+    <div className="wallet-error" ref={ref} data-open={open ? "1" : "0"}>
+      <span className="wallet-error-text note bad" title={fullText}>
+        {shortText}
+      </span>
+      <button
+        type="button"
+        className="plain error-info"
+        aria-label={text.errorDetails}
+        aria-expanded={open}
+        aria-haspopup="dialog"
+        onClick={() => setOpen((value) => !value)}
+      >
+        ⓘ
+      </button>
+      {open && (
+        <div className="error-pop" role="dialog" aria-label={text.errorDetails}>
+          <p>{fullText}</p>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function AddressWithHover({ address, label }: { address: string; label?: string | null }) {
   return (
     <span className="addr-hover" title={address}>
@@ -1609,12 +1684,16 @@ function GrantTxLink({ chainId, txHash, chainKey }: { chainId: number; txHash: s
   const txUrl = grantTxUrl(chainId, txHash, chainKey)
   if (txUrl) {
     return (
-      <a className="grant-tx" href={txUrl} target="_blank" rel="noreferrer">
+      <a className="grant-tx" href={txUrl} target="_blank" rel="noreferrer" title={txHash}>
         {txHash}
       </a>
     )
   }
-  return <p className="grant-tx">{txHash}</p>
+  return (
+    <p className="grant-tx" title={txHash}>
+      {txHash}
+    </p>
+  )
 }
 
 function GrantFollow({
@@ -1657,6 +1736,9 @@ function WaitNote({
   steps?: readonly string[]
   phase?: "phantom" | "sign" | "session"
 }) {
+  const { text: copy } = useI18n()
+  const current = phase === "phantom" ? 0 : phase === "sign" ? 1 : 2
+  const active = steps && phase ? steps[current] : null
   return (
     <p className="wait-status" role="status" aria-live="polite">
       <span className="wait-spin" aria-hidden="true" />
@@ -1664,17 +1746,17 @@ function WaitNote({
         <span key={text} className="wait-copy">
           {text}
         </span>
-        {steps && phase && (
-          <span className="wait-steps" aria-hidden="true">
-            {steps.map((step, index) => {
-              const state = loginStepState(index, phase)
-              return (
-                <span key={step} data-state={state}>
-                  <span className="step-check" />
-                  {step}
-                </span>
-              )
-            })}
+        {steps && phase && active && (
+          <span className="wait-carousel">
+            <span key={`${phase}-${active}`} className="wait-step">
+              <span className="wait-eyebrow">{copy.stepOf(current + 1, steps.length)}</span>
+              <span className="wait-current">{active}</span>
+            </span>
+            <span className="wait-dots" aria-hidden="true">
+              {steps.map((step, index) => (
+                <span key={step} data-state={loginStepState(index, phase)} />
+              ))}
+            </span>
           </span>
         )}
       </span>

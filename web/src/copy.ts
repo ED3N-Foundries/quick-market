@@ -155,6 +155,11 @@ export type Copy = {
   confirmationsIn: string
   waitingOne: string
   waitingMany: (left: number) => string
+  connectPhantom: string
+  phantomNotFound: string
+  phantomConnectFailed: string
+  errorDetails: string
+  stepOf: (current: number, total: number) => string
 }
 
 const en: Copy = {
@@ -321,6 +326,11 @@ const en: Copy = {
   confirmationsIn: "Confirmations in. Crediting the balance.",
   waitingOne: "Waiting on 1 confirmation",
   waitingMany: (left) => `Waiting on ${left} confirmations`,
+  connectPhantom: "Connect Phantom",
+  phantomNotFound: "Phantom Wallet not found",
+  phantomConnectFailed: "Phantom connection failed",
+  errorDetails: "Error details",
+  stepOf: (current, total) => `Step ${current} of ${total}`,
 }
 
 const zhTW: Copy = {
@@ -487,6 +497,11 @@ const zhTW: Copy = {
   confirmationsIn: "確認已完成。正在入帳。",
   waitingOne: "還差 1 次確認",
   waitingMany: (left) => `還差 ${left} 次確認`,
+  connectPhantom: "連接 Phantom",
+  phantomNotFound: "找不到 Phantom 錢包",
+  phantomConnectFailed: "Phantom 連線失敗",
+  errorDetails: "錯誤詳情",
+  stepOf: (current, total) => `步驟 ${current}／${total}`,
 }
 
 export function copy(lang: Lang): Copy {
@@ -499,6 +514,8 @@ const zhFixed: Record<string, string> = {
   "This network is not available in Phantom.": "Phantom 沒有這個網路。",
   "Could not switch network": "無法切換網路",
   "Sign-in failed": "登入失敗",
+  "Phantom Wallet not found": "找不到 Phantom 錢包",
+  "Phantom connection failed": "Phantom 連線失敗",
   "Phantom is not ready": "Phantom 尚未就緒",
   "Phantom needs an https link to this page.": "Phantom 需要這個頁面的 https 連結。",
   "Amount is invalid": "金額無效",

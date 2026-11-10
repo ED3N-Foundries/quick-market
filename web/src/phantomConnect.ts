@@ -271,6 +271,26 @@ export function providerFault(error: unknown, source: string): string {
   return `${source}: ${message}${code}${data}`
 }
 
+/** Short, stable line for the wallet status slot. The full `providerFault` string stays as the detail. */
+export const PHANTOM_NOT_FOUND_SHORT = "Phantom Wallet not found"
+export const PHANTOM_CONNECT_FAILED_SHORT = "Phantom connection failed"
+
+export function shortWalletFault(full: string): string {
+  const lower = full.toLowerCase()
+  if (
+    lower.includes("ethereum provider not found") ||
+    lower.includes("phantom is not ready") ||
+    lower.includes("phantom is not connected") ||
+    lower.includes("no ethereum account")
+  ) {
+    return PHANTOM_NOT_FOUND_SHORT
+  }
+  if (lower.includes("failed to connect")) return PHANTOM_CONNECT_FAILED_SHORT
+  const line = full.split("\n")[0]?.trim() ?? ""
+  if (!line) return "Sign-in failed"
+  return line.length > 80 ? `${line.slice(0, 77)}...` : line
+}
+
 /** Phantom EIP-1193 4100, including viem's wrapper around that code. */
 export function isUnauthorized(error: unknown): boolean {
   if (!error || typeof error !== "object") return false
