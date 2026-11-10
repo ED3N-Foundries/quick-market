@@ -414,35 +414,6 @@ body {
 .error-dot[data-open="1"] .error-dot-btn {
   border-color: rgba(255, 90, 79, 0.5);
 }
-.app button.fund-plus {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: none;
-  width: 26px;
-  height: 26px;
-  padding: 0;
-  border-radius: 999px;
-  color: var(--text);
-  font-size: 16px;
-  font-weight: 400;
-  line-height: 1;
-  letter-spacing: 0;
-  text-transform: none;
-}
-.app button.fund-plus[data-grant="due"] {
-  border-color: var(--up);
-  color: var(--up);
-  animation: grant-pulse 1.6s ease-out infinite;
-}
-@keyframes grant-pulse {
-  0% { box-shadow: 0 0 0 0 rgba(47, 206, 134, 0.55); }
-  70% { box-shadow: 0 0 0 7px rgba(47, 206, 134, 0); }
-  100% { box-shadow: 0 0 0 0 rgba(47, 206, 134, 0); }
-}
-@media (prefers-reduced-motion: reduce) {
-  .app button.fund-plus[data-grant="due"] { animation: none; }
-}
 .addr-hover {
   position: relative;
   display: inline-flex;
@@ -576,54 +547,73 @@ body {
   overflow: auto;
 }
 
-/* Overlay toasts: progress and errors float above the layout. */
+/* Overlay toasts: same pill language as the market notice pops, centered
+   below the layout. Smaller type and a softer shadow keep them readable
+   without overpowering the result pops anchored to the balance. */
 .toast-stack {
   position: fixed;
   z-index: 60;
-  right: 16px;
+  left: 50%;
+  right: auto;
   bottom: 16px;
+  transform: translateX(-50%);
   display: flex;
   flex-direction: column;
+  align-items: center;
   gap: 8px;
-  width: min(340px, calc(100vw - 32px));
+  width: max-content;
+  max-width: min(360px, calc(100vw - 32px));
 }
 .toast {
+  --pop-fill: var(--warn);
+  --pop-ink: var(--warn-ink);
   display: flex;
-  align-items: flex-start;
+  align-items: center;
+  justify-content: center;
   gap: 8px;
-  padding: 10px 12px;
-  border-radius: 12px;
-  border: 1px solid var(--line);
-  background: #0c0d11;
-  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.55);
-  color: var(--text);
-  font-size: 13px;
-  line-height: 1.4;
+  width: max-content;
+  max-width: 100%;
+  margin: 0 auto;
+  padding: 7px 12px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--pop-fill) 55%, white);
+  background: var(--pop-fill);
+  color: var(--pop-ink);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.45);
+  font-size: 14px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  line-height: 1.25;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
   animation: toast-in 240ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
-.toast[data-kind="ok"] { border-color: rgba(47, 206, 134, 0.45); }
-.toast[data-kind="error"] { border-color: rgba(255, 90, 79, 0.5); }
+.toast[data-kind="ok"] { --pop-fill: var(--up); --pop-ink: var(--up-ink); }
+.toast[data-kind="error"] { --pop-fill: var(--down); --pop-ink: var(--down-ink); }
+.toast[data-kind="progress"] { --pop-fill: var(--warn); --pop-ink: var(--warn-ink); }
 .toast .wait-spin {
   width: 12px;
   height: 12px;
-  margin-top: 3px;
+  margin-top: 0;
+  border-color: rgba(0, 0, 0, 0.22);
+  border-top-color: currentColor;
 }
 .toast-dot {
   width: 8px;
   height: 8px;
-  margin-top: 5px;
+  margin-top: 0;
   flex: none;
   border-radius: 50%;
-  background: var(--muted);
+  background: currentColor;
 }
-.toast-dot[data-kind="ok"] { background: var(--up); }
-.toast-dot[data-kind="error"] { background: var(--down); }
 .toast-body {
   flex: 1 1 auto;
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  align-items: center;
+  gap: 2px;
+  text-align: center;
 }
 .toast-text { overflow-wrap: anywhere; }
 .toast-tx {
@@ -632,12 +622,14 @@ body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  color: var(--muted);
+  color: currentColor;
+  opacity: 0.8;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 11px;
+  font-weight: 500;
   text-decoration: none;
 }
-a.toast-tx:hover { color: var(--text); }
+a.toast-tx:hover { opacity: 1; }
 .app button.toast-close {
   flex: none;
   width: 22px;
@@ -646,14 +638,14 @@ a.toast-tx:hover { color: var(--text); }
   border-radius: 999px;
   border-color: transparent;
   background: none;
-  color: var(--muted);
+  color: currentColor;
+  opacity: 0.7;
   font-size: 14px;
   line-height: 1;
   display: inline-grid;
   place-items: center;
-  opacity: 1;
 }
-.app button.toast-close:hover { color: var(--text); }
+.app button.toast-close:hover { opacity: 1; color: inherit; }
 @keyframes toast-in {
   from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: none; }
@@ -1712,10 +1704,12 @@ tr.open td { color: var(--text); }
     height: 20px;
   }
   .toast-stack {
-    left: 12px;
-    right: 12px;
+    left: 50%;
+    right: auto;
     bottom: 12px;
-    width: auto;
+    transform: translateX(-50%);
+    width: max-content;
+    max-width: calc(100vw - 24px);
   }
   .footer-bar { align-items: flex-end; }
   .share { font-size: 38px; margin-top: 6px; }

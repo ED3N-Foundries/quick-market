@@ -328,7 +328,6 @@ export function App({ initialConfig }: { initialConfig: Config }) {
   const grantPending = you?.grantPending ?? null
   const grantInFlight = funding || grantPending !== null
   const holdStake = session.signing || grantPending !== null
-  const grantReady = grantKnown && testnet && market.config.grantIntervalMs > 0 && grantWait.due && !grantInFlight
   const isNearChain = market.config.chainKey === "near-testnet"
   // Minting status lives in a toast with a clickable confirmation link, so the
   // stake column never resizes while a grant is in flight.
@@ -624,17 +623,6 @@ export function App({ initialConfig }: { initialConfig: Config }) {
                     {session.address}
                   </span>
                 </button>
-                <button
-                  type="button"
-                  className="fund-plus"
-                  data-grant={grantReady ? "due" : "wait"}
-                  aria-label={grantReady ? text.grantReady : market.config.chainKey === "near-testnet" ? text.grantNear : testnet ? text.grantQm : text.depositUsdc}
-                  title={grantReady ? text.grantReady : testnet ? text.grant : text.deposit}
-                  onClick={openGrant}
-                  disabled={!session.token || grantInFlight}
-                >
-                  {"+"}
-                </button>
                 {session.connectError && (
                   <ErrorDot short={shortWalletFault(session.connectError)} detail={session.connectError} />
                 )}
@@ -645,7 +633,6 @@ export function App({ initialConfig }: { initialConfig: Config }) {
                       {session.address}
                     </p>
                     <div className="wallet-menu-net">
-                      <TokenBadge kind={testnet ? "qm" : "circle"} chainKey={market.config.chainKey} />
                       <span className="net-badge" data-testnet={isTestnetChain(market.config.chainId, market.config.chainKey) ? "1" : "0"}>
                         <ChainLogo chainKey={market.config.chainKey} className="chain-mark" />
                         {session.signing ? text.pleaseWait : chainMenuLabel(market.config.chainId, market.config.chainName, lang, market.config.chainKey)}
