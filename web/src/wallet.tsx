@@ -517,6 +517,14 @@ function Bridge({ children, chain, wagmiConfig }: { children: ReactNode; chain: 
       busy.current = false
       setSigning(false)
       setLoginPhase(null)
+      // Browse leaves Safari. iOS opens that link from a button tap, so a rejected session waits.
+      const action = loginAction({
+        mobile: isMobileDevice(),
+        injected: phantomInjected(window),
+        connected: Boolean(sdkRef.current?.isConnected()),
+        sessionMatches: false,
+      })
+      if (action === "browse") return
       beginLogin()
     },
     deposit: async (amount, treasury, usdc, chainId) => {

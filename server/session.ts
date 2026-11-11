@@ -118,6 +118,8 @@ export async function openSession(input: {
 }
 
 export function readSessionToken(token: unknown, now = Date.now()): { address: string | null; rejected: boolean } {
+  // A hello with no token is an anonymous visitor. Only a token that was sent can be rejected.
+  if (token == null) return { address: null, rejected: false }
   if (typeof token !== "string" || !/^[0-9a-f]{64}$/i.test(token)) return { address: null, rejected: true }
   const row = getDb()
     .query("SELECT address, expires_at FROM sessions WHERE chain_key = ? AND token = ?")

@@ -518,39 +518,6 @@ export function App({ initialConfig }: { initialConfig: Config }) {
         <p className="note bad">{text.pageChain(session.pageChain.name, market.config.chainName)}</p>
       )}
 
-      {!session.token && (
-        <div className="connect-bar">
-          <button
-            type="button"
-            className="primary connect-bar-btn"
-            data-busy={session.signing ? "1" : "0"}
-            title={session.chainError ?? undefined}
-            onClick={session.login}
-            disabled={session.signing || session.chainError !== null}
-          >
-            {session.signing && session.loginPhase ? (
-              <>
-                <span className="wait-spin" aria-hidden="true" />
-                <span
-                  key={session.loginPhase}
-                  className="connect-label"
-                  role="status"
-                  title={loginStatus(session.loginPhase, testnet, lang, market.config.chainKey)}
-                >
-                  {loginStatus(session.loginPhase, testnet, lang, market.config.chainKey)}
-                </span>
-              </>
-            ) : (
-              <>
-                {isNearChain ? <NearLogo className="logo-mark" /> : <PhantomLogo className="logo-mark" />}
-                <span className="connect-label">{loginLabel}</span>
-              </>
-            )}
-          </button>
-          {connectRawError && <ErrorDot short={shortWalletFault(connectRawError)} detail={connectRawError} />}
-        </div>
-      )}
-
       <section
         className="chart-wrap"
         data-loading={handoff || reconnecting ? "1" : undefined}
@@ -741,7 +708,40 @@ export function App({ initialConfig }: { initialConfig: Config }) {
               </span>
             ) : null}
           </div>
-          <BalanceFigure micros={shownMicros} markRef={balanceMark} />
+          {!session.token ? (
+            <div className="balance-signin-row">
+              <button
+                type="button"
+                className="primary balance-signin"
+                data-busy={session.signing ? "1" : "0"}
+                title={session.chainError ?? undefined}
+                onClick={session.login}
+                disabled={session.signing || session.chainError !== null}
+              >
+                {session.signing && session.loginPhase ? (
+                  <>
+                    <span className="wait-spin" aria-hidden="true" />
+                    <span
+                      key={session.loginPhase}
+                      className="connect-label"
+                      role="status"
+                      title={loginStatus(session.loginPhase, testnet, lang, market.config.chainKey)}
+                    >
+                      {loginStatus(session.loginPhase, testnet, lang, market.config.chainKey)}
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    {isNearChain ? <NearLogo className="logo-mark" /> : <PhantomLogo className="logo-mark" />}
+                    <span className="connect-label">{loginLabel}</span>
+                  </>
+                )}
+              </button>
+              {connectRawError && <ErrorDot short={shortWalletFault(connectRawError)} detail={connectRawError} />}
+            </div>
+          ) : (
+            <BalanceFigure micros={shownMicros} markRef={balanceMark} />
+          )}
           {!holdStake && testnet && market.config.grantIntervalMs > 0 && grantKnown &&
             (grantWait.due ? (
               <button

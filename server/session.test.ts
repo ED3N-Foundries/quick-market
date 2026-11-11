@@ -2,11 +2,11 @@ import { beforeEach, expect, test } from "bun:test"
 import * as ed from "@noble/ed25519"
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts"
 import { chainFromEnv } from "../shared/chain"
-import { loginMessage, nearLoginMessage } from "../shared/login"
+import { loginMessage, nearLoginMessage, SESSION_MS } from "../shared/login"
 import { marketPreferences } from "../shared/market"
 import { NEP413_RECIPIENT, bs58, generateNearSecret, nep413Bytes, seedFromSecret } from "../shared/nearKey"
 import { getDb, useDatabase } from "./db"
-import { openSession } from "./session"
+import { openSession, readSessionToken } from "./session"
 
 beforeEach(() => {
   marketPreferences.chain = "base-sepolia"
@@ -72,6 +72,20 @@ test("the agent secret marks a bot and a wrong secret does not", async () => {
   expect(humanRow.is_bot).toBe(0)
 })
 
+
+test("a missing hello token is anonymous and a bad token is rejected", async () => {
+  const chain = chainFromEnv("base-sepolia")
+  const { account, signature, issued } = await sign(chain.id)
+  const opened = await openSession({ address: account.address, signature, issued, now: issued })
+  expect(opened.ok).toBe(true)
+  if (!opened.ok) return
+  const address = account.address.toLowerCase()
+  expect(readSessionToken(undefined, issued)).toEqual({ address: null, rejected: false })
+  expect(readSessionToken(null, issued)).toEqual({ address: null, rejected: false })
+  expect(readSessionToken("nope", issued)).toEqual({ address: null, rejected: true })
+  expect(readSessionToken(opened.token, issued)).toEqual({ address, rejected: false })
+  expect(readSessionToken(opened.token, issued + SESSION_MS)).toEqual({ address: null, rejected: true })
+})
 
 test("a NEAR NEP-413 signature opens a session only with its nonce", async () => {
   const previousKey = process.env.TREASURY_PRIVATE_KEY

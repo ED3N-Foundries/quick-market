@@ -341,38 +341,40 @@ body {
   font-size: 10px;
   line-height: 1;
 }
-.connect-bar {
+.balance-signin-row {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin: 0 0 12px;
+  height: var(--balance-line);
+  margin: 6px 0 0;
 }
-.app button.connect-bar-btn {
+.app button.balance-signin {
   display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 10px;
+  justify-content: flex-start;
+  gap: 8px;
   flex: 1 1 auto;
   width: 100%;
   min-width: 0;
-  height: 48px;
-  padding: 0 16px;
-  border-radius: 14px;
-  font-size: 16px;
+  height: 100%;
+  margin: 0;
+  padding: 0 12px;
+  border-radius: 12px;
+  font-size: 15px;
   font-weight: 700;
   line-height: 1;
   letter-spacing: 0;
   text-transform: none;
 }
-.app button.connect-bar-btn .wait-spin {
-  width: 16px;
-  height: 16px;
+.app button.balance-signin .wait-spin {
+  width: 14px;
+  height: 14px;
   margin-top: 0;
   border-color: rgba(17, 17, 17, 0.25);
   border-top-color: currentColor;
 }
-.app button.connect-bar-btn .logo-mark { width: 20px; height: 20px; }
-.app button.connect-bar-btn[data-busy="1"]:disabled { opacity: 1; }
+.app button.balance-signin .logo-mark { width: 18px; height: 18px; }
+.app button.balance-signin[data-busy="1"]:disabled { opacity: 1; }
 /* Monochrome brand marks inherit the surrounding text color (offwhite on
    dark surfaces, dark on the light connect pill). */
 .logo-mark {
@@ -1010,7 +1012,10 @@ body {
 .side[data-lock="yours"] button:disabled,
 .side[data-lock="rest"] button:disabled { opacity: 1; cursor: default; }
 
-.stake { padding: 16px 16px 14px; }
+.stake {
+  --balance-line: calc(36px * 1.2);
+  padding: 16px 16px 14px;
+}
 .balance-label { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
 .balance-label .who { flex-wrap: nowrap; }
 .token-badge {
@@ -1057,8 +1062,10 @@ button.grant-status:disabled { cursor: default; }
 .balance {
   width: fit-content;
   max-width: 100%;
+  height: var(--balance-line);
   margin: 6px 0 0;
   font-size: 36px;
+  line-height: var(--balance-line);
   letter-spacing: -0.04em;
   font-variant-numeric: tabular-nums;
   transition: color 180ms ease;
