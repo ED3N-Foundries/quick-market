@@ -27,6 +27,7 @@ import {
 } from "./lag"
 import { parseAmountMicros } from "./format"
 import { grantLanded } from "./grantWatch"
+import { buyIsStuck, shouldReleaseStuckBuy, STUCK_BUY_MS } from "./stuckBuy"
 import type { Handoff, Ticker } from "../../shared/source"
 import { tickerFor } from "../../shared/source"
 import { dismissRound, dueBuyIns, emptyNotices, settleNotice, tickNotices } from "./resultNotice"
@@ -93,6 +94,7 @@ export function useMarket(token: string | null, seed: You | null = null, initial
   const bufferRef = useRef<TapePoint[]>([])
   const seededRef = useRef(false)
   const betLock = useRef(false)
+  const releasingRef = useRef(false)
   const pendingBetRef = useRef<{
     requestId: string
     side: Side
@@ -101,6 +103,7 @@ export function useMarket(token: string | null, seed: You | null = null, initial
     token: string
     snapshot: You
     windowOpen: boolean
+    sentAt: number
   } | null>(null)
   const sendBetRef = useRef<() => void>(() => {})
   const epochRef = useRef<string | null>(null)
@@ -212,7 +215,7 @@ export function useMarket(token: string | null, seed: You | null = null, initial
   }, [])
 
   const reload = useCallback(async (opts?: { tape?: boolean }): Promise<You | null> => {
-    const response = await fetch("/api/state", { headers: headers(tokenRef.current) })
+    const response = await fetch("/api/state", { headers: headers(tokenRef.current), cache: "no-store" })
     if (response.status === 401) {
       setUnauthorized(true)
       setYou(null)
@@ -239,6 +242,30 @@ export function useMarket(token: string | null, seed: You | null = null, initial
     return body.you ?? null
   }, [acceptYou, applySeed, markConfirmed, noteServerNow])
   reloadRef.current = reload
+
+  // Drop a buy whose result will never arrive. The server account from this
+  // reload is the position: the bet is in openBuyIns, or it is not.
+  const recoverBuy = useCallback(async () => {
+    if (releasingRef.current) return false
+    if (!betLock.current && pendingBetRef.current == null) return false
+    releasingRef.current = true
+    const saved = pendingBetRef.current
+    pendingBetRef.current = null
+    try {
+      await reload()
+      if (!shouldReleaseStuckBuy({ pending: true, releaseRequested: true, serverYouApplied: true })) return false
+      betLock.current = false
+      setPending(false)
+      return true
+    } catch {
+      if (pendingBetRef.current == null) pendingBetRef.current = saved
+      return false
+    } finally {
+      releasingRef.current = false
+    }
+  }, [reload])
+  const recoverBuyRef = useRef(recoverBuy)
+  recoverBuyRef.current = recoverBuy
 
   const loadTape = useCallback(async (from: number, to: number) => {
     const chart = chartRef.current
@@ -338,7 +365,7 @@ export function useMarket(token: string | null, seed: You | null = null, initial
     if (!token) setYou(null)
     const seen = youEpoch.current
     let cancel = false
-    fetch("/api/state", { headers: headers(token) })
+    fetch("/api/state", { headers: headers(token), cache: "no-store" })
       .then(async (response) => {
         if (response.status === 401) {
           if (!cancel) {
@@ -584,45 +611,61 @@ export function useMarket(token: string | null, seed: You | null = null, initial
       }
     }
 
-    function wake() {
+    let hiddenAt: number | null = null
+
+    function wake(persisted: boolean) {
       if (stopped) return
       const now = Date.now()
       if (now - wokeAt < 50) return
       wokeAt = now
       probeRef.current = noteHidden(probeRef.current)
       setPulse((value) => value + 1)
-      const action = wakeAction({
-        phase: socketPhase(socket ? socket.readyState : null),
-        lastInboundAt: lastInboundRef.current,
-        openedAt: openedAtRef.current,
-        now,
-        connectingSince: connectingSinceRef.current,
-      })
-      if (action === "replace") {
-        connect()
-        return
+      // A socket that stayed "open" across a hide is a zombie in Phantom's
+      // webview. Replace it instead of probing a connection that will not answer.
+      const openedBeforeHide = hiddenAt != null && openedAtRef.current != null && openedAtRef.current <= hiddenAt
+      hiddenAt = null
+      const action =
+        persisted || openedBeforeHide
+          ? "replace"
+          : wakeAction({
+              phase: socketPhase(socket ? socket.readyState : null),
+              lastInboundAt: lastInboundRef.current,
+              openedAt: openedAtRef.current,
+              now,
+              connectingSince: connectingSinceRef.current,
+            })
+      const recover = betLock.current || pendingBetRef.current != null
+      if (recover) pendingBetRef.current = null
+      if (action === "replace") connect()
+      else {
+        const hole = silenceMs(lastInboundRef.current, openedAtRef.current, now)
+        if (hole != null && hole >= 5_000 && socket?.readyState === WebSocket.OPEN) requestSnapshot()
+        if (action === "probe" && socket && socket.readyState === WebSocket.OPEN) sendProbe(socket, true)
       }
-      const hole = silenceMs(lastInboundRef.current, openedAtRef.current, now)
-      if (hole != null && hole >= 5_000 && socket?.readyState === WebSocket.OPEN) requestSnapshot()
-      if (action === "probe" && socket && socket.readyState === WebSocket.OPEN) sendProbe(socket, true)
+      void (recover ? recoverBuyRef.current() : reloadRef.current().catch(() => {}))
     }
 
     const onVisibility = () => {
       if (document.visibilityState === "hidden") {
+        hiddenAt = Date.now()
         probeRef.current = noteHidden(probeRef.current)
         return
       }
-      wake()
+      wake(false)
     }
-    const onResume: EventListener = () => wake()
+    const onPageShow = (event: Event) => {
+      wake(event instanceof PageTransitionEvent && event.persisted)
+    }
+    const onResume: EventListener = () => wake(false)
 
     sendBetRef.current = () => {
       if (socket?.readyState === WebSocket.OPEN) sendPending(socket)
     }
     replaceRef.current = connect
+    const onOnline = () => wake(false)
     document.addEventListener("visibilitychange", onVisibility)
-    window.addEventListener("pageshow", wake)
-    window.addEventListener("online", wake)
+    window.addEventListener("pageshow", onPageShow)
+    window.addEventListener("online", onOnline)
     ;(document as EventTarget).addEventListener("resume", onResume)
     connect()
     return () => {
@@ -634,14 +677,22 @@ export function useMarket(token: string | null, seed: You | null = null, initial
       sendBetRef.current = () => {}
       replaceRef.current = () => {}
       document.removeEventListener("visibilitychange", onVisibility)
-      window.removeEventListener("pageshow", wake)
-      window.removeEventListener("online", wake)
+      window.removeEventListener("pageshow", onPageShow)
+      window.removeEventListener("online", onOnline)
       ;(document as EventTarget).removeEventListener("resume", onResume)
       if (socket) detach(socket)
       socketRef.current = null
       connectingSinceRef.current = null
     }
   }, [pushTick, noteServerNow, token, acceptAccount, acceptSnapshot, acceptYou, markConfirmed])
+
+  useEffect(() => {
+    if (!pending) return
+    const id = window.setTimeout(() => {
+      void recoverBuyRef.current()
+    }, STUCK_BUY_MS)
+    return () => window.clearTimeout(id)
+  }, [pending])
 
   const openKey = you?.openBuyIns.map((bet) => bet.roundId).join(",") ?? ""
   const caught = useRef("")
@@ -683,7 +734,18 @@ export function useMarket(token: string | null, seed: You | null = null, initial
   const place = useCallback(
     async (side: Side, stake: string, roundId: number) => {
       const token = tokenRef.current
-      if (!confirmedRef.current || !token || betLock.current) return
+      if (!confirmedRef.current || !token) return
+      if (betLock.current || pendingBetRef.current) {
+        const bet = pendingBetRef.current
+        const stuck = buyIsStuck({
+          pending: true,
+          sentAt: bet?.sentAt ?? null,
+          now: Date.now(),
+          socketOpen: socketRef.current?.readyState === WebSocket.OPEN,
+        })
+        if (!stuck) return
+        if (!(await recoverBuy())) return
+      }
       const offline = connectionErrorNow()
       if (offline) {
         setError(offline)
@@ -718,13 +780,14 @@ export function useMarket(token: string | null, seed: You | null = null, initial
         token,
         snapshot: current,
         windowOpen,
+        sentAt: Date.now(),
       }
       if (windowOpen) acceptYou(applyBuyIn(current, { side, stakeMicros, roundId }))
       setPending(true)
       setError(null)
       sendBetRef.current()
     },
-    [acceptYou, connectionErrorNow],
+    [acceptYou, connectionErrorNow, recoverBuy],
   )
 
   const claimGrant = useCallback(async (): Promise<
@@ -750,6 +813,13 @@ export function useMarket(token: string | null, seed: You | null = null, initial
       if (body?.you) {
         acceptYou(body.you)
         markConfirmed(true)
+        // The grant account is the balance to spend. A lost buy result must
+        // not keep the buttons disabled after the credit lands.
+        if (shouldReleaseStuckBuy({ pending: betLock.current || pendingBetRef.current != null, releaseRequested: true, serverYouApplied: true })) {
+          pendingBetRef.current = null
+          betLock.current = false
+          setPending(false)
+        }
       }
       const txHash = typeof body?.txHash === "string" && body.txHash.length > 0 ? body.txHash : null
       if (response.status === 401) {
@@ -776,7 +846,14 @@ export function useMarket(token: string | null, seed: You | null = null, initial
       const start = Date.now()
       while (Date.now() - start < GRANT_FOLLOW_MS) {
         const next = await reload().catch(() => null)
-        if (next && grantLanded(beforeGrantAt, next.grantAt)) return next
+        if (next && grantLanded(beforeGrantAt, next.grantAt)) {
+          if (shouldReleaseStuckBuy({ pending: betLock.current || pendingBetRef.current != null, releaseRequested: true, serverYouApplied: true })) {
+            pendingBetRef.current = null
+            betLock.current = false
+            setPending(false)
+          }
+          return next
+        }
         await new Promise((resolve) => setTimeout(resolve, 1_000))
       }
       return null
@@ -819,7 +896,11 @@ export function useMarket(token: string | null, seed: You | null = null, initial
   const connection = connectionState(link, feed)
   const blocked = connection.blocked
   const slow = connection.slow
+  const [seenLive, setSeenLive] = useState(false)
   const wasBlockedRef = useRef(false)
+  useEffect(() => {
+    if (!blocked) setSeenLive(true)
+  }, [blocked])
   useEffect(() => {
     const wasBlocked = wasBlockedRef.current
     wasBlockedRef.current = blocked
@@ -867,6 +948,7 @@ export function useMarket(token: string | null, seed: You | null = null, initial
     token,
     link,
     blocked,
+    seenLive,
     slow,
     connectionReason: connection.reason,
     connectionErrorNow,

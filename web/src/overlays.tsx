@@ -41,6 +41,7 @@ export function FundOverlay({
   disabled,
   customDisabled,
   blocked,
+  notice = blocked,
   error,
   phase,
   hash,
@@ -57,6 +58,7 @@ export function FundOverlay({
   disabled: boolean
   customDisabled: boolean
   blocked: boolean
+  notice?: boolean
   error: string | null
   phase: "idle" | "phantom" | "confirming" | "pending"
   hash: string | null
@@ -132,7 +134,7 @@ export function FundOverlay({
             {text.ledgerWait(hash ? briefTx(hash) : "")}
           </p>
         )}
-        {blocked && (
+        {notice && (
           <p className="note warn" role="status">
             {text.reconnectingMarket} · {text.reconnectingHint}
           </p>
@@ -153,6 +155,7 @@ export function GrantOverlay({
   now,
   granting,
   blocked,
+  notice = blocked,
   error,
   onClose,
   onGrant,
@@ -166,6 +169,7 @@ export function GrantOverlay({
   now: number
   granting: boolean
   blocked: boolean
+  notice?: boolean
   error: string | null
   onClose: () => void
   onGrant: () => void
@@ -212,11 +216,11 @@ export function GrantOverlay({
           className="primary grant-submit"
           onClick={onGrant}
           disabled={granting || !timing.due || blocked}
-          title={blocked ? text.reconnectingMarket : undefined}
+          title={notice ? text.reconnectingMarket : undefined}
         >
           {granting ? text.granting : grantButtonLabel(timing, grantMicros, lang)}
         </button>
-        {blocked && (
+        {notice && (
           <p className="note warn" role="status">
             {text.reconnectingMarket} · {text.reconnectingHint}
           </p>
@@ -238,6 +242,7 @@ export function WithdrawOverlay({
   amount,
   pending,
   blocked,
+  notice = blocked,
   error,
   onAmount,
   onMax,
@@ -254,6 +259,7 @@ export function WithdrawOverlay({
   amount: string
   pending: boolean
   blocked: boolean
+  notice?: boolean
   error: string | null
   onAmount: (value: string) => void
   onMax: () => void
@@ -315,7 +321,7 @@ export function WithdrawOverlay({
           </button>
         </div>
         {chainKey === "near-testnet" ? <p className="note">{text.paysNear}</p> : testnet ? <p className="note">{text.paysQm}</p> : null}
-        {blocked && (
+        {notice && (
           <p className="note warn" role="status">
             {text.reconnectingMarket} · {text.reconnectingHint}
           </p>

@@ -21,6 +21,7 @@ import {
   grantStatusLabel,
   grantTiming,
   isTestnetChain,
+  nextStakeField,
   parseAmountMicros,
   payoutMicros,
   formatClock,
@@ -270,4 +271,16 @@ test("stake quotes name this wallet's return in English and zh-TW", () => {
   const zh = sideOffer({ side: "up", stake, up, down, feeBps: 25, mode: { kind: "preview" }, lang: "zh-TW" })
   expect(zh.you).toBe("你 · $1.00 · 2%")
   expect(zh.quote).toBe("$1.00 可得 $2.95")
+})
+
+test("nextStakeField caps a positive balance and leaves zero alone", () => {
+  expect(nextStakeField({ field: "10", balanceMicros: null, held: null })).toEqual({ field: "10", held: null })
+  expect(nextStakeField({ field: "10", balanceMicros: 0, held: null })).toEqual({ field: "10", held: null })
+  expect(nextStakeField({ field: "10", balanceMicros: 5_000_000, held: null })).toEqual({ field: "5", held: "10" })
+  expect(nextStakeField({ field: "5", balanceMicros: 5_000_000, held: "10" })).toEqual({ field: "5", held: "10" })
+  expect(nextStakeField({ field: "5", balanceMicros: 8_000_000, held: "10" })).toEqual({ field: "8", held: "10" })
+  expect(nextStakeField({ field: "5", balanceMicros: 100_000_000, held: "10" })).toEqual({ field: "10", held: null })
+  expect(nextStakeField({ field: "10", balanceMicros: 100_000_000, held: null })).toEqual({ field: "10", held: null })
+  expect(nextStakeField({ field: "100", balanceMicros: 5_000_000, held: null })).toEqual({ field: "5", held: "100" })
+  expect(nextStakeField({ field: "10.", balanceMicros: 5_000_000, held: null })).toEqual({ field: "10.", held: null })
 })

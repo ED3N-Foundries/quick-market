@@ -351,7 +351,7 @@ body {
 .app button.balance-signin {
   display: flex;
   align-items: center;
-  justify-content: flex-start;
+  justify-content: center;
   gap: 8px;
   flex: 1 1 auto;
   width: 100%;
@@ -568,15 +568,17 @@ body {
   right: auto;
   bottom: 16px;
   transform: translateX(-50%);
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 8px;
   width: min(380px, calc(100vw - 24px));
+  height: 0;
+  pointer-events: none;
 }
 .toast {
   --toast-tone: var(--warn);
-  position: relative;
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  pointer-events: auto;
   display: flex;
   align-items: flex-start;
   gap: 10px;
@@ -1095,7 +1097,7 @@ button.grant-status:disabled { cursor: default; }
   text-transform: none;
   opacity: 1;
 }
-.stake-field input:disabled { color: var(--text); opacity: 1; }
+.stake-field input:disabled { color: var(--text); opacity: 1; cursor: default; }
 .chips, .funds { display: flex; gap: 6px; }
 .chips { margin-top: 8px; }
 .chips button, .funds button { flex: 1; }

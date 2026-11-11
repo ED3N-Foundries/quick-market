@@ -47,6 +47,32 @@ export function microsToInput(micros: number): string {
   return frac ? `${whole}.${frac}` : String(whole)
 }
 
+export type StakeField = { field: string; held: string | null }
+
+/**
+ * Cap a stake field at a positive balance. Zero leaves the typed amount so a
+ * later grant can still buy it. `held` is that typed amount while the field
+ * shows a cap and the user has not typed since.
+ */
+export function nextStakeField(input: {
+  field: string
+  balanceMicros: number | null
+  held: string | null
+}): StakeField {
+  const balance = input.balanceMicros
+  if (balance == null || !Number.isSafeInteger(balance) || balance <= 0) {
+    return { field: input.field, held: input.held }
+  }
+  const intent = input.held ?? input.field
+  const intentMicros = parseAmountMicros(intent)
+  if (intentMicros == null) return { field: input.field, held: null }
+  if (intentMicros <= balance) {
+    if (input.held != null) return { field: input.held, held: null }
+    return { field: input.field, held: null }
+  }
+  return { field: microsToInput(balance), held: input.held ?? input.field }
+}
+
 export function formatSigned(value: number): string {
   if (!Number.isFinite(value)) return "—"
   const abs = Math.abs(value)

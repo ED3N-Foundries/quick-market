@@ -13,11 +13,14 @@ export function History({
   version,
   windowMs,
   blocked,
+  notice,
 }: {
   token: string | null
   version: number
   windowMs: number
   blocked: boolean
+  /** Reconnecting copy. False during the first connection, while buys stay disabled. */
+  notice: boolean
 }) {
   const { lang, text } = useI18n()
   const [mine, setMine] = useState(false)
@@ -83,7 +86,7 @@ export function History({
           {text.myTrades}
         </button>
       </div>
-      {blocked && (
+      {notice && (
         <p className="note warn" role="status">
           {text.reconnectingMarket} · {text.reconnectingHint}
         </p>
@@ -119,7 +122,7 @@ export function History({
                 }}
                 className={replay?.id === row.id ? "open" : ""}
                 data-disabled={blocked ? "1" : undefined}
-                title={blocked ? text.reconnectingMarket : undefined}
+                title={notice ? text.reconnectingMarket : undefined}
               >
                 <td>{formatClock(row.startsAt, lang)}</td>
                 <td className={resultTone(row)}>{resultText(row, text)}</td>

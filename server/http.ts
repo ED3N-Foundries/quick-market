@@ -59,10 +59,10 @@ function useDeps(): HttpDeps {
   return deps
 }
 
-export function json(body: unknown, status = 200) {
+export function json(body: unknown, status = 200, extra?: Record<string, string>) {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { "content-type": "application/json; charset=utf-8" },
+    headers: { "content-type": "application/json; charset=utf-8", ...extra },
   })
 }
 
@@ -228,16 +228,20 @@ function getState(req: Request): Response {
   const session = readSession(req, now)
   if (session.rejected) return json({ error: "Sign in again" }, 401)
   const tailMs = Math.max(30_000, windowMs() * 2, viewMs() * 2)
-  return json({
-    serverNow: now,
-    feed: feedStatus(now),
-    config: http.config(),
-    ticker: tickerNow(),
-    handoff: handoffNow(),
-    board: board(now),
-    you: session.address ? youFor(session.address) : null,
-    tape: tapeRange(now - tailMs, now),
-  })
+  return json(
+    {
+      serverNow: now,
+      feed: feedStatus(now),
+      config: http.config(),
+      ticker: tickerNow(),
+      handoff: handoffNow(),
+      board: board(now),
+      you: session.address ? youFor(session.address) : null,
+      tape: tapeRange(now - tailMs, now),
+    },
+    200,
+    { "cache-control": "no-store" },
+  )
 }
 
 async function postSession(req: Request): Promise<Response> {

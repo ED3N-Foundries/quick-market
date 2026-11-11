@@ -19,6 +19,7 @@ import {
   isTestnetChain,
   microsToInput,
   moneyShare,
+  nextStakeField,
   parseAmountMicros,
   payoutMicros,
   quoteDollar,
@@ -68,6 +69,7 @@ export function App({ initialConfig }: { initialConfig: Config }) {
   const openBuyInsRef = useRef<OpenBuyIn[]>([])
   const [chart, setChart] = useState<TapeChart | null>(null)
   const [stake, setStake] = useState("10")
+  const stakeHeld = useRef<string | null>(null)
   const [windowTick, setWindowTick] = useState(0)
   const baselineRef = useRef<{ roundId: number; side: Side; pool: number } | null>(null)
   const [walletMenuOpen, setWalletMenuOpen] = useState(false)
@@ -269,6 +271,12 @@ export function App({ initialConfig }: { initialConfig: Config }) {
   const balanceMark = useRef<HTMLParagraphElement>(null)
   const board = market.board
   const you = market.you
+  useEffect(() => {
+    if (!market.confirmed || !you) return
+    const next = nextStakeField({ field: stake, balanceMicros: you.balanceMicros, held: stakeHeld.current })
+    stakeHeld.current = next.held
+    if (next.field !== stake) setStake(next.field)
+  }, [market.confirmed, you, stake])
   const cached = session.token && session.address ? readCachedBalance(session.address) : null
   const shownMicros = visibleBalance(market.confirmed, you?.balanceMicros ?? null, cached?.balanceMicros ?? null)
   const openBuyIns = you?.openBuyIns ?? []
@@ -320,7 +328,8 @@ export function App({ initialConfig }: { initialConfig: Config }) {
     downQuote,
   })
   const betRoundId = focus?.id ?? null
-  const reconnecting = market.blocked
+  const paused = market.blocked
+  const lost = market.seenLive && paused
   const degraded = market.slow
   const canBet =
     market.confirmed &&
@@ -330,16 +339,16 @@ export function App({ initialConfig }: { initialConfig: Config }) {
     market.feed === "live" &&
     !market.pending &&
     !handoff &&
-    !reconnecting
+    !paused
   const previewMicros = held ? 0 : (parseAmountMicros(stake) ?? 0)
-  function offerFor(side: Side): { you: string; quote: string } | null {
+  function offerFor(side: Side): { you: string | null; quote: string } | null {
     if (!focus) return null
     if (held && held.side !== side) return null
     const stakeMicros = held ? held.stakeMicros : previewMicros
     if (!(stakeMicros > 0)) return null
     const mark = baselineRef.current
     const baseline = held && mark && mark.roundId === held.roundId && mark.side === side ? mark.pool : null
-    return sideOffer({
+    const offer = sideOffer({
       side,
       stake: stakeMicros,
       up: focus.poolUpMicros,
@@ -348,6 +357,8 @@ export function App({ initialConfig }: { initialConfig: Config }) {
       mode: held ? { kind: "locked", baseline } : { kind: "preview" },
       lang,
     })
+    if (!held) return { you: null, quote: offer.quote }
+    return offer
   }
   const upOffer = offerFor("up")
   const downOffer = offerFor("down")
@@ -427,6 +438,7 @@ export function App({ initialConfig }: { initialConfig: Config }) {
 
   function chip(percent: number) {
     if (!you) return
+    stakeHeld.current = null
     setStake(microsToInput(Math.max(market.config.minStakeMicros, Math.floor((you.balanceMicros * percent) / 100))))
   }
 
@@ -484,8 +496,8 @@ export function App({ initialConfig }: { initialConfig: Config }) {
             <span className="logomark" aria-hidden="true">😭</span>
             Quick Market
           </span>
-          {(reconnecting || degraded) && (
-            <LinkQualityBadge link={market.link} blocked={reconnecting} />
+          {(lost || (market.seenLive && degraded)) && (
+            <LinkQualityBadge link={market.link} blocked={lost} />
           )}
         </div>
         <div className="clock-cluster" data-move={heldSpan?.strike ? "1" : "0"}>
@@ -520,17 +532,17 @@ export function App({ initialConfig }: { initialConfig: Config }) {
 
       <section
         className="chart-wrap"
-        data-loading={handoff || reconnecting ? "1" : undefined}
-        aria-busy={handoff || reconnecting ? true : undefined}
+        data-loading={handoff || paused ? "1" : undefined}
+        aria-busy={handoff || paused ? true : undefined}
         onPointerDown={onPointerDown}
         onPointerMove={(event) => {
-          if (handoffRef.current || reconnecting) return
+          if (handoffRef.current || paused) return
           scrub.move(event)
         }}
         onPointerLeave={scrub.clear}
       >
         <canvas ref={canvasRef} />
-        {chart && !handoff && !reconnecting && (
+        {chart && !handoff && !paused && (
           <ChartOverlay
             chart={chart}
             board={board}
@@ -540,7 +552,7 @@ export function App({ initialConfig }: { initialConfig: Config }) {
             offsetRef={market.offsetRef}
           />
         )}
-        {(handoff || reconnecting) && (
+        {(handoff || paused) && (
           <div className="chart-skeleton" aria-hidden="true">
             <span />
             <span />
@@ -554,7 +566,7 @@ export function App({ initialConfig }: { initialConfig: Config }) {
             <span>{handoffBanner(handoff.from, handoff.to, lang)}</span>
           </p>
         )}
-        {reconnecting && !handoff && (
+        {lost && !handoff && (
           <p className="reconnect-banner" role="status">
             <span className="wait-spin" aria-hidden="true" />
             <span className="reconnect-title">{text.reconnectingMarket}</span>
@@ -563,13 +575,13 @@ export function App({ initialConfig }: { initialConfig: Config }) {
             </span>
           </p>
         )}
-        {market.feed === "stale" && !handoff && !reconnecting && <p className="feed-flag">{text.priceDelayed}</p>}
-        {degraded && !reconnecting && !handoff && (
+        {market.feed === "stale" && !handoff && !paused && <p className="feed-flag">{text.priceDelayed}</p>}
+        {degraded && !paused && !handoff && (
           <p className="feed-flag" data-tone="slow">
             {text.slow} · ↑ {formatLag(market.link.upMs)} ↓ {formatLag(market.link.downMs)}
           </p>
         )}
-        {!following && !rideChart && !reconnecting && (
+        {!following && !rideChart && !paused && (
           <button
             type="button"
             className="now-jump"
@@ -590,7 +602,7 @@ export function App({ initialConfig }: { initialConfig: Config }) {
           share={figures.book.upShare}
           pool={figures.book.upPool}
           you={upOffer?.you ?? null}
-          quote={upOffer?.quote ?? figures.book.upQuote}
+          quote={upOffer?.quote ?? (held ? figures.book.upQuote : "")}
           orders={figures.book.upPlayers}
           fade={figures.fade}
           fadeKey={figures.gen}
@@ -689,7 +701,7 @@ export function App({ initialConfig }: { initialConfig: Config }) {
                           setWithdrawOpen(true)
                         }}
                         disabled={!you}
-                        title={reconnecting ? text.reconnectingMarket : undefined}
+                        title={lost ? text.reconnectingMarket : undefined}
                       >
                         {text.withdraw}
                       </button>
@@ -748,38 +760,41 @@ export function App({ initialConfig }: { initialConfig: Config }) {
                 type="button"
                 className="grant-status"
                 onClick={openGrant}
-                disabled={!session.token || grantInFlight || reconnecting}
-                title={reconnecting ? text.reconnectingMarket : undefined}
+                disabled={!session.token || grantInFlight || paused}
+                title={lost ? text.reconnectingMarket : undefined}
               >
                 {grantStatusLabel(grantWait, market.config.grantMicros, lang)}
               </button>
             ) : (
               <p className="grant-status">{grantStatusLabel(grantWait, market.config.grantMicros, lang)}</p>
             ))}
-          {reconnecting && (
+          {lost && (
             <p className="note warn" role="status">
               {text.reconnectingMarket} · {text.reconnectingHint}
             </p>
           )}
-          {!holdStake && !held && (
+          {!held && (
             <>
               <label className="stake-field">
                 <span>{text.amount}</span>
                 <input
                   inputMode="decimal"
                   value={stake}
-                  onChange={(event) => setStake(event.target.value)}
-                  disabled={!you || reconnecting}
+                  onChange={(event) => {
+                    stakeHeld.current = null
+                    setStake(event.target.value)
+                  }}
+                  disabled={!you || paused || grantInFlight || session.signing}
                 />
               </label>
               <div className="chips">
-                <button type="button" onClick={() => chip(25)} disabled={!you || reconnecting}>
+                <button type="button" onClick={() => chip(25)} disabled={!you || paused || grantInFlight || session.signing}>
                   25%
                 </button>
-                <button type="button" onClick={() => chip(50)} disabled={!you || reconnecting}>
+                <button type="button" onClick={() => chip(50)} disabled={!you || paused || grantInFlight || session.signing}>
                   50%
                 </button>
-                <button type="button" onClick={() => chip(100)} disabled={!you || reconnecting}>
+                <button type="button" onClick={() => chip(100)} disabled={!you || paused || grantInFlight || session.signing}>
                   100%
                 </button>
               </div>
@@ -793,7 +808,7 @@ export function App({ initialConfig }: { initialConfig: Config }) {
           share={figures.book.downShare}
           pool={figures.book.downPool}
           you={downOffer?.you ?? null}
-          quote={downOffer?.quote ?? figures.book.downQuote}
+          quote={downOffer?.quote ?? (held ? figures.book.downQuote : "")}
           orders={figures.book.downPlayers}
           fade={figures.fade}
           fadeKey={figures.gen}
@@ -812,7 +827,8 @@ export function App({ initialConfig }: { initialConfig: Config }) {
           grantAt={grantAt}
           now={now}
           granting={funding}
-          blocked={reconnecting}
+          blocked={paused}
+          notice={lost}
           error={fundError}
           onClose={() => {
             setFundOpen(false)
@@ -901,9 +917,10 @@ export function App({ initialConfig }: { initialConfig: Config }) {
           chainId={market.config.chainId}
           chainName={market.config.chainName}
           amount={fundAmount}
-          disabled={!session.token || funding || reconnecting}
-          customDisabled={!session.token || funding || fundMicros === null || reconnecting}
-          blocked={reconnecting}
+          disabled={!session.token || funding || paused}
+          customDisabled={!session.token || funding || fundMicros === null || paused}
+          blocked={paused}
+          notice={lost}
           error={fundError}
           phase={fundPhase}
           hash={fundHash}
@@ -966,7 +983,8 @@ export function App({ initialConfig }: { initialConfig: Config }) {
           chainName={market.config.chainName}
           amount={withdrawAmount}
           pending={withdrawing}
-          blocked={reconnecting}
+          blocked={paused}
+          notice={lost}
           error={withdrawError}
           onAmount={(value) => {
             setWithdrawAmount(value)
@@ -986,7 +1004,8 @@ export function App({ initialConfig }: { initialConfig: Config }) {
         token={session.token}
         version={market.historyVersion}
         windowMs={market.config.windowSeconds * 1000}
-        blocked={reconnecting}
+        blocked={paused}
+        notice={lost}
       />
       {(market.notices.length > 0 || market.lateNotices.length > 0) && (
         <PricePops anchorRef={balanceMark}>

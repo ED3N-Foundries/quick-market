@@ -1,12 +1,12 @@
-// Brand marks, rendered monochrome via currentColor so they sit cleanly in the
-// dark UI (grey-ish offwhite instead of brand colors).
+// Brand marks.
 //
-// Sources (paths vendored from official assets):
+// Sources:
 // - Phantom ghost: official Phantom integration assets
 //   (docs.phantom.com/resources/assets). Eyes knock out via fill-rule.
-// - Base square: official Base brand kit, logo/Basemark/Digital (TheSquare),
-//   adapted to a single ring via fill-rule (base/brand-kit on GitHub).
-// - NEAR mark: Simple Icons "near" glyph (CC0).
+//   Drawn in currentColor so it sits in the dark UI.
+// - Base square: official Base brand kit, logo/TheSquare/Digital/Base_square_blue.svg
+//   (base/brand-kit). The filled square, in the asset's blue.
+// - NEAR mark: Simple Icons "near" glyph (CC0), in currentColor.
 
 export function PhantomLogo({ className }: { className?: string }) {
   return (
@@ -23,11 +23,10 @@ export function PhantomLogo({ className }: { className?: string }) {
 
 export function BaseLogo({ className }: { className?: string }) {
   return (
-    <svg className={className} viewBox="0 0 24 24" aria-hidden="true">
+    <svg className={className} viewBox="0 0 1280 1280" aria-hidden="true">
       <path
-        fill="currentColor"
-        fillRule="evenodd"
-        d="M3.0009 4.70623C3.0009 4.12129 3.0009 3.82882 3.11069 3.60474C3.21598 3.38966 3.39056 3.21508 3.60564 3.10979C3.82972 3 4.12219 3 4.70623 3H19.2938C19.8787 3 20.1703 3 20.3953 3.10979C20.6103 3.21508 20.784 3.39056 20.8893 3.60474C21 3.82972 21 4.12219 21 4.70623V19.2938C21 19.8787 21 20.1703 20.8893 20.3953C20.784 20.6103 20.6094 20.784 20.3953 20.8893C20.1703 21 19.8778 21 19.2938 21H4.70623C4.12129 21 3.82972 21 3.60474 20.8893C3.38966 20.784 3.21598 20.6094 3.11069 20.3953C3 20.1703 3 19.8778 3 19.2938V4.70623H3.0009ZM4.0008 5.51665C4.0008 4.9967 4.0008 4.73673 4.09839 4.53755C4.19198 4.34637 4.34717 4.19118 4.53835 4.09759C4.73753 4 4.9975 4 5.51665 4H18.4834C19.0033 4 19.2625 4 19.4625 4.09759C19.6536 4.19118 19.808 4.34717 19.9016 4.53755C20 4.73753 20 4.9975 20 5.51665V18.4834C20 19.0033 20 19.2625 19.9016 19.4625C19.808 19.6536 19.6528 19.808 19.4625 19.9016C19.2625 20 19.0025 20 18.4834 20H5.51665C4.9967 20 4.73753 20 4.53755 19.9016C4.34637 19.808 4.19198 19.6528 4.09839 19.4625C4 19.2625 4 19.0025 4 18.4834V5.51665H4.0008Z"
+        fill="blue"
+        d="M0,101.12c0-34.64,0-51.95,6.53-65.28,6.25-12.76,16.56-23.07,29.32-29.32C49.17,0,66.48,0,101.12,0h1077.76c34.63,0,51.96,0,65.28,6.53,12.75,6.25,23.06,16.56,29.32,29.32,6.52,13.32,6.52,30.64,6.52,65.28v1077.76c0,34.63,0,51.96-6.52,65.28-6.26,12.75-16.57,23.06-29.32,29.32-13.32,6.52-30.65,6.52-65.28,6.52H101.12c-34.64,0-51.95,0-65.28-6.52-12.76-6.26-23.07-16.57-29.32-29.32-6.53-13.32-6.53-30.65-6.53-65.28V101.12Z"
       />
     </svg>
   )
