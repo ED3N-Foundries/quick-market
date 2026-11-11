@@ -494,6 +494,7 @@ async function handleScoped(req: Request, url: URL): Promise<Response> {
     const detail = getRound(url)
     if (detail) return detail
   }
+  if (url.pathname.startsWith("/api/")) return json({ error: "Not found" }, 404)
   if (useDeps().serveUi && req.method === "GET") {
     const file = await staticFile(url)
     if (file) return file

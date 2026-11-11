@@ -440,7 +440,7 @@ const host = process.env.HOST?.trim() || "127.0.0.1"
 try {
   Bun.serve({
     port: 3002,
-    hostname: host,
+    hostname: "0.0.0.0",
     idleTimeout: 30,
     fetch(req) {
       return handleInternal(req).catch((error) => {

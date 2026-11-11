@@ -1,8 +1,12 @@
+import { mkdtempSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { afterEach, expect, test } from "bun:test"
 import { CHAINS } from "../shared/chain"
 import { describeTreasury } from "../shared/near"
 import { getDb, useDatabase } from "./db"
 import { collectFunding, type EvmBalances } from "./funding"
+import { bindHttp, handle, handleInternal } from "./http"
 
 afterEach(() => {
   useDatabase(":memory:")
@@ -76,4 +80,69 @@ test("funding shows public addresses, the gap, and no key material", async () =>
   expect(body).not.toContain("privateKey")
   expect(body).not.toContain("ed25519:")
   expect(body).not.toMatch(/0x[0-9a-fA-F]{64}/)
+})
+
+test("the public health route is liveness only", async () => {
+  bindHttp({
+    config: () => {
+      throw new Error("config")
+    },
+    markets: () => {
+      throw new Error("markets")
+    },
+    liveChains: () => ["base-sepolia"],
+    chainKey: () => "base-sepolia",
+    treasuryReport: () => {
+      throw new Error("treasury")
+    },
+    fundingReport: async () => ({ at: 1, chains: [{ treasury: "treasury.testnet" }] }),
+    grantsOpen: () => false,
+    mint: async () => undefined,
+    withdraw: async () => ({ ok: false }),
+    publish: () => undefined,
+    streamMetrics: () => ({}),
+    serveUi: false,
+    distDir: "/tmp/none",
+  })
+  const health = await handle(new Request("http://market/api/health"))
+  expect(health.status).toBe(200)
+  expect(await health.json()).toEqual({ ok: true })
+  expect((await handle(new Request("http://market/api/status"))).status).toBe(404)
+  expect((await handle(new Request("http://market/api/health/history"))).status).toBe(404)
+  const funding = await handleInternal(new Request("http://market/api/funding"))
+  expect(await funding.json()).toEqual({ at: 1, chains: [{ treasury: "treasury.testnet" }] })
+})
+
+test("removed ops routes do not fall through to the player page", async () => {
+  const distDir = mkdtempSync(join(tmpdir(), "qm-dist-"))
+  writeFileSync(join(distDir, "index.html"), "<!doctype html><title>Quick Market</title>")
+  bindHttp({
+    config: () => {
+      throw new Error("config")
+    },
+    markets: () => {
+      throw new Error("markets")
+    },
+    liveChains: () => ["base-sepolia"],
+    chainKey: () => "base-sepolia",
+    treasuryReport: () => {
+      throw new Error("treasury")
+    },
+    fundingReport: async () => ({ at: 1, chains: [] }),
+    grantsOpen: () => false,
+    mint: async () => undefined,
+    withdraw: async () => ({ ok: false }),
+    publish: () => undefined,
+    streamMetrics: () => ({}),
+    serveUi: true,
+    distDir,
+  })
+  const status = await handle(new Request("http://market/api/status"))
+  expect(status.status).toBe(404)
+  expect(await status.text()).not.toContain("Quick Market")
+  const history = await handle(new Request("http://market/api/health/history"))
+  expect(history.status).toBe(404)
+  const home = await handle(new Request("http://market/"))
+  expect(home.status).toBe(200)
+  expect(await home.text()).toContain("Quick Market")
 })
