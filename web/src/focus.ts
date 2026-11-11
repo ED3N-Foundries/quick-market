@@ -76,12 +76,59 @@ export function heldStrike(market: { strike: string | null } | null): { price: n
   return { price, text: market.strike }
 }
 
-/** Pool shown in the trade panel. A held market wins. Otherwise the open betting window. */
+export type ClockFace = {
+  kind: "buy-in" | "settles" | "opens"
+  endsAt: number
+  /** Finite span caps the painted tenths one step under the span. Infinity floors only. */
+  spanMs: number
+}
+
+/** What the upper-right clock counts toward.
+ *  A handoff that has already resumed does not hold Opens at 0.
+ *  A running position counts to settlement. Otherwise the buy-in window that
+ *  contains now, including a local roll once the published end is behind.
+ */
+export function clockFace(board: Board, now: number, held: Band | null, handoffResumeAt: number | null): ClockFace {
+  if (handoffResumeAt != null && handoffResumeAt > now) {
+    return { kind: "opens", endsAt: handoffResumeAt, spanMs: Number.POSITIVE_INFINITY }
+  }
+  if (held && held.settlesAt > now) {
+    return { kind: "settles", endsAt: held.settlesAt, spanMs: Number.POSITIVE_INFINITY }
+  }
+  const window = buyInWindow(board, now)
+  return { kind: "buy-in", endsAt: window.end, spanMs: Math.max(1, window.end - window.start) }
+}
+
+/** Rounds the server still has open at `now`. An expired join is not one of them. */
+export function listedRoundIds(board: Board, now: number): number[] {
+  const ids: number[] = []
+  if (board.live && board.live.settlesAt > now) ids.push(board.live.id)
+  if (board.join && board.join.strikeAt > now) ids.push(board.join.id)
+  return ids
+}
+
+function windowId(window: { start: number; end: number }): number | null {
+  const span = window.end - window.start
+  if (!(span > 0)) return null
+  return Math.floor(window.start / span)
+}
+
+/** Pool shown in the trade panel. A held market wins.
+ *  Otherwise the betting window that contains now. An expired join is not that
+ *  window: use a matching open band, or nothing until a snapshot fills it.
+ */
 export function focusPool(board: Board | null, openBuyIns: OpenBuyIn[], now: number): PoolCard | null {
   if (!board) return null
   const held = heldMarket(board, openBuyIns, now)
-  if (!held) return board.join
-  if (board.live?.id === held.id) return board.live
-  if (board.join?.id === held.id) return board.join
-  return { ...held, tray: [] }
+  if (held) {
+    if (board.live?.id === held.id) return board.live
+    if (board.join?.id === held.id) return board.join
+    return { ...held, tray: [] }
+  }
+  const window = buyInWindow(board, now)
+  const id = windowId(window)
+  if (board.join && board.join.id === id) return board.join
+  const band = id == null ? undefined : board.bands.find((row) => row.id === id && row.status === "open")
+  if (band) return { ...band, tray: [] }
+  return null
 }

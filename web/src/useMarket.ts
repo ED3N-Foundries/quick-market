@@ -5,6 +5,7 @@ import { writeCachedBalance } from "./balanceCache"
 import { applyBuyIn } from "./buyInIntent"
 import type { TapeChart, TapePoint } from "./chart"
 import { createClock, easeClock, noteClock } from "./clock"
+import { listedRoundIds } from "./focus"
 import {
   connectionState,
   createLag,
@@ -379,6 +380,7 @@ export function useMarket(token: string | null, seed: You | null = null, initial
     let stopped = false
     let socket: WebSocket | null = null
     let retry = 0
+    let snapshotWait = 0
     let generation = 0
     let failures = 0
     let wokeAt = 0
@@ -448,6 +450,7 @@ export function useMarket(token: string | null, seed: You | null = null, initial
     function connect() {
       if (stopped) return
       window.clearTimeout(retry)
+      window.clearTimeout(snapshotWait)
       retryPendingRef.current = false
       generation += 1
       const gen = generation
@@ -477,6 +480,18 @@ export function useMarket(token: string | null, seed: You | null = null, initial
         current.send(JSON.stringify({ type: "hello", ...(tokenRef.current ? { token: tokenRef.current } : {}) }))
         sendPending(current)
         sendProbe(current, false)
+        // The open snapshot is sent without a recover callback. If it was
+        // coalesced away, ask again so later books are not dropped.
+        window.clearTimeout(snapshotWait)
+        snapshotWait = window.setTimeout(() => {
+          if (gen !== generation || socket !== current || !needsSnapshotRef.current) return
+          if (current.readyState !== WebSocket.OPEN) return
+          try {
+            current.send(JSON.stringify({ type: "resync" }))
+          } catch {
+            connect()
+          }
+        }, 1_000)
       }
       current.onmessage = (event) => {
         if (gen !== generation || socket !== current) return
@@ -614,6 +629,7 @@ export function useMarket(token: string | null, seed: You | null = null, initial
       stopped = true
       generation += 1
       window.clearTimeout(retry)
+      window.clearTimeout(snapshotWait)
       retryPendingRef.current = false
       sendBetRef.current = () => {}
       replaceRef.current = () => {}
@@ -630,18 +646,24 @@ export function useMarket(token: string | null, seed: You | null = null, initial
   const openKey = you?.openBuyIns.map((bet) => bet.roundId).join(",") ?? ""
   const caught = useRef("")
   useEffect(() => {
-    if (!token || !board || !you?.openBuyIns.length) return
-    const live = new Set<number>()
-    if (board.live) live.add(board.live.id)
-    if (board.join) live.add(board.join.id)
+    if (!token || !board || !you?.openBuyIns.length) {
+      if (!you?.openBuyIns.length) caught.current = ""
+      return
+    }
+    const synced = Date.now() + offsetRef.current
+    const live = new Set(listedRoundIds(board, synced))
     const stuck = you.openBuyIns
       .filter((bet) => !live.has(bet.roundId))
       .map((bet) => bet.roundId)
       .join(",")
-    if (!stuck || caught.current === stuck) return
+    if (!stuck) {
+      caught.current = ""
+      return
+    }
+    if (caught.current === stuck) return
     caught.current = stuck
     reload().catch(() => {})
-  }, [token, board, openKey, you?.openBuyIns, reload])
+  }, [token, board, openKey, you?.openBuyIns, reload, pulse])
 
   /** Dynamic check: recompute link + feed at call time so a socket that died
    * after render still blocks the attempt. Returns an English error or null. */
@@ -797,6 +819,17 @@ export function useMarket(token: string | null, seed: You | null = null, initial
   const connection = connectionState(link, feed)
   const blocked = connection.blocked
   const slow = connection.slow
+  const wasBlockedRef = useRef(false)
+  useEffect(() => {
+    const wasBlocked = wasBlockedRef.current
+    wasBlockedRef.current = blocked
+    if (!wasBlocked || blocked) return
+    const current = boardRef.current
+    if (!current) return
+    const synced = Date.now() + offsetRef.current
+    if (current.windowEndsAt > synced) return
+    reload().catch(() => {})
+  }, [blocked, reload])
 
   return {
     address: you?.address ?? null,

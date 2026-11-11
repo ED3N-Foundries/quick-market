@@ -11,6 +11,9 @@ import {
   formatGrantWait,
   formatMoney,
   formatPrice,
+  sideOffer,
+  stakeQuote,
+  yourSidePot,
   formatPriceDelta,
   grantButtonLabel,
   grantNextLabel,
@@ -226,4 +229,45 @@ test("formatClock follows the timezone and the locale hour cycle", () => {
   const gb = formatClock(ms, "en-GB", "UTC")
   expect(gb).toBe("18:58:00")
   expect(gb).not.toMatch(/AM|PM/)
+})
+
+test("yourSidePot previews a stake and waits for a locked book to catch up", () => {
+  expect(yourSidePot(2_000_000, 10_000_000, { kind: "preview" })).toBe(12_000_000)
+  expect(yourSidePot(0, 10_000_000, { kind: "preview" })).toBe(10_000_000)
+  expect(yourSidePot(2_000_000, 10_000_000, { kind: "locked", baseline: 10_000_000 })).toBe(12_000_000)
+  expect(yourSidePot(2_000_000, 12_000_000, { kind: "locked", baseline: 10_000_000 })).toBe(12_000_000)
+  expect(yourSidePot(2_000_000, 4_000_000, { kind: "locked", baseline: null })).toBe(4_000_000)
+  expect(yourSidePot(2_000_000, 0, { kind: "locked", baseline: null })).toBe(2_000_000)
+})
+
+test("stake quotes name this wallet's return in English and zh-TW", () => {
+  expect(stakeQuote(10_000_000, "up", 10_000_000, 0, 25)).toBe("$10.00 back")
+  expect(stakeQuote(10_000_000, "up", 10_000_000, 0, 25, "zh-TW")).toBe("$10.00 退回")
+  const up = 50_000_000
+  const down = 100_000_000
+  const stake = 1_000_000
+  const preview = sideOffer({ side: "up", stake, up, down, feeBps: 25, mode: { kind: "preview" } })
+  expect(preview.you).toBe("You · $1.00 · 2%")
+  expect(preview.quote).toBe("$1.00 gets $2.95")
+  const lagged = sideOffer({
+    side: "up",
+    stake,
+    up,
+    down,
+    feeBps: 25,
+    mode: { kind: "locked", baseline: up },
+  })
+  expect(lagged).toEqual(preview)
+  const caught = sideOffer({
+    side: "up",
+    stake,
+    up: up + stake,
+    down,
+    feeBps: 25,
+    mode: { kind: "locked", baseline: up },
+  })
+  expect(caught).toEqual(preview)
+  const zh = sideOffer({ side: "up", stake, up, down, feeBps: 25, mode: { kind: "preview" }, lang: "zh-TW" })
+  expect(zh.you).toBe("你 · $1.00 · 2%")
+  expect(zh.quote).toBe("$1.00 可得 $2.95")
 })

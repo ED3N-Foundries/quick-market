@@ -359,3 +359,57 @@ export function moneyShare(side: number, total: number): string {
   return `${Math.round((side / total) * 100)}%`
 }
 
+export type PotMode = { kind: "preview" } | { kind: "locked"; baseline: number | null }
+
+/** Side pot used for this wallet's share.
+ *  Preview adds the stake, because the book does not have it yet.
+ *  Locked, with a baseline: keep adding until the book has grown by the stake.
+ *  Locked, with no baseline (a refresh): trust the book, and never a pot smaller than the stake.
+ */
+export function yourSidePot(stake: number, published: number, mode: PotMode): number {
+  const pub = Number.isFinite(published) ? Math.max(0, published) : 0
+  if (!(stake > 0)) return pub
+  if (mode.kind === "preview") return pub + stake
+  if (mode.baseline === null) return Math.max(pub, stake)
+  if (pub >= mode.baseline + stake) return pub
+  return pub + stake
+}
+
+/** What `stake` gets on these pools. A one-sided pot comes back as the stake. */
+export function stakeQuote(
+  stake: number,
+  side: "up" | "down",
+  up: number,
+  down: number,
+  feeBps: number,
+  lang: Lang = "en",
+): string {
+  const text = copy(lang)
+  const money = formatMoney(stake)
+  const other = side === "up" ? down : up
+  if (other <= 0) return text.stakeBack(money)
+  return text.stakeGets(money, formatMoney(payoutMicros(stake, side, up, down, feeBps)))
+}
+
+/** This wallet's line on one side, plus the return priced on the adjusted pot. */
+export function sideOffer(input: {
+  side: "up" | "down"
+  stake: number
+  up: number
+  down: number
+  feeBps: number
+  mode: PotMode
+  lang?: Lang
+}): { you: string; quote: string } {
+  const lang = input.lang ?? "en"
+  const text = copy(lang)
+  const published = input.side === "up" ? input.up : input.down
+  const pot = yourSidePot(input.stake, published, input.mode)
+  const up = input.side === "up" ? pot : input.up
+  const down = input.side === "down" ? pot : input.down
+  return {
+    you: text.youIn(formatMoney(input.stake), moneyShare(input.stake, pot)),
+    quote: stakeQuote(input.stake, input.side, up, down, input.feeBps, lang),
+  }
+}
+

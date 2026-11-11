@@ -1,9 +1,11 @@
 import { Children, isValidElement, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react"
 import type { Lang } from "../../shared/lang"
+import { RENDER_MS } from "../../shared/market"
 import { reportLines, type TreasuryReport } from "../../shared/near"
 import { MINT_CONFIRMATIONS } from "../../shared/mint"
 import { mountChart, priceY, type ChartScale, type TapeChart, type TapeSample } from "./chart"
-import { chartMarket, focusPool, followWindow, heldMarket, heldStrike } from "./focus"
+import { chartMarket, clockFace, focusPool, followWindow, heldMarket, heldStrike } from "./focus"
+import { clockReadout } from "./clock"
 import {
   chainMenuLabel,
   formatClock,
@@ -20,6 +22,7 @@ import {
   parseAmountMicros,
   payoutMicros,
   quoteDollar,
+  sideOffer,
   quotePair,
   sourceLabel,
   walletDisplayLabel,
@@ -66,6 +69,7 @@ export function App({ initialConfig }: { initialConfig: Config }) {
   const [chart, setChart] = useState<TapeChart | null>(null)
   const [stake, setStake] = useState("10")
   const [windowTick, setWindowTick] = useState(0)
+  const baselineRef = useRef<{ roundId: number; side: Side; pool: number } | null>(null)
   const [walletMenuOpen, setWalletMenuOpen] = useState(false)
   const [fundAmount, setFundAmount] = useState("")
   const [fundOpen, setFundOpen] = useState(false)
@@ -166,11 +170,11 @@ export function App({ initialConfig }: { initialConfig: Config }) {
       setGrantTx(null)
       setFundError(null)
       setFundOpen(false)
-      upsertToast({ id: "grant-ok", kind: "ok", text: text.grantedToast })
+      upsertToast({ id: "grant-ok", kind: "ok", title: text.grantedToast })
       return
     }
     setGrantTx(null)
-    upsertToast({ id: "grant-error", kind: "error", text: text.grantMissed })
+    upsertToast({ id: "grant-error", kind: "error", title: text.grantFailed, text: text.grantMissed })
   }, [market.you, text, upsertToast])
 
   // A connect failure toasts once, then lives on as the ⓘ mark next to the
@@ -183,7 +187,12 @@ export function App({ initialConfig }: { initialConfig: Config }) {
     }
     if (connectRawError === toastedConnectError.current) return
     toastedConnectError.current = connectRawError
-    upsertToast({ id: "wallet-error", kind: "error", text: localize(lang, shortWalletFault(connectRawError)) })
+    upsertToast({
+      id: "wallet-error",
+      kind: "error",
+      title: text.toastWallet,
+      text: localize(lang, shortWalletFault(connectRawError)),
+    })
   }, [connectRawError, lang, upsertToast])
 
   useEffect(() => {
@@ -267,11 +276,16 @@ export function App({ initialConfig }: { initialConfig: Config }) {
   void windowTick
   useEffect(() => {
     if (!board) return
-    const left = board.windowEndsAt - (Date.now() + market.offsetRef.current)
-    if (left <= 0) return
-    const id = window.setTimeout(() => setWindowTick(board.windowEndsAt), left)
+    const synced = Date.now() + market.offsetRef.current
+    const held = heldMarket(board, openBuyInsRef.current, synced)
+    const next = clockFace(board, synced, held, handoff?.resumeAt ?? null)
+    const left = next.endsAt - synced
+    // Past the end, wait out the render hold and tick again so the clock rolls
+    // forward instead of sitting on 0.0. The value itself only forces a render.
+    const delay = left > 0 ? left : RENDER_MS + 1
+    const id = window.setTimeout(() => setWindowTick((value) => value + 1), delay)
     return () => window.clearTimeout(id)
-  }, [board, market.offsetRef])
+  }, [board, handoff, market.offsetRef, windowTick])
   const rideChart = board ? chartMarket(board, openBuyIns, now) : null
   useEffect(() => {
     if (!rideChart) return
@@ -289,6 +303,7 @@ export function App({ initialConfig }: { initialConfig: Config }) {
   }, [market.config.tokenKind, market.config.chainId, market.config.grantMicros, market.config.grantIntervalMs])
   const heldSpan = board ? heldMarket(board, openBuyIns, now) : null
   const focus = focusPool(board, openBuyIns, now)
+  const face = board ? clockFace(board, now, heldSpan, handoff?.resumeAt ?? null) : null
   const total = (focus?.poolUpMicros ?? 0) + (focus?.poolDownMicros ?? 0)
   const held = openBuyIns.find((bet) => bet.roundId === focus?.id) ?? null
   const upQuote = focus ? quoteDollar("up", focus.poolUpMicros, focus.poolDownMicros, market.config.feeBps, lang) : "—"
@@ -304,7 +319,7 @@ export function App({ initialConfig }: { initialConfig: Config }) {
     upQuote,
     downQuote,
   })
-  const betRoundId = figures.book.roundId
+  const betRoundId = focus?.id ?? null
   const reconnecting = market.blocked
   const degraded = market.slow
   const canBet =
@@ -316,7 +331,26 @@ export function App({ initialConfig }: { initialConfig: Config }) {
     !market.pending &&
     !handoff &&
     !reconnecting
-  const ticketWin = held ? payoutMicros(held.stakeMicros, held.side, focus?.poolUpMicros ?? 0, focus?.poolDownMicros ?? 0, market.config.feeBps) : 0
+  const previewMicros = held ? 0 : (parseAmountMicros(stake) ?? 0)
+  function offerFor(side: Side): { you: string; quote: string } | null {
+    if (!focus) return null
+    if (held && held.side !== side) return null
+    const stakeMicros = held ? held.stakeMicros : previewMicros
+    if (!(stakeMicros > 0)) return null
+    const mark = baselineRef.current
+    const baseline = held && mark && mark.roundId === held.roundId && mark.side === side ? mark.pool : null
+    return sideOffer({
+      side,
+      stake: stakeMicros,
+      up: focus.poolUpMicros,
+      down: focus.poolDownMicros,
+      feeBps: market.config.feeBps,
+      mode: held ? { kind: "locked", baseline } : { kind: "preview" },
+      lang,
+    })
+  }
+  const upOffer = offerFor("up")
+  const downOffer = offerFor("down")
   const fundMicros = parseAmountMicros(fundAmount)
   const testnet = market.config.tokenKind === "qm" || isTestnetChain(market.config.chainId)
   const grantKnown = market.confirmed ? you !== null : cached !== null
@@ -326,6 +360,11 @@ export function App({ initialConfig }: { initialConfig: Config }) {
   const grantInFlight = funding || grantPending !== null
   const holdStake = session.signing || grantPending !== null
   const isNearChain = market.config.chainKey === "near-testnet"
+  useEffect(() => {
+    const mark = baselineRef.current
+    if (!mark || market.pending) return
+    if (!held || held.roundId !== mark.roundId || held.side !== mark.side) baselineRef.current = null
+  }, [held, market.pending])
   // Minting status lives in a toast with a clickable confirmation link, so the
   // stake column never resizes while a grant is in flight.
   useEffect(() => {
@@ -335,14 +374,17 @@ export function App({ initialConfig }: { initialConfig: Config }) {
       return
     }
     const txHash = grantPending?.txHash || grantTx
+    const needed = grantPending?.confirmations ?? grantNeeded
     upsertToast({
       id: "grant",
       kind: "progress",
+      title: text.toastGrant,
       text: txHash
-        ? grantWaitStatus({ seen: grantSeen, needed: grantPending?.confirmations ?? grantNeeded }, lang, market.config.chainKey)
+        ? grantWaitStatus({ seen: grantSeen, needed }, lang, market.config.chainKey)
         : grantWaitStatus(undefined, lang, market.config.chainKey),
       txHash,
       txUrl: txHash ? grantTxUrl(market.config.chainId, txHash, market.config.chainKey) : null,
+      meter: txHash ? { seen: grantSeen, needed } : null,
     })
   }, [
     grantPending,
@@ -352,6 +394,7 @@ export function App({ initialConfig }: { initialConfig: Config }) {
     grantSeen,
     grantNeeded,
     lang,
+    text.toastGrant,
     market.config.chainId,
     market.config.chainKey,
     upsertToast,
@@ -385,6 +428,16 @@ export function App({ initialConfig }: { initialConfig: Config }) {
   function chip(percent: number) {
     if (!you) return
     setStake(microsToInput(Math.max(market.config.minStakeMicros, Math.floor((you.balanceMicros * percent) / 100))))
+  }
+
+  function placeSide(side: Side) {
+    if (!focus) return
+    baselineRef.current = {
+      roundId: focus.id,
+      side,
+      pool: side === "up" ? focus.poolUpMicros : focus.poolDownMicros,
+    }
+    void market.place(side, stake, focus.id)
   }
 
   function openGrant() {
@@ -444,11 +497,11 @@ export function App({ initialConfig }: { initialConfig: Config }) {
             venue={market.ticker.venue}
           />
           <div className="clock-block">
-            <span className="clock-label">{handoff ? text.opens : heldSpan ? text.settles : text.buyIn}</span>
-            {handoff?.resumeAt ? (
-              <Countdown endsAt={handoff.resumeAt} offsetRef={market.offsetRef} />
-            ) : board && !handoff ? (
-              <Countdown endsAt={heldSpan ? heldSpan.settlesAt : board.windowEndsAt} offsetRef={market.offsetRef} />
+            <span className="clock-label">
+              {face?.kind === "opens" ? text.opens : face?.kind === "settles" ? text.settles : text.buyIn}
+            </span>
+            {face ? (
+              <Countdown endsAt={face.endsAt} spanMs={face.spanMs} offsetRef={market.offsetRef} />
             ) : (
               <span className="clock-line">
                 <strong className="clock">—</strong>
@@ -463,6 +516,39 @@ export function App({ initialConfig }: { initialConfig: Config }) {
       {session.chainError && <p className="note bad">{localize(lang, session.chainError)}</p>}
       {session.pageChain && market.config.treasury && market.config.chainId !== session.pageChain.id && (
         <p className="note bad">{text.pageChain(session.pageChain.name, market.config.chainName)}</p>
+      )}
+
+      {!session.token && (
+        <div className="connect-bar">
+          <button
+            type="button"
+            className="primary connect-bar-btn"
+            data-busy={session.signing ? "1" : "0"}
+            title={session.chainError ?? undefined}
+            onClick={session.login}
+            disabled={session.signing || session.chainError !== null}
+          >
+            {session.signing && session.loginPhase ? (
+              <>
+                <span className="wait-spin" aria-hidden="true" />
+                <span
+                  key={session.loginPhase}
+                  className="connect-label"
+                  role="status"
+                  title={loginStatus(session.loginPhase, testnet, lang, market.config.chainKey)}
+                >
+                  {loginStatus(session.loginPhase, testnet, lang, market.config.chainKey)}
+                </span>
+              </>
+            ) : (
+              <>
+                {isNearChain ? <NearLogo className="logo-mark" /> : <PhantomLogo className="logo-mark" />}
+                <span className="connect-label">{loginLabel}</span>
+              </>
+            )}
+          </button>
+          {connectRawError && <ErrorDot short={shortWalletFault(connectRawError)} detail={connectRawError} />}
+        </div>
       )}
 
       <section
@@ -536,23 +622,19 @@ export function App({ initialConfig }: { initialConfig: Config }) {
           side="up"
           share={figures.book.upShare}
           pool={figures.book.upPool}
-          quote={figures.book.upQuote}
+          you={upOffer?.you ?? null}
+          quote={upOffer?.quote ?? figures.book.upQuote}
           orders={figures.book.upPlayers}
           fade={figures.fade}
           fadeKey={figures.gen}
+          lock={held ? (held.side === "up" ? "yours" : "rest") : null}
           disabled={!canBet}
-          onBet={() => {
-            if (betRoundId === null) return
-            void market.place("up", stake, betRoundId)
-          }}
+          onBet={() => placeSide("up")}
         />
         <div className="stake">
           <div className="balance-label">
-            <TokenBadge kind={testnet ? "qm" : "circle"} chainKey={market.config.chainKey} />
-            {!session.token || !session.address ? (
-              <span className="who" ref={session.address ? walletMenuRef : undefined}>
-                {session.address && (
-                  <>
+            {session.address && !session.token ? (
+              <span className="who" ref={walletMenuRef}>
                     <button
                       type="button"
                       className="wallet-pill"
@@ -586,44 +668,8 @@ export function App({ initialConfig }: { initialConfig: Config }) {
                         </div>
                       </div>
                     )}
-                  </>
-                )}
-                <button
-                  type="button"
-                  className="primary connect-pill"
-                  data-busy={session.signing ? "1" : "0"}
-                  title={session.chainError ?? undefined}
-                  onClick={session.login}
-                  disabled={session.signing || session.chainError !== null}
-                >
-                  {session.signing && session.loginPhase ? (
-                    <>
-                      <span className="wait-spin" aria-hidden="true" />
-                      <span
-                        key={session.loginPhase}
-                        className="connect-label"
-                        role="status"
-                        title={loginStatus(session.loginPhase, testnet, lang, market.config.chainKey)}
-                      >
-                        {loginStatus(session.loginPhase, testnet, lang, market.config.chainKey)}
-                      </span>
-                    </>
-                  ) : (
-                    <>
-                      {isNearChain ? (
-                        <NearLogo className="logo-mark" />
-                      ) : (
-                        <PhantomLogo className="logo-mark" />
-                      )}
-                      <span className="connect-label">{loginLabel}</span>
-                    </>
-                  )}
-                </button>
-                {connectRawError && (
-                  <ErrorDot short={shortWalletFault(connectRawError)} detail={connectRawError} />
-                )}
               </span>
-            ) : (
+            ) : session.token && session.address ? (
               <span className="who" ref={walletMenuRef}>
                 <button
                   type="button"
@@ -693,7 +739,7 @@ export function App({ initialConfig }: { initialConfig: Config }) {
                   </div>
                 )}
               </span>
-            )}
+            ) : null}
           </div>
           <BalanceFigure micros={shownMicros} markRef={balanceMark} />
           {!holdStake && testnet && market.config.grantIntervalMs > 0 && grantKnown &&
@@ -715,18 +761,7 @@ export function App({ initialConfig }: { initialConfig: Config }) {
               {text.reconnectingMarket} · {text.reconnectingHint}
             </p>
           )}
-          {held && (
-            <div className="ticket">
-              <p className={held.side}>{held.side === "up" ? `▲ ${text.up}` : `▼ ${text.down}`}</p>
-              <p>
-                {text.amount} {formatMoney(held.stakeMicros)}
-              </p>
-              <p>
-                {text.gets} {formatMoney(ticketWin)}
-              </p>
-            </div>
-          )}
-          {!holdStake && (
+          {!holdStake && !held && (
             <>
               <label className="stake-field">
                 <span>{text.amount}</span>
@@ -757,15 +792,14 @@ export function App({ initialConfig }: { initialConfig: Config }) {
           side="down"
           share={figures.book.downShare}
           pool={figures.book.downPool}
-          quote={figures.book.downQuote}
+          you={downOffer?.you ?? null}
+          quote={downOffer?.quote ?? figures.book.downQuote}
           orders={figures.book.downPlayers}
           fade={figures.fade}
           fadeKey={figures.gen}
+          lock={held ? (held.side === "down" ? "yours" : "rest") : null}
           disabled={!canBet}
-          onBet={() => {
-            if (betRoundId === null) return
-            void market.place("down", stake, betRoundId)
-          }}
+          onBet={() => placeSide("down")}
         />
       </section>
       {fundOpen && testnet && (
@@ -816,7 +850,7 @@ export function App({ initialConfig }: { initialConfig: Config }) {
                   upsertToast({
                     id: "grant-ok",
                     kind: "ok",
-                    text: text.grantedToast,
+                    title: text.grantedToast,
                     txHash: result.txHash,
                     txUrl: grantTxUrlFor(result.txHash),
                   })
@@ -827,7 +861,12 @@ export function App({ initialConfig }: { initialConfig: Config }) {
               if (!result.ok) {
                 if (result.dropped && (await follow())) return
                 setFunding(false)
-                upsertToast({ id: "grant-error", kind: "error", text: localize(lang, result.message) })
+                upsertToast({
+                  id: "grant-error",
+                  kind: "error",
+                  title: text.grantFailed,
+                  text: localize(lang, result.message),
+                })
                 return
               }
               if (result.granted) {
@@ -837,7 +876,7 @@ export function App({ initialConfig }: { initialConfig: Config }) {
                 upsertToast({
                   id: "grant-ok",
                   kind: "ok",
-                  text: text.grantedToast,
+                  title: text.grantedToast,
                   txHash: result.txHash,
                   txUrl: grantTxUrlFor(result.txHash),
                 })
@@ -849,7 +888,7 @@ export function App({ initialConfig }: { initialConfig: Config }) {
               }
               if (await follow()) return
               setFunding(false)
-              upsertToast({ id: "grant-error", kind: "error", text: text.grantMissed })
+              upsertToast({ id: "grant-error", kind: "error", title: text.grantFailed, text: text.grantMissed })
             })()
           }}
         />
@@ -1450,25 +1489,24 @@ function ErrorDot({ short, detail }: { short: string; detail: string }) {
   )
 }
 
-function Countdown({ endsAt, offsetRef }: { endsAt: number; offsetRef: RefObject<number> }) {
+function Countdown({ endsAt, spanMs, offsetRef }: { endsAt: number; spanMs: number; offsetRef: RefObject<number> }) {
   const { text } = useI18n()
   const ref = useRef<HTMLSpanElement>(null)
   useEffect(() => {
     let raf = 0
     const loop = () => {
-      const left = Math.max(0, endsAt - (Date.now() + offsetRef.current))
-      const secs = left / 1000
+      const left = endsAt - (Date.now() + offsetRef.current)
       const node = ref.current
       if (node) {
-        node.textContent = secs.toFixed(1)
+        node.textContent = clockReadout(left, spanMs)
         const block = node.closest(".clock-block")
-        if (block instanceof HTMLElement) block.dataset.urgent = secs < 1.5 ? "1" : "0"
+        if (block instanceof HTMLElement) block.dataset.urgent = Math.max(0, left) < 1_500 ? "1" : "0"
       }
       raf = requestAnimationFrame(loop)
     }
     loop()
     return () => cancelAnimationFrame(raf)
-  }, [endsAt, offsetRef])
+  }, [endsAt, spanMs, offsetRef])
   return (
     <span className="clock-line">
       <strong ref={ref} className="clock">
@@ -1483,28 +1521,41 @@ function SideCard(props: {
   side: Side
   share: string
   pool: number
+  you: string | null
   quote: string
   orders: number
   fade: boolean
   fadeKey: number
+  lock: "yours" | "rest" | null
   disabled: boolean
   onBet: () => void
 }) {
   const { text } = useI18n()
   const up = props.side === "up"
   return (
-    <article className={up ? "side up" : "side down"}>
+    <article className={up ? "side up" : "side down"} data-lock={props.lock ?? undefined}>
       <p className="side-name">{up ? `▲ ${text.up}` : `▼ ${text.down}`}</p>
       <div className="side-figures" data-fade={props.fade ? "1" : "0"} key={props.fadeKey}>
         <p className="share">{props.share}</p>
         <p className="pool">
           {formatMoney(props.pool)} · {props.orders} {props.orders === 1 ? text.order : text.orders}
         </p>
+        <div className="you-block" data-open={props.you ? "1" : "0"}>
+          <div className="you-block-inner">
+            <p className="you-line">{props.you}</p>
+          </div>
+        </div>
         <p className="to-win">{props.quote}</p>
       </div>
       <button type="button" disabled={props.disabled} onClick={props.onBet}>
-        <span className="arrow" aria-hidden="true">{up ? "▲" : "▼"}</span>
-        <span>{up ? text.buyUp : text.buyDown}</span>
+        {props.lock === "yours" ? (
+          <span>{text.locked}</span>
+        ) : (
+          <>
+            <span className="arrow" aria-hidden="true">{up ? "▲" : "▼"}</span>
+            <span>{up ? text.buyUp : text.buyDown}</span>
+          </>
+        )}
       </button>
     </article>
   )

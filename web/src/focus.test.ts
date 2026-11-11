@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { chartMarket, focusPool, followWindow, heldMarket, heldStrike } from "./focus"
+import { chartMarket, clockFace, focusPool, followWindow, heldMarket, heldStrike, listedRoundIds } from "./focus"
 import type { Band, Board, PoolCard } from "./types"
 
 function band(id: number, buyInOpen: number, strike: string | null = null): Band {
@@ -157,7 +157,52 @@ test("a delay-sized miss stays on the server join id", () => {
   const late = followWindow(current, [], current.windowEndsAt + 100)
   expect(Math.floor(early.start / 5_000)).toBe(id)
   expect(Math.floor(late.start / 5_000)).toBe(id)
+  expect(focusPool(current, [], current.windowEndsAt + 100)?.id).toBe(id)
   const rolled = followWindow(current, [], current.windowEndsAt + 1_000)
   expect(Math.floor(rolled.start / 5_000)).toBe(id + 1)
+  expect(focusPool(current, [], current.windowEndsAt + 1_000)).toBeNull()
+})
+
+test("an expired join is not the bet id", () => {
+  const current = board()
+  expect(listedRoundIds(current, 15_000)).toEqual([])
+  expect(focusPool(current, [], 20_000)).toBeNull()
+})
+
+test("a past resume does not hold the clock at zero", () => {
+  const current = board()
+  const face = clockFace(current, 12_000, null, 11_000)
+  expect(face.kind).toBe("buy-in")
+  expect(face.endsAt).toBe(15_000)
+})
+
+test("a published window end that is behind rolls to the window that contains now", () => {
+  const current = board()
+  const now = current.windowEndsAt + 1_000
+  const face = clockFace(current, now, null, null)
+  expect(face.kind).toBe("buy-in")
+  expect(face.endsAt).toBe(20_000)
+  expect(face.endsAt).toBeGreaterThan(now)
+  const held = clockFace(current, current.windowEndsAt + 100, null, null)
+  expect(held.endsAt).toBe(current.windowEndsAt)
+})
+
+test("a struck round that is still open counts to settlement", () => {
+  const live = card(band(2, 10_000, "101"))
+  const current = board({
+    blockStart: 20_000,
+    blockEnd: 30_000,
+    windowEndsAt: 25_000,
+    join: card(band(4, 20_000)),
+    live,
+    bands: [live],
+  })
+  const bet = [{ roundId: 2, side: "up" as const, stakeMicros: 1_000_000 }]
+  const held = heldMarket(current, bet, 16_000)
+  const face = clockFace(current, 16_000, held, null)
+  expect(face.kind).toBe("settles")
+  expect(face.endsAt).toBe(25_000)
+  expect(face.spanMs).toBe(Number.POSITIVE_INFINITY)
+  expect(listedRoundIds(current, 16_000)).toContain(2)
 })
 

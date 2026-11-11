@@ -133,6 +133,12 @@ export type Copy = {
   waitSeconds: (seconds: number) => string
   quoteBack: string
   quoteGets: (money: string) => string
+  youIn: (money: string, pct: string) => string
+  stakeBack: (money: string) => string
+  stakeGets: (stake: string, back: string) => string
+  toastWallet: string
+  toastGrant: string
+  grantFailed: string
   chainTestnetMenu: string
   chainTestnetBadge: string
   chainTestnetNetwork: string
@@ -299,6 +305,12 @@ const en: Copy = {
   waitSeconds: (seconds) => `${seconds}s`,
   quoteBack: "$1 back",
   quoteGets: (money) => `$1 gets ${money}`,
+  youIn: (money, pct) => `You · ${money} · ${pct}`,
+  stakeBack: (money) => `${money} back`,
+  stakeGets: (stake, back) => `${stake} gets ${back}`,
+  toastWallet: "Wallet",
+  toastGrant: "Grant",
+  grantFailed: "Grant failed",
   chainTestnetMenu: "Base Sepolia · Testnet",
   chainTestnetBadge: "Base Sepolia Testnet",
   chainTestnetNetwork: "Base Sepolia (Testnet)",
@@ -474,6 +486,12 @@ const zhTW: Copy = {
   waitSeconds: (seconds) => `${seconds} 秒`,
   quoteBack: "$1 退回",
   quoteGets: (money) => `$1 可得 ${money}`,
+  youIn: (money, pct) => `你 · ${money} · ${pct}`,
+  stakeBack: (money) => `${money} 退回`,
+  stakeGets: (stake, back) => `${stake} 可得 ${back}`,
+  toastWallet: "錢包",
+  toastGrant: "撥款",
+  grantFailed: "撥款失敗",
   chainTestnetMenu: "Base Sepolia · 測試網",
   chainTestnetBadge: "Base Sepolia 測試網",
   chainTestnetNetwork: "Base Sepolia（測試網）",
