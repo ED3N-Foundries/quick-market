@@ -35,7 +35,7 @@ import {
 } from "./rounds"
 import { withChain } from "./activeChain"
 import { pickChain } from "./markets"
-import { agentAuthorized, endSession, openSession, readSession, sessionChainForToken } from "./session"
+import { agentAuthorized, endSession, NEAR_BUSY, openSession, readSession, sessionChainForToken } from "./session"
 
 export type HttpDeps = {
   config: () => PublicConfig
@@ -43,6 +43,7 @@ export type HttpDeps = {
   liveChains: () => ChainKey[]
   chainKey: () => ChainKey
   treasuryReport: () => unknown
+  fundingReport: () => Promise<unknown>
   grantsOpen: () => boolean
   mint: (amount: number, onHash?: (hash: string) => void) => Promise<void>
   withdraw: (address: string, amount: number) => Promise<{ ok: boolean; error?: string; you?: unknown; txHash?: string }>
@@ -262,7 +263,7 @@ async function postSession(req: Request): Promise<Response> {
     nonce: body?.nonce,
     publicKey: body?.publicKey,
   })
-  if (!result.ok) return json({ error: result.error }, 400)
+  if (!result.ok) return json({ error: result.error }, result.error === NEAR_BUSY ? 503 : 400)
   if (http.grantsOpen() && grantOnSignIn(result.you.grantAt)) {
     const settings = grantSettings()
     const chainKey = http.chainKey()
@@ -442,9 +443,7 @@ type RouteHandler = (req: Request, url: URL) => Response | Promise<Response>
 const routes: Record<string, RouteHandler> = {
   "GET /api/markets": () => json(useDeps().markets()),
   "GET /api/config": () => json(useDeps().config()),
-  "GET /api/health": () => getHealth(),
-  "GET /api/health/history": (_req, url) => getHealthHistory(url),
-  "GET /api/status": () => getStatus(),
+  "GET /api/health": () => json({ ok: true }),
   "GET /api/feeds": () => getFeeds(),
   "GET /api/tape": (_req, url) => getTape(url),
   "GET /api/state": (req) => getState(req),
@@ -459,6 +458,17 @@ const routes: Record<string, RouteHandler> = {
 function bearer(req: Request): string | null {
   const match = /^Bearer\s+([0-9a-f]{64})$/i.exec(req.headers.get("authorization") ?? "")
   return match?.[1] ?? null
+}
+
+/** Docker-network only. Caddy does not proxy port 3002. */
+export async function handleInternal(req: Request): Promise<Response> {
+  const url = new URL(req.url)
+  if (req.method !== "GET") return json({ error: "Not found" }, 404)
+  if (url.pathname === "/api/health") return getHealth()
+  if (url.pathname === "/api/health/history") return getHealthHistory(url)
+  if (url.pathname === "/api/status") return getStatus()
+  if (url.pathname === "/api/funding") return json(await useDeps().fundingReport())
+  return json({ error: "Not found" }, 404)
 }
 
 export async function handle(req: Request): Promise<Response> {

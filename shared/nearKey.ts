@@ -129,6 +129,9 @@ function decodeSignature(value: string): Uint8Array | null {
   }
 }
 
+export type Nep413Failure = "public-key" | "signature" | "implicit-key" | "mismatch"
+
+/** NEP-413 signs sha256 of the tagged payload. Ed25519 then signs that hash, the same way Meteor does. */
 export async function verifyNep413(input: {
   message: string
   account: string
@@ -136,18 +139,23 @@ export async function verifyNep413(input: {
   signature: string
   nonce: Uint8Array
   recipient: string
-}): Promise<boolean> {
+}): Promise<true | Nep413Failure> {
   const pub = parseNearPublicKey(input.publicKey)
+  if (!pub) return "public-key"
   const signature = decodeSignature(input.signature)
-  if (!pub || !signature) return false
-  if (isImplicitAccount(input.account) && hex(pub) !== input.account) return false
+  if (!signature) return "signature"
+  if (isImplicitAccount(input.account) && hex(pub) !== input.account) return "implicit-key"
   let bytes: Uint8Array
   try {
     bytes = nep413Bytes(input.message, input.nonce, input.recipient)
   } catch {
-    return false
+    return "mismatch"
   }
-  return ed.verifyAsync(signature, bytes, pub)
+  try {
+    return (await ed.verifyAsync(signature, sha256(bytes), pub)) ? true : "mismatch"
+  } catch {
+    return "mismatch"
+  }
 }
 
 export function sha256Bytes(bytes: Uint8Array): Uint8Array {

@@ -1,4 +1,6 @@
 import { expect, test } from "bun:test"
+import { KeyPairEd25519 } from "@near-js/crypto"
+import { KeyPairSigner } from "@near-js/signers"
 import { nearBotEnrollMessage, nearLoginMessage } from "./login"
 import {
   NEP413_RECIPIENT,
@@ -28,10 +30,10 @@ test("a NEP-413 signature round-trips for an implicit account", async () => {
   const message = nearLoginMessage(made.account, 9)
   const nonce = new Uint8Array(32)
   nonce[0] = 7
-  const bytes = nep413Bytes(message, nonce, NEP413_RECIPIENT)
-  const seed = (await import("bs58")).default.decode(made.secretKey.slice("ed25519:".length)).slice(0, 32)
-  const signature = Buffer.from(await ed.signAsync(bytes, seed)).toString("hex")
-  const publicKey = `ed25519:${(await import("bs58")).default.encode(Buffer.from(made.account, "hex"))}`
+  const signer = new KeyPairSigner(new KeyPairEd25519(made.secretKey.slice("ed25519:".length)))
+  const signed = await signer.signNep413Message(message, made.account, NEP413_RECIPIENT, nonce)
+  const publicKey = signed.publicKey.toString()
+  const signature = Buffer.from(signed.signature).toString("base64")
   expect(
     await verifyNep413({
       message,
@@ -42,6 +44,17 @@ test("a NEP-413 signature round-trips for an implicit account", async () => {
       recipient: NEP413_RECIPIENT,
     }),
   ).toBe(true)
+  const raw = Buffer.from(await ed.signAsync(nep413Bytes(message, nonce, NEP413_RECIPIENT), (await import("bs58")).default.decode(made.secretKey.slice("ed25519:".length)).slice(0, 32))).toString("hex")
+  expect(
+    await verifyNep413({
+      message,
+      account: made.account,
+      publicKey,
+      signature: raw,
+      nonce,
+      recipient: NEP413_RECIPIENT,
+    }),
+  ).toBe("mismatch")
   expect(
     await verifyNep413({
       message,
@@ -51,5 +64,15 @@ test("a NEP-413 signature round-trips for an implicit account", async () => {
       nonce,
       recipient: NEP413_RECIPIENT,
     }),
-  ).toBe(false)
+  ).toBe("implicit-key")
+  expect(
+    await verifyNep413({
+      message,
+      account: made.account,
+      publicKey,
+      signature: "aa",
+      nonce,
+      recipient: NEP413_RECIPIENT,
+    }),
+  ).toBe("signature")
 })

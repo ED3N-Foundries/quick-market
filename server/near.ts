@@ -82,24 +82,56 @@ function rpcErrorText(error: { message?: string; data?: unknown }): string {
   return error.message || "NEAR RPC failed"
 }
 
+/** Public testnet endpoint. NEAR documents it as severely rate limited. */
+export const NEAR_PUBLIC_RPC = "https://rpc.testnet.near.org"
+/** Documented public alternative when the NEAR endpoint answers 429. */
+export const NEAR_FALLBACK_RPC = "https://test.rpc.fastnear.com"
+const PRIMARY_QUIET_MS = 60_000
+
+let primaryQuietUntil = 0
+
+export function nearRpcBusy(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : ""
+  return message === "Server error" || message.startsWith("NEAR RPC returned")
+}
+
+/** Skip a cooling public endpoint and use the documented fallback. A custom RPC stays put. */
+export function nearRpcUrlFor(primary: string, now: number, quietUntil: number): string {
+  if (primary === NEAR_PUBLIC_RPC && now < quietUntil) return NEAR_FALLBACK_RPC
+  return primary
+}
+
+async function rpcOnce(url: string, method: string, params: unknown): Promise<unknown> {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: "quick-market", method, params }),
+  })
+  if (!response.ok) throw new Error(`NEAR RPC returned ${response.status}`)
+  const body = (await response.json()) as { result?: unknown; error?: { message?: string; data?: unknown } }
+  if (body.error) throw new Error(rpcErrorText(body.error))
+  return body.result
+}
+
 async function rpc(method: string, params: unknown): Promise<unknown> {
   let last = "NEAR RPC failed"
   const attempts = method === "send_tx" ? 1 : 4
   for (let attempt = 0; attempt < attempts; attempt++) {
+    const primary = nearRpcUrl()
+    const url = nearRpcUrlFor(primary, Date.now(), primaryQuietUntil)
     try {
-      const response = await fetch(nearRpcUrl(), {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ jsonrpc: "2.0", id: "quick-market", method, params }),
-      })
-      if (!response.ok) throw new Error(`NEAR RPC returned ${response.status}`)
-      const body = (await response.json()) as { result?: unknown; error?: { message?: string; data?: unknown } }
-      if (body.error) throw new Error(rpcErrorText(body.error))
-      return body.result
+      return await rpcOnce(url, method, params)
     } catch (error) {
       last = error instanceof Error ? error.message : "NEAR RPC failed"
-      const transient = last === "Server error" || last.startsWith("NEAR RPC returned")
-      if (!transient || attempt + 1 === attempts) break
+      if (nearRpcBusy(new Error(last)) && url === NEAR_PUBLIC_RPC) {
+        primaryQuietUntil = Date.now() + PRIMARY_QUIET_MS
+        try {
+          return await rpcOnce(NEAR_FALLBACK_RPC, method, params)
+        } catch (fallbackError) {
+          last = fallbackError instanceof Error ? fallbackError.message : last
+        }
+      }
+      if (!nearRpcBusy(new Error(last)) || attempt + 1 === attempts) break
       await new Promise((resolve) => setTimeout(resolve, 1000 * (attempt + 1)))
     }
   }
@@ -267,7 +299,8 @@ export async function collectHoldings(treasury: string, agents: string[]): Promi
   return { treasury: treasuryHolding, agents: rows }
 }
 
-function failedReport(treasury: string, agents: string[], error: unknown): TreasuryReport {
+/** A failed read has no balance. Keep the error line and do not publish the zero placeholders as holdings. */
+function uncheckedReport(treasury: string, agents: string[], error: unknown): TreasuryReport {
   const line = error instanceof Error ? error.message : "NEAR check failed"
   const report = describeTreasury({
     account: treasury,
@@ -276,7 +309,12 @@ function failedReport(treasury: string, agents: string[], error: unknown): Treas
     agents: agents.map((account) => ({ account, holding: { exists: false, nearYocto: 0n, tokenMicros: 0n } })),
   })
   report.ok = false
-  report.lines = [line, ...report.lines]
+  report.lines = [line]
+  return report
+}
+
+function failedReport(treasury: string, agents: string[], error: unknown): TreasuryReport {
+  const report = uncheckedReport(treasury, agents, error)
   latest = report
   for (const row of report.lines) console.error(row)
   return report
@@ -348,15 +386,7 @@ export async function inspectNear(treasury: string): Promise<TreasuryReport> {
     latest = report
     return report
   } catch (error) {
-    const line = error instanceof Error ? error.message : "NEAR check failed"
-    const report = describeTreasury({
-      account: treasury,
-      treasury: { exists: false, nearYocto: 0n, tokenMicros: 0n },
-      ledgerMicros: 0n,
-      agents: agents.map((account) => ({ account, holding: { exists: false, nearYocto: 0n, tokenMicros: 0n } })),
-    })
-    report.ok = false
-    report.lines = [line, ...report.lines]
+    const report = uncheckedReport(treasury, agents, error)
     latest = report
     return report
   }

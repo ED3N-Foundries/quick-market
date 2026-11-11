@@ -63,6 +63,8 @@ test("mobile without Phantom browses, and a press on an open page connects then 
 
 test("sign-in status names Phantom, then the signature, then the grant", () => {
   expect(loginStatus("phantom", true)).toBe("Waiting for Phantom")
+  expect(loginStatus("phantom", true, "en", "near-testnet")).toBe("Waiting for Meteor")
+  expect(loginStatus("sign", true, "en", "near-testnet")).toBe("Approve the sign-in in Meteor")
   expect(loginStatus("sign", false)).toBe("Approve the sign-in in Phantom")
   expect(loginStatus("session", true)).toBe("Signed. Adding your balance on Base Sepolia. This can take a bit.")
   expect(loginStatus("session", false)).toBe("Confirming sign-in")
@@ -149,6 +151,9 @@ test("shortWalletFault keeps a stable short line and the full detail", () => {
     "Phantom connection failed",
   )
   expect(shortWalletFault("Quick Market: Sign-in expired")).toBe("Quick Market: Sign-in expired")
+  expect(shortWalletFault("Signature is invalid\nThe sign-in nonce is missing or not 32 bytes.")).toBe(
+    "Signature is invalid",
+  )
   const long = `Phantom personal_sign: ${"x".repeat(200)}`
   expect(shortWalletFault(long).endsWith("...")).toBe(true)
   expect(shortWalletFault(long).length).toBeLessThanOrEqual(80)

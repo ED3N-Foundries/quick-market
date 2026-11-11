@@ -8,7 +8,9 @@ import { activeChainKey } from "./activeChain"
 import { chainConfig, loadEnv } from "./env"
 import { getDb } from "./db"
 import { normalizeAccount } from "./money"
-import { accessKeyOnAccount } from "./near"
+import { accessKeyOnAccount, nearRpcBusy } from "./near"
+
+export const NEAR_BUSY = "NEAR is busy. Try again."
 import { ensureUser, youFor, type You } from "./rounds"
 
 const SIGNATURE = /^0x[0-9a-fA-F]+$/
@@ -23,6 +25,21 @@ function hex(bytes: Uint8Array): string {
   return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("")
 }
 
+type NearSignFailure = "nonce" | "public-key" | "implicit-key" | "access-key" | "signature" | "mismatch" | "agent"
+
+function nearSignError(reason: NearSignFailure): string {
+  const detail = {
+    nonce: "The sign-in nonce is missing or not 32 bytes.",
+    "public-key": "The public key is missing or not an ed25519 key.",
+    "implicit-key": "The public key does not match this implicit account.",
+    "access-key": "This public key is not an access key on the account.",
+    signature: "The signature is not 64 bytes.",
+    mismatch: "The signature does not match the sign-in message (NEP-413, sha256, recipient quick-market, no callback URL).",
+    agent: "The agent signature does not match the enroll message.",
+  }[reason]
+  return `Signature is invalid\n${detail}`
+}
+
 async function nearSignatureOk(input: {
   address: string
   signature: string
@@ -30,19 +47,23 @@ async function nearSignatureOk(input: {
   bot: boolean
   nonce?: unknown
   publicKey?: unknown
-}): Promise<boolean> {
+}): Promise<true | NearSignFailure> {
   const message = nearLoginMessage(input.address, input.issued)
-  if (input.bot) return isImplicitAccount(input.address) && (await verifyNearMessage(message, input.address, input.signature))
+  if (input.bot) {
+    const ok = isImplicitAccount(input.address) && (await verifyNearMessage(message, input.address, input.signature))
+    return ok ? true : "agent"
+  }
   const nonce = nonceBytes(input.nonce)
-  if (!nonce || typeof input.publicKey !== "string") return false
+  if (!nonce) return "nonce"
+  if (typeof input.publicKey !== "string" || !parseNearPublicKey(input.publicKey)) return "public-key"
   if (isImplicitAccount(input.address)) {
     const pub = parseNearPublicKey(input.publicKey)
-    if (!pub || hex(pub) !== input.address) return false
+    if (!pub || hex(pub) !== input.address) return "implicit-key"
   } else {
     const present = await accessKeyOnAccount(input.address, input.publicKey)
-    if (!present) return false
+    if (!present) return "access-key"
   }
-  return verifyNep413({
+  const verified = await verifyNep413({
     message,
     account: input.address,
     publicKey: input.publicKey,
@@ -50,6 +71,7 @@ async function nearSignatureOk(input: {
     nonce,
     recipient: NEP413_RECIPIENT,
   })
+  return verified === true ? true : verified
 }
 
 export async function openSession(input: {
@@ -76,15 +98,21 @@ export async function openSession(input: {
     return { ok: false, error: "Sign-in expired" }
   }
   if (chainKey === "near-testnet") {
-    const ok = await nearSignatureOk({
-      address,
-      signature: input.signature,
-      issued: input.issued,
-      bot: botSecretOk(input.botSecret),
-      nonce: input.nonce,
-      publicKey: input.publicKey,
-    })
-    if (!ok) return { ok: false, error: "Signature is invalid" }
+    let ok: true | NearSignFailure
+    try {
+      ok = await nearSignatureOk({
+        address,
+        signature: input.signature,
+        issued: input.issued,
+        bot: botSecretOk(input.botSecret),
+        nonce: input.nonce,
+        publicKey: input.publicKey,
+      })
+    } catch (error) {
+      if (nearRpcBusy(error)) return { ok: false, error: NEAR_BUSY }
+      throw error
+    }
+    if (ok !== true) return { ok: false, error: nearSignError(ok) }
   } else {
     if (!SIGNATURE.test(input.signature)) return { ok: false, error: "Signature is invalid" }
     const message = loginMessage(chainId, address, input.issued)

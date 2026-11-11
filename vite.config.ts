@@ -1,6 +1,17 @@
+import { readFileSync } from "node:fs"
 import { defineConfig } from "vite"
 import react from "@vitejs/plugin-react"
 import { brandHead } from "./brand/meta.ts"
+
+/** Vite's dev prebundle folds `process.env.NODE_ENV === "development"` to true inside Meteor, which renders Dev Web and the Dev/Prod switch. */
+function meteorProductionEnv(code: string): string | null {
+  if (!code.includes("process.env.NODE_ENV")) return null
+  return code.replaceAll("process.env.NODE_ENV", "globalThis.__QUICK_MARKET_NODE_ENV")
+}
+
+function meteorSdkSource(id: string): boolean {
+  return id.includes("@meteorwallet/sdk/dist/index.js")
+}
 
 export default defineConfig({
   root: "web",
@@ -27,7 +38,32 @@ export default defineConfig({
         },
       },
     },
+    {
+      name: "qm-meteor-production",
+      enforce: "pre",
+      transform(code: string, id: string) {
+        if (!meteorSdkSource(id)) return
+        return meteorProductionEnv(code)
+      },
+    },
   ],
+  optimizeDeps: {
+    rolldownOptions: {
+      plugins: [
+        {
+          name: "qm-meteor-production",
+          load(id: string) {
+            if (!meteorSdkSource(id)) return null
+            return meteorProductionEnv(readFileSync(id, "utf8"))
+          },
+          transform(code: string, id: string) {
+            if (!meteorSdkSource(id)) return null
+            return meteorProductionEnv(code)
+          },
+        },
+      ],
+    },
+  },
   server: {
     port: 5173,
     strictPort: true,

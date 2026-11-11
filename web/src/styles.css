@@ -576,6 +576,7 @@ body {
   font-size: 12px;
   line-height: 1.45;
   overflow-wrap: anywhere;
+  white-space: pre-line;
   max-height: 128px;
   overflow: auto;
 }

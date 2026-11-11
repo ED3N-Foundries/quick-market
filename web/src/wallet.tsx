@@ -19,15 +19,17 @@ import { base, baseSepolia } from "wagmi/chains"
 import { tokenLabel, type ChainConfig } from "../../shared/chain"
 import { loginMessage } from "../../shared/login"
 import {
-  clearNearPending,
-  nearLoginUrl,
+  METEOR_POPUP_BLOCKED,
+  meteorCancelled,
+  meteorPopupBlocked,
+  meteorSignIn,
+  meteorSignMessage,
+  meteorSignOut,
+  nearLoginResume,
   newNonce,
-  parseNearAccount,
-  parseNearCallback,
-  readNearPending,
-  saveNearPending,
-  signMessageFor,
-  stripNearParams,
+  releaseMeteorPopup,
+  reserveMeteorPopup,
+  type NearLoginDraft,
 } from "./nearConnect"
 import { usdcAbi } from "../../shared/usdc"
 import {
@@ -48,6 +50,7 @@ import {
   phantomBrowseUrl,
   phantomEthereumProvider,
   phantomInjected,
+  SIGN_PROMPT,
   providerFault,
   requestPhantomAccounts,
   swallowedConnectError,
@@ -662,62 +665,19 @@ function NearBridge({ children, chain }: { children: ReactNode; chain: ChainConf
   const [signing, setSigning] = useState(false)
   const [loginPhase, setLoginPhase] = useState<LoginPhase | null>(null)
   const [signError, setSignError] = useState<string | null>(null)
-
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search)
-    const callback = parseNearCallback(params)
-    const returned = parseNearAccount(params)
-    const pending = readNearPending()
-    if (!callback && !(returned && pending && pending.accountId === null)) return
-    window.history.replaceState({}, "", stripNearParams(window.location.href))
-    if (callback && pending) {
-      clearNearPending()
-      setSigning(true)
-      setLoginPhase("session")
-      void fetch(marketUrl("/api/session", chain.key), {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          address: callback.accountId,
-          signature: callback.signature,
-          issued: pending.issued,
-          nonce: pending.nonce,
-          publicKey: callback.publicKey,
-        }),
-      })
-        .then(async (response) => {
-          const body = (await response.json()) as { token?: string; error?: string; you?: unknown }
-          if (!response.ok || !body.token) throw new Error(body.error ?? "Sign-in failed")
-          sessionStorage.setItem(sessionKey(chain.key), JSON.stringify({ token: body.token, address: callback.accountId, chainId: expected }))
-          setSignedYou(sessionYou(body.you))
-          setToken(body.token)
-          setAddress(callback.accountId)
-          setSignError(null)
-        })
-        .catch((error: unknown) => {
-          setSignError(error instanceof Error ? error.message : "Sign-in failed")
-        })
-        .finally(() => {
-          setSigning(false)
-          setLoginPhase(null)
-        })
-      return
-    }
-    if (returned && pending && pending.accountId === null) {
-      saveNearPending({ issued: pending.issued, nonce: pending.nonce, accountId: returned })
-      window.location.assign(signMessageFor(returned, pending.issued, pending.nonce, window.location.href))
-    }
-  }, [])
+  const pendingLogin = useRef<NearLoginDraft | null>(null)
 
   const disconnect = () => {
     const current = readStored(expected, chain.key)
     if (current) void fetch(marketUrl("/api/session", chain.key), { method: "DELETE", headers: { authorization: `Bearer ${current.token}` } })
     sessionStorage.removeItem(sessionKey(chain.key))
-    clearNearPending()
     setToken(null)
     setAddress(null)
     setSignedYou(null)
     setSignError(null)
+    pendingLogin.current = null
+    releaseMeteorPopup()
+    void meteorSignOut().catch(() => {})
   }
 
   const session: WalletSession = {
@@ -732,13 +692,57 @@ function NearBridge({ children, chain }: { children: ReactNode; chain: ChainConf
     loginPhase,
     signError,
     login: () => {
-      const issued = Date.now()
-      const nonce = newNonce().base64
-      saveNearPending({ issued, nonce, accountId: null })
+      const now = Date.now()
+      const resume = nearLoginResume(pendingLogin.current, now)
+      if (!resume) pendingLogin.current = null
+      const issued = resume?.issued ?? now
+      const nonce = resume?.nonce ?? newNonce()
+      if (resume && !reserveMeteorPopup()) {
+        setSignError(METEOR_POPUP_BLOCKED)
+        return
+      }
       setSigning(true)
       setLoginPhase("sign")
       setSignError(null)
-      window.location.assign(nearLoginUrl(window.location.href))
+      void (async () => {
+        let accountId = resume?.accountId ?? ""
+        try {
+          if (!resume) {
+            accountId = await meteorSignIn()
+            pendingLogin.current = { accountId, issued, nonce }
+          }
+          const signed = await meteorSignMessage(accountId, issued, nonce.bytes)
+          setLoginPhase("session")
+          const response = await fetch(marketUrl("/api/session", chain.key), {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              address: signed.accountId,
+              signature: signed.signature,
+              issued,
+              nonce: nonce.base64,
+              publicKey: signed.publicKey,
+            }),
+          })
+          const body = (await response.json()) as { token?: string; error?: string; you?: unknown }
+          if (!response.ok || !body.token) throw new Error(body.error ?? "Sign-in failed")
+          pendingLogin.current = null
+          releaseMeteorPopup()
+          sessionStorage.setItem(sessionKey(chain.key), JSON.stringify({ token: body.token, address: signed.accountId, chainId: expected }))
+          setSignedYou(sessionYou(body.you))
+          setToken(body.token)
+          setAddress(signed.accountId)
+          setSignError(null)
+        } catch (error: unknown) {
+          if (!accountId || meteorCancelled(error)) pendingLogin.current = null
+          releaseMeteorPopup()
+          if (meteorPopupBlocked(error)) setSignError(METEOR_POPUP_BLOCKED)
+          else setSignError(meteorCancelled(error) ? SIGN_PROMPT : error instanceof Error ? error.message : "Sign-in failed")
+        } finally {
+          setSigning(false)
+          setLoginPhase(null)
+        }
+      })()
     },
     connectMode: "modal",
     connectError: null,

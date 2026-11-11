@@ -1,7 +1,6 @@
 import { Children, isValidElement, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react"
 import type { Lang } from "../../shared/lang"
 import { RENDER_MS } from "../../shared/market"
-import { reportLines, type TreasuryReport } from "../../shared/near"
 import { MINT_CONFIRMATIONS } from "../../shared/mint"
 import { mountChart, priceY, type ChartScale, type TapeChart, type TapeSample } from "./chart"
 import { chartMarket, clockFace, focusPool, followWindow, heldMarket, heldStrike } from "./focus"
@@ -94,7 +93,6 @@ export function App({
   const [withdrawAmount, setWithdrawAmount] = useState("")
   const [withdrawError, setWithdrawError] = useState<string | null>(null)
   const [withdrawing, setWithdrawing] = useState(false)
-  const [treasuryReport, setTreasuryReport] = useState<TreasuryReport | null>(null)
   const [following, setFollowing] = useState(true)
   const [briefOpen, setBriefOpen] = useState(false)
   const briefChecked = useRef(false)
@@ -120,26 +118,6 @@ export function App({
   }, [session.address])
 
   const followHash = market.you?.grantPending?.txHash || (funding ? grantTx : null)
-  useEffect(() => {
-    if (market.config.chainKey !== "near-testnet") return
-    let cancel = false
-    const tick = () => {
-      void fetch("/api/health")
-        .then((response) => response.json())
-        .then((body: { treasury?: TreasuryReport | null }) => {
-          if (!cancel) setTreasuryReport(body.treasury ?? null)
-        })
-        .catch(() => {
-          if (!cancel) setTreasuryReport(null)
-        })
-    }
-    tick()
-    const id = window.setInterval(tick, 15_000)
-    return () => {
-      cancel = true
-      window.clearInterval(id)
-    }
-  }, [market.config.chainKey])
   useEffect(() => {
     if (!followHash) return
     if (market.config.chainKey === "near-testnet") {
@@ -517,9 +495,7 @@ export function App({
               </button>
             ))}
           </div>
-          {(lost || (market.seenLive && degraded)) && (
-            <LinkQualityBadge link={market.link} blocked={lost} />
-          )}
+          {lost && <LinkQualityBadge link={market.link} blocked />}
         </div>
         <div className="clock-cluster" data-move={heldSpan?.strike ? "1" : "0"}>
           <PriceReadout
@@ -543,9 +519,6 @@ export function App({
           </div>
         </div>
       </header>
-      {treasuryReport && !treasuryReport.ok && (
-        <p className="note warn">{reportLines(treasuryReport, text.nearReport).join(" · ")}</p>
-      )}
       {session.chainError && <p className="note bad">{localize(lang, session.chainError)}</p>}
       {session.pageChain && market.config.treasury && market.config.chainId !== session.pageChain.id && (
         <p className="note bad">{text.pageChain(session.pageChain.name, market.config.chainName)}</p>

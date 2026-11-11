@@ -11,7 +11,8 @@ import { pickChain } from "./markets"
 import { readSessionToken, sessionChainForToken } from "./session"
 import { grantSettings } from "./grant"
 import { hub } from "./hub"
-import { bindHttp, handleSafe, json } from "./http"
+import { bindHttp, handleInternal, handleSafe, json } from "./http"
+import { collectFunding } from "./funding"
 import { MarketStream } from "./stream"
 import { lagEcho } from "./lag"
 import { parseMicros } from "./money"
@@ -308,6 +309,19 @@ bindHttp({
   liveChains: liveKeys,
   chainKey: () => activeChainKey(),
   treasuryReport: () => runtimeFor().treasuryReport(),
+  fundingReport: () => collectFunding({
+    chains: liveKeys().map((key) => {
+      const current = runtimeFor(key)
+      return {
+        chain: current.chain,
+        treasury: current.treasury,
+        token: current.token,
+        tokenLabel: current.tokenLabel,
+        near: current.treasuryReport(),
+      }
+    }),
+    db: getDb(),
+  }),
   grantsOpen,
   mint: mintTreasury,
   withdraw: (address, amount) => runtimeFor().withdraw(address, amount),
@@ -422,6 +436,22 @@ if (process.env.QM_HEALTH_LOG !== "0") {
 }
 
 const host = process.env.HOST?.trim() || "127.0.0.1"
+
+try {
+  Bun.serve({
+    port: 3002,
+    hostname: host,
+    idleTimeout: 30,
+    fetch(req) {
+      return handleInternal(req).catch((error) => {
+        console.error(error)
+        return json({ error: "Server error" }, 500)
+      })
+    },
+  })
+} catch (error) {
+  console.error(error instanceof Error ? error.message : error)
+}
 
 Bun.serve<{ address: string | null; chain: ChainKey }>({
   port,
