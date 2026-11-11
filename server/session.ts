@@ -3,7 +3,9 @@ import { recoverMessageAddress, type Hex } from "viem"
 import { LOGIN_SKEW_MS, SESSION_MS, loginMessage, nearLoginMessage } from "../shared/login"
 import { NEP413_RECIPIENT, parseNearPublicKey, verifyNep413, verifyNearMessage } from "../shared/nearKey"
 import { isImplicitAccount } from "../shared/near"
-import { configuredChain, loadEnv } from "./env"
+import type { ChainKey } from "../shared/chain"
+import { activeChainKey } from "./activeChain"
+import { chainConfig, loadEnv } from "./env"
 import { getDb } from "./db"
 import { normalizeAccount } from "./money"
 import { accessKeyOnAccount } from "./near"
@@ -59,10 +61,10 @@ export async function openSession(input: {
   nonce?: unknown
   publicKey?: unknown
 }): Promise<{ ok: true; token: string; you: You } | { ok: false; error: string }> {
-  let chainKey: ReturnType<typeof configuredChain>["key"]
+  let chainKey: ChainKey
   let chainId: number
   try {
-    const chain = configuredChain()
+    const chain = chainConfig()
     chainKey = chain.key
     chainId = chain.id
   } catch (error) {
@@ -117,14 +119,24 @@ export async function openSession(input: {
   return { ok: true, token, you: youFor(address)! }
 }
 
+export function sessionChainForToken(token: string, now = Date.now()): ChainKey | null {
+  if (!/^[0-9a-f]{64}$/i.test(token)) return null
+  const row = getDb().query("SELECT chain_key, expires_at FROM sessions WHERE token = ?").get(token) as {
+    chain_key: ChainKey
+    expires_at: number
+  } | null
+  if (!row || row.expires_at <= now) return null
+  return row.chain_key
+}
+
 export function readSessionToken(token: unknown, now = Date.now()): { address: string | null; rejected: boolean } {
   // A hello with no token is an anonymous visitor. Only a token that was sent can be rejected.
   if (token == null) return { address: null, rejected: false }
   if (typeof token !== "string" || !/^[0-9a-f]{64}$/i.test(token)) return { address: null, rejected: true }
   const row = getDb()
-    .query("SELECT address, expires_at FROM sessions WHERE chain_key = ? AND token = ?")
-    .get(configuredChain().key, token) as { address: string; expires_at: number } | null
-  if (!row || row.expires_at <= now) return { address: null, rejected: true }
+    .query("SELECT chain_key, address, expires_at FROM sessions WHERE token = ?")
+    .get(token) as { chain_key: ChainKey; address: string; expires_at: number } | null
+  if (!row || row.expires_at <= now || row.chain_key !== activeChainKey()) return { address: null, rejected: true }
   return { address: row.address, rejected: false }
 }
 
@@ -140,7 +152,7 @@ export function endSession(req: Request) {
   const header = req.headers.get("authorization") ?? ""
   const match = /^Bearer\s+([0-9a-f]{64})$/i.exec(header)
   if (!match) return
-  getDb().query("DELETE FROM sessions WHERE chain_key = ? AND token = ?").run(configuredChain().key, match[1]!)
+  getDb().query("DELETE FROM sessions WHERE token = ?").run(match[1]!)
 }
 
 function randomToken(): string {

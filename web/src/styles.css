@@ -88,7 +88,28 @@ body {
 }
 .clock-cluster[data-move="1"] { grid-template-columns: auto auto auto; }
 
-.brand { display: flex; flex-direction: column; gap: 2px; }
+.brand { display: flex; flex-direction: column; gap: 2px; align-items: flex-start; }
+.market-switch {
+  display: inline-flex;
+  margin-top: 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--raise);
+}
+.app button.market-switch-btn {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 3px 12px;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+.app button.market-switch-btn[aria-pressed="true"] {
+  background: var(--text);
+  color: #111;
+}
 .mark {
   display: inline-flex;
   align-items: center;

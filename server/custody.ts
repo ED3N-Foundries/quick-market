@@ -14,9 +14,9 @@ import { base, baseSepolia } from "viem/chains"
 import type { ChainConfig } from "../shared/chain"
 import { mintReceiptWait } from "../shared/mint"
 import { mintAbi, usdcAbi } from "../shared/usdc"
-import { activeChainKey } from "./activeChain"
+import { activeChainKey, withChain } from "./activeChain"
 import { getDb } from "./db"
-import { configuredChain, loadEnv } from "./env"
+import { chainConfig, loadEnv, rpcFor } from "./env"
 import { normalizeAddress } from "./money"
 import { credit, withdraw, youFor, type You } from "./rounds"
 
@@ -72,9 +72,9 @@ export function treasuryFaultMessage(error: unknown, chainName: string): string 
 }
 
 async function signedTransfer(to: Address, amount: bigint): Promise<Hex> {
-  const config = configuredChain()
+  const config = chainConfig()
   const account = treasuryAccount()
-  const transport = http(loadEnv().rpcUrl || config.rpc)
+  const transport = http(rpcFor(config.key))
   const data = encodeFunctionData({ abi: usdcAbi, functionName: "transfer", args: [to, amount] })
   const chain = config.id === base.id ? base : baseSepolia
   const publicClient = createPublicClient({ chain, transport })
@@ -112,14 +112,16 @@ export async function mintToTreasury(amountMicros: number, onHash?: (hash: Hash)
     pendingMintWaiters.push({ resolve, reject, onHash })
     if (mintScheduled) return
     mintScheduled = true
+    const mintChain = activeChainKey()
     queueMicrotask(() => {
+      withChain(mintChain, () => {
       mintScheduled = false
       const total = pendingMintMicros
       const waiters = pendingMintWaiters
       pendingMintMicros = 0
       pendingMintWaiters = []
       if (total <= 0 || waiters.length === 0) return
-      enqueue(async () => {
+      enqueue(() => withChain(mintChain, async () => {
         const { chain, account, publicClient, walletClient } = clients()
         const hash = await walletClient.writeContract({
           address: chain.usdc,
@@ -137,7 +139,7 @@ export async function mintToTreasury(amountMicros: number, onHash?: (hash: Hash)
         }
         const receipt = await publicClient.waitForTransactionReceipt(mintReceiptWait(hash))
         if (receipt.status !== "success") throw new Error(`Mint failed ${hash}`)
-      }).then(
+      })).then(
         () => {
           for (const waiter of waiters) waiter.resolve()
         },
@@ -145,14 +147,15 @@ export async function mintToTreasury(amountMicros: number, onHash?: (hash: Hash)
           for (const waiter of waiters) waiter.reject(error)
         },
       )
+      })
     })
   })
 }
 
 function clients() {
-  const chain = configuredChain()
+  const chain = chainConfig()
   const account = treasuryAccount()
-  const transport = http(loadEnv().rpcUrl || chain.rpc)
+  const transport = http(rpcFor(chain.key))
   const chainDef = chain.id === base.id ? base : baseSepolia
   return {
     chain,
@@ -221,7 +224,7 @@ async function requestWithdrawLocked(
     hash = keccak256(raw)
   } catch (error) {
     if (!(error instanceof TreasuryShort)) console.error(error)
-    return { ok: false, error: treasuryFaultMessage(error, configuredChain().name) }
+    return { ok: false, error: treasuryFaultMessage(error, chainConfig().name) }
   }
 
   const id = crypto.randomUUID()
@@ -393,7 +396,7 @@ export async function submitBurn(id: string): Promise<{ ok: true; txHash: string
     } catch (error) {
       if (!(error instanceof TreasuryShort)) console.error(error)
       refundBurn(id)
-      return { ok: false, error: treasuryFaultMessage(error, configuredChain().name) }
+      return { ok: false, error: treasuryFaultMessage(error, chainConfig().name) }
     }
   }
   return finishBurn(id)
@@ -448,18 +451,21 @@ async function finishBurn(id: string): Promise<{ ok: true; txHash: string } | { 
 let polling = false
 
 export function startCustody() {
+  const chainKey = activeChainKey()
   const runtime = globalThis as unknown as { quickMarketCustody?: ReturnType<typeof setInterval> }
   if (runtime.quickMarketCustody) clearInterval(runtime.quickMarketCustody)
   const tick = () => {
-    if (polling) return
-    polling = true
-    const { chain, account, publicClient } = clients()
-    Promise.all([
-      pollDeposits(publicClient, chain, account.address).catch((error) => console.error(error)),
-      resumeWithdrawals().catch((error) => console.error(error)),
-      resumeBurns().catch((error) => console.error(error)),
-    ]).finally(() => {
-      polling = false
+    withChain(chainKey, () => {
+      if (polling) return
+      polling = true
+      const { chain, account, publicClient } = clients()
+      Promise.all([
+        pollDeposits(publicClient, chain, account.address).catch((error) => console.error(error)),
+        resumeWithdrawals().catch((error) => console.error(error)),
+        resumeBurns().catch((error) => console.error(error)),
+      ]).finally(() => {
+        polling = false
+      })
     })
   }
   tick()

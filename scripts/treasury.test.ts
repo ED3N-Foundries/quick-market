@@ -5,12 +5,14 @@ import { join } from "node:path"
 import { expect, test } from "bun:test"
 import { privateKeyToAccount } from "viem/accounts"
 import { CHAINS } from "../shared/chain"
+import { generateNearSecret } from "../shared/nearKey"
 import {
   formatEth,
   formatUsd,
   latestMovements,
   movementsFromFeeds,
   movementsFromUsdcLogs,
+  planNearTreasury,
   planTreasury,
   readLedger,
   renderTreasury,
@@ -60,6 +62,18 @@ test("planTreasury refuses an environment key that is not in the file", () => {
   const plan = planTreasury("TREASURY_PRIVATE_KEY=\n", fromEnv, generated)
   expect(plan).toEqual({ action: "refuse", address: privateKeyToAccount(fromEnv).address })
   expect(JSON.stringify(plan)).not.toContain(generated)
+})
+
+test("planNearTreasury writes NEAR_TREASURY_PRIVATE_KEY and leaves the Base key", async () => {
+  const made = await generateNearSecret()
+  const source = `TREASURY_PRIVATE_KEY=${generated}\nUSDC_ADDRESS=0x${"cd".repeat(20)}\nNEAR_TREASURY_PRIVATE_KEY=\n`
+  const plan = await planNearTreasury(source, undefined, made.secretKey)
+  expect(plan.action).toBe("write")
+  if (plan.action !== "write") return
+  expect(plan.text).toContain(`NEAR_TREASURY_PRIVATE_KEY=${made.secretKey}`)
+  expect(plan.text).toContain(`TREASURY_PRIVATE_KEY=${generated}`)
+  expect(plan.text).not.toMatch(/^TREASURY_PRIVATE_KEY=ed25519:/m)
+  expect(await planNearTreasury(source, generated, made.secretKey)).toEqual({ action: "invalid" })
 })
 
 test("planTreasury does not overwrite a damaged key", () => {

@@ -7,6 +7,7 @@ import type { Copy } from "./copy"
 import { useI18n } from "./i18n"
 import { FeedBadge } from "./venues"
 import { ChartOverlay, useScrub } from "./App"
+import { withChainQuery } from "./runtimeConfig"
 
 export function History({
   token,
@@ -14,6 +15,7 @@ export function History({
   windowMs,
   blocked,
   notice,
+  chainKey,
 }: {
   token: string | null
   version: number
@@ -21,6 +23,7 @@ export function History({
   blocked: boolean
   /** Reconnecting copy. False during the first connection, while buys stay disabled. */
   notice: boolean
+  chainKey: string
 }) {
   const { lang, text } = useI18n()
   const [mine, setMine] = useState(false)
@@ -31,7 +34,7 @@ export function History({
 
   useEffect(() => {
     let cancel = false
-    fetch("/api/rounds?limit=10")
+    fetch(withChainQuery("/api/rounds?limit=10", chainKey))
       .then((response) => response.json())
       .then((body) => {
         if (!cancel) setPublicRows(body.rounds ?? [])
@@ -40,12 +43,12 @@ export function History({
     return () => {
       cancel = true
     }
-  }, [version])
+  }, [version, chainKey])
 
   useEffect(() => {
     if (!mine || !token) return
     let cancel = false
-    fetch("/api/rounds?limit=10&mine=1", { headers: { authorization: `Bearer ${token}` } })
+    fetch(withChainQuery("/api/rounds?limit=10&mine=1", chainKey), { headers: { authorization: `Bearer ${token}` } })
       .then((response) => response.json())
       .then((body) => {
         if (!cancel) setMineRows(body.rounds ?? [])
@@ -54,7 +57,7 @@ export function History({
     return () => {
       cancel = true
     }
-  }, [token, mine, version])
+  }, [token, mine, version, chainKey])
 
   const marks = publicRows.slice(0, 3).flatMap((row) => {
     const mark = historyMark(row, text)
@@ -150,7 +153,7 @@ export function History({
           </tbody>
         </table>
       )}
-      {replay && <Replay row={replay} windowMs={windowMs} onClose={() => setReplay(null)} />}
+      {replay && <Replay row={replay} windowMs={windowMs} chainKey={chainKey} onClose={() => setReplay(null)} />}
     </details>
   )
 }
@@ -184,7 +187,7 @@ function PoolRows({ rows, payout }: { rows: TrayRow[]; payout?: (row: TrayRow) =
   )
 }
 
-function Replay({ row, windowMs, onClose }: { row: HistoryRound; windowMs: number; onClose: () => void }) {
+function Replay({ row, windowMs, chainKey, onClose }: { row: HistoryRound; windowMs: number; chainKey: string; onClose: () => void }) {
   const { lang, text } = useI18n()
   const langRef = useRef(lang)
   langRef.current = lang
@@ -206,7 +209,7 @@ function Replay({ row, windowMs, onClose }: { row: HistoryRound; windowMs: numbe
   useEffect(() => {
     let cancel = false
     let spawned: TapeChart | null = null
-    fetch(`/api/rounds/${row.id}`)
+    fetch(withChainQuery(`/api/rounds/${row.id}`, chainKey))
       .then((response) => {
         if (!response.ok) throw new Error("missing")
         return response.json()
@@ -241,7 +244,7 @@ function Replay({ row, windowMs, onClose }: { row: HistoryRound; windowMs: numbe
       cancel = true
       spawned?.destroy()
     }
-  }, [row, windowMs])
+  }, [row, windowMs, chainKey])
 
   const board: Board = {
     blockStart: row.startsAt - windowMs,

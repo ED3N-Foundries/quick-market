@@ -33,10 +33,14 @@ import {
   tickerNow,
   youFor,
 } from "./rounds"
-import { agentAuthorized, endSession, openSession, readSession } from "./session"
+import { withChain } from "./activeChain"
+import { pickChain } from "./markets"
+import { agentAuthorized, endSession, openSession, readSession, sessionChainForToken } from "./session"
 
 export type HttpDeps = {
   config: () => PublicConfig
+  markets: () => { defaultChainKey: ChainKey; markets: PublicConfig[] }
+  liveChains: () => ChainKey[]
   chainKey: () => ChainKey
   treasuryReport: () => unknown
   grantsOpen: () => boolean
@@ -436,6 +440,7 @@ async function serveAsset(file: Bun.BunFile, html: boolean, lang: Lang | null): 
 type RouteHandler = (req: Request, url: URL) => Response | Promise<Response>
 
 const routes: Record<string, RouteHandler> = {
+  "GET /api/markets": () => json(useDeps().markets()),
   "GET /api/config": () => json(useDeps().config()),
   "GET /api/health": () => getHealth(),
   "GET /api/health/history": (_req, url) => getHealthHistory(url),
@@ -451,8 +456,27 @@ const routes: Record<string, RouteHandler> = {
   "GET /api/rounds": (req, url) => getRounds(req, url),
 }
 
+function bearer(req: Request): string | null {
+  const match = /^Bearer\s+([0-9a-f]{64})$/i.exec(req.headers.get("authorization") ?? "")
+  return match?.[1] ?? null
+}
+
 export async function handle(req: Request): Promise<Response> {
   const url = new URL(req.url)
+  if (req.method === "GET" && url.pathname === "/api/markets") return json(useDeps().markets())
+  const live = useDeps().liveChains()
+  const token = bearer(req)
+  const picked = pickChain({
+    raw: url.searchParams.get("chain"),
+    sessionChain: token ? sessionChainForToken(token) : null,
+    live,
+    agent: url.pathname.startsWith("/api/agents/"),
+  })
+  if (!picked.ok) return json({ error: picked.error }, picked.status)
+  return withChain(picked.chain, () => handleScoped(req, url))
+}
+
+async function handleScoped(req: Request, url: URL): Promise<Response> {
   const exact = routes[`${req.method} ${url.pathname}`]
   if (exact) return exact(req, url)
   if (url.pathname.startsWith("/api/agents/")) return postAgents(req, url)

@@ -57,7 +57,14 @@ import {
 import { bindPhantomSdk, phantomConnector } from "./phantomConnector"
 import type { GrantPending, You } from "./types"
 
-const SESSION_KEY = "qm.session"
+function sessionKey(chainKey: string) {
+  return `qm.session.${chainKey}`
+}
+
+function marketUrl(path: string, chainKey: string) {
+  const join = path.includes("?") ? "&" : "?"
+  return `${path}${join}chain=${encodeURIComponent(chainKey)}`
+}
 
 function sessionYou(value: unknown): You | null {
   if (!value || typeof value !== "object") return null
@@ -150,8 +157,8 @@ const phantomTheme = {
 
 const queryClient = new QueryClient()
 
-function readStored(chainId: number): StoredSession | null {
-  const raw = sessionStorage.getItem(SESSION_KEY)
+function readStored(chainId: number, chainKey: string): StoredSession | null {
+  const raw = sessionStorage.getItem(sessionKey(chainKey))
   if (!raw) return null
   try {
     const parsed = JSON.parse(raw) as StoredSession
@@ -280,12 +287,12 @@ function Bridge({ children, chain, wagmiConfig }: { children: ReactNode; chain: 
       hadAccount.current = false
       signEpoch.current += 1
       busy.current = false
-      const stored = sessionStorage.getItem(SESSION_KEY)
-      sessionStorage.removeItem(SESSION_KEY)
+      const stored = sessionStorage.getItem(sessionKey(chain.key))
+      sessionStorage.removeItem(sessionKey(chain.key))
       if (stored) {
         try {
           const parsed = JSON.parse(stored) as StoredSession
-          void fetch("/api/session", { method: "DELETE", headers: { authorization: `Bearer ${parsed.token}` } })
+          void fetch(marketUrl("/api/session", chain.key), { method: "DELETE", headers: { authorization: `Bearer ${parsed.token}` } })
         } catch {
           // The stored session is unusable.
         }
@@ -300,7 +307,7 @@ function Bridge({ children, chain, wagmiConfig }: { children: ReactNode; chain: 
     }
     hadAccount.current = true
     const lower = address.toLowerCase()
-    const stored = readStored(expected)
+    const stored = readStored(expected, chain.key)
     if (stored && stored.address === lower) {
       setToken(stored.token)
       setSignError(null)
@@ -309,10 +316,10 @@ function Bridge({ children, chain, wagmiConfig }: { children: ReactNode; chain: 
     setToken(null)
     setSignedYou(null)
     if (stored && stored.address !== lower) {
-      sessionStorage.removeItem(SESSION_KEY)
-      void fetch("/api/session", { method: "DELETE", headers: { authorization: `Bearer ${stored.token}` } })
+      sessionStorage.removeItem(sessionKey(chain.key))
+      void fetch(marketUrl("/api/session", chain.key), { method: "DELETE", headers: { authorization: `Bearer ${stored.token}` } })
     }
-  }, [address, expected])
+  }, [address, expected, chain.key])
 
   const label = extractAccountLabel(address, {
     addresses: addresses?.length ? addresses : sdk?.getAddresses?.(),
@@ -323,7 +330,7 @@ function Bridge({ children, chain, wagmiConfig }: { children: ReactNode; chain: 
 
   const chainName = chain?.name ?? "Base Sepolia"
   const asset = chain ? tokenLabel(chain) : "USDC"
-  const signedIn = matchingSession(readStored(expected), address ?? null, expected)
+  const signedIn = matchingSession(readStored(expected, chain.key), address ?? null, expected)
   const activeToken = signedIn && (token === null || token === signedIn.token) ? signedIn.token : null
 
   const connectMode = connectKind({
@@ -410,14 +417,14 @@ function Bridge({ children, chain, wagmiConfig }: { children: ReactNode; chain: 
         if (shown && shown.toLowerCase() !== lower) return
         setLoginPhase("session")
         faultSource = "Quick Market"
-        const response = await fetch("/api/session", {
+        const response = await fetch(marketUrl("/api/session", chain.key), {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ address: lower, signature: signed.signature, issued: signed.issued }),
         })
         const body = (await response.json()) as { token?: string; error?: string; you?: unknown }
         if (!response.ok || !body.token) throw new Error(body.error ?? "Sign-in failed")
-        sessionStorage.setItem(SESSION_KEY, JSON.stringify({ token: body.token, address: lower, chainId: expected }))
+        sessionStorage.setItem(sessionKey(chain.key), JSON.stringify({ token: body.token, address: lower, chainId: expected }))
         if (!stale()) {
           setSignedYou(sessionYou(body.you))
           setToken(body.token)
@@ -440,7 +447,7 @@ function Bridge({ children, chain, wagmiConfig }: { children: ReactNode; chain: 
       mobile: isMobileDevice(),
       injected: phantomInjected(window),
       connected: Boolean(sdkRef.current?.isConnected()),
-      sessionMatches: matchingSession(readStored(expected), addressRef.current, expected) !== null,
+      sessionMatches: matchingSession(readStored(expected, chain.key), addressRef.current, expected) !== null,
     })
     if (action === "done") {
       setSigning(false)
@@ -511,7 +518,7 @@ function Bridge({ children, chain, wagmiConfig }: { children: ReactNode; chain: 
       })()
     },
     expire: () => {
-      sessionStorage.removeItem(SESSION_KEY)
+      sessionStorage.removeItem(sessionKey(chain.key))
       setToken(null)
       signEpoch.current += 1
       busy.current = false
@@ -531,7 +538,7 @@ function Bridge({ children, chain, wagmiConfig }: { children: ReactNode; chain: 
       const micros = parseAmountMicros(amount)
       const shown = address
       if (micros === null || micros <= 0) return { ok: false, message: "Amount is invalid" }
-      if (!shown || !activeToken || !matchingSession(readStored(expected), shown, expected)) {
+      if (!shown || !activeToken || !matchingSession(readStored(expected, chain.key), shown, expected)) {
         return { ok: false, message: "Sign in with this wallet before depositing." }
       }
       let account: Address
@@ -544,7 +551,7 @@ function Bridge({ children, chain, wagmiConfig }: { children: ReactNode; chain: 
       if (chainId !== selected.id) return { ok: false, message: "This page and the server are on different chains." }
       let serverReachable = false
       try {
-        const response = await fetch("/api/state", { headers: { authorization: `Bearer ${activeToken}` } })
+        const response = await fetch(marketUrl("/api/state", chain.key), { headers: { authorization: `Bearer ${activeToken}` } })
         if (response.status === 401) return { ok: false, message: "Sign in with this wallet before depositing." }
         serverReachable = response.ok
       } catch {
@@ -648,7 +655,7 @@ function Bridge({ children, chain, wagmiConfig }: { children: ReactNode; chain: 
 
 function NearBridge({ children, chain }: { children: ReactNode; chain: ChainConfig }) {
   const expected = 0
-  const stored = readStored(expected)
+  const stored = readStored(expected, chain.key)
   const [token, setToken] = useState<string | null>(stored?.token ?? null)
   const [address, setAddress] = useState<string | null>(stored?.address ?? null)
   const [signedYou, setSignedYou] = useState<You | null>(null)
@@ -667,7 +674,7 @@ function NearBridge({ children, chain }: { children: ReactNode; chain: ChainConf
       clearNearPending()
       setSigning(true)
       setLoginPhase("session")
-      void fetch("/api/session", {
+      void fetch(marketUrl("/api/session", chain.key), {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
@@ -681,7 +688,7 @@ function NearBridge({ children, chain }: { children: ReactNode; chain: ChainConf
         .then(async (response) => {
           const body = (await response.json()) as { token?: string; error?: string; you?: unknown }
           if (!response.ok || !body.token) throw new Error(body.error ?? "Sign-in failed")
-          sessionStorage.setItem(SESSION_KEY, JSON.stringify({ token: body.token, address: callback.accountId, chainId: expected }))
+          sessionStorage.setItem(sessionKey(chain.key), JSON.stringify({ token: body.token, address: callback.accountId, chainId: expected }))
           setSignedYou(sessionYou(body.you))
           setToken(body.token)
           setAddress(callback.accountId)
@@ -703,9 +710,9 @@ function NearBridge({ children, chain }: { children: ReactNode; chain: ChainConf
   }, [])
 
   const disconnect = () => {
-    const current = readStored(expected)
-    if (current) void fetch("/api/session", { method: "DELETE", headers: { authorization: `Bearer ${current.token}` } })
-    sessionStorage.removeItem(SESSION_KEY)
+    const current = readStored(expected, chain.key)
+    if (current) void fetch(marketUrl("/api/session", chain.key), { method: "DELETE", headers: { authorization: `Bearer ${current.token}` } })
+    sessionStorage.removeItem(sessionKey(chain.key))
     clearNearPending()
     setToken(null)
     setAddress(null)

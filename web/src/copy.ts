@@ -139,6 +139,9 @@ export type Copy = {
   toastWallet: string
   toastGrant: string
   grantFailed: string
+  marketSwitch: string
+  marketBase: string
+  marketNear: string
   chainTestnetMenu: string
   chainTestnetBadge: string
   chainTestnetNetwork: string
@@ -311,6 +314,9 @@ const en: Copy = {
   toastWallet: "Wallet",
   toastGrant: "Grant",
   grantFailed: "Grant failed",
+  marketSwitch: "Market",
+  marketBase: "Base",
+  marketNear: "Near",
   chainTestnetMenu: "Base Sepolia · Testnet",
   chainTestnetBadge: "Base Sepolia Testnet",
   chainTestnetNetwork: "Base Sepolia (Testnet)",
@@ -492,6 +498,9 @@ const zhTW: Copy = {
   toastWallet: "錢包",
   toastGrant: "撥款",
   grantFailed: "撥款失敗",
+  marketSwitch: "市場",
+  marketBase: "Base",
+  marketNear: "Near",
   chainTestnetMenu: "Base Sepolia · 測試網",
   chainTestnetBadge: "Base Sepolia 測試網",
   chainTestnetNetwork: "Base Sepolia（測試網）",

@@ -13,9 +13,14 @@ import { tuneDatabase } from "../server/db"
 import { loadEnv } from "../server/env"
 import { readNearBalance, readTokenBalance } from "../server/near"
 
-const ENV_PATH = join(process.cwd(), ".env")
 const EXAMPLE_PATH = join(process.cwd(), ".env.example")
 const NAME = "TREASURY_PRIVATE_KEY"
+const NEAR_NAME = "NEAR_TREASURY_PRIVATE_KEY"
+
+function envPath(): string {
+  const override = process.env.QUICK_MARKET_ENV_FILE?.trim()
+  return override || join(process.cwd(), ".env")
+}
 const GAS_FLOOR = 50_000_000_000_000n
 const HISTORY_LOOKBACK = 10_000n
 const transferEvent = parseAbiItem("event Transfer(address indexed from, address indexed to, uint256 value)")
@@ -120,10 +125,10 @@ function normalizeKey(raw: string): `0x${string}` | null {
   return hex as `0x${string}`
 }
 
-function firstValue(source: string): string {
+function firstValue(source: string, name = NAME): string {
   for (const line of source.split(/\r?\n/)) {
-    if (!line.startsWith(`${NAME}=`)) continue
-    const value = line.slice(NAME.length + 1).trim()
+    if (!line.startsWith(`${name}=`)) continue
+    const value = line.slice(name.length + 1).trim()
     if (value) return value
   }
   return ""
@@ -152,21 +157,21 @@ function fillTreasuryLine(source: string, key: `0x${string}`): string {
   return `${body}${NAME}=${key}\n`
 }
 
-function fillSecretLine(source: string, secret: string): string {
+function fillNamedLine(source: string, name: string, secret: string): string {
   const lines = source.split(/\r?\n/)
   let replaced = false
   const next = lines.map((line) => {
-    if (replaced || !line.startsWith(`${NAME}=`)) return line
-    if (line.slice(NAME.length + 1).trim() !== "") return line
+    if (replaced || !line.startsWith(`${name}=`)) return line
+    if (line.slice(name.length + 1).trim() !== "") return line
     replaced = true
-    return `${NAME}=${secret}`
+    return `${name}=${secret}`
   })
   if (replaced) {
     const joined = next.join("\n")
     return joined.endsWith("\n") ? joined : `${joined}\n`
   }
   const body = source.length === 0 || source.endsWith("\n") ? source : `${source}\n`
-  return `${body}${NAME}=${secret}\n`
+  return `${body}${name}=${secret}\n`
 }
 
 export async function planNearTreasury(
@@ -178,7 +183,7 @@ export async function planNearTreasury(
   | { action: "refuse" | "keep"; account: string }
   | { action: "write"; text: string; account: string }
 > {
-  const fileRaw = firstValue(source)
+  const fileRaw = firstValue(source, NEAR_NAME)
   const envRaw = envKey?.trim() ?? ""
   if (envRaw && envRaw !== fileRaw) {
     const account = await accountFromSecret(envRaw)
@@ -192,22 +197,22 @@ export async function planNearTreasury(
   }
   const account = await accountFromSecret(generated)
   if (!account || !isImplicitAccount(account)) return { action: "invalid" }
-  return { action: "write", text: fillSecretLine(source, generated), account }
+  return { action: "write", text: fillNamedLine(source, NEAR_NAME, generated), account }
 }
 
 async function runNearTreasury(source: string) {
   const generated = await generateNearSecret()
-  const decision = await planNearTreasury(source, process.env.TREASURY_PRIVATE_KEY, generated.secretKey)
+  const decision = await planNearTreasury(source, process.env.NEAR_TREASURY_PRIVATE_KEY, generated.secretKey)
   if (decision.action === "invalid") {
-    console.error("TREASURY_PRIVATE_KEY must be an ed25519 NEAR secret key")
+    console.error("NEAR_TREASURY_PRIVATE_KEY must be an ed25519 NEAR secret key")
     process.exit(1)
   }
   if (decision.action === "write") {
-    writeFileSync(ENV_PATH, decision.text, { mode: 0o600 })
-    chmodSync(ENV_PATH, 0o600)
-    console.log("wrote TREASURY_PRIVATE_KEY to .env")
+    writeFileSync(envPath(), decision.text, { mode: 0o600 })
+    chmodSync(envPath(), 0o600)
+    console.log("wrote NEAR_TREASURY_PRIVATE_KEY")
   } else if (decision.action === "refuse") {
-    console.log("TREASURY_PRIVATE_KEY is already set. .env was not changed.")
+    console.log("NEAR_TREASURY_PRIVATE_KEY is already set. The env file was not changed.")
   }
   console.log(`treasury ${decision.account}`)
   console.log("This account needs testnet NEAR from the faucet before it can pay gas.")
@@ -246,7 +251,7 @@ export function rpcFor(chain: ChainConfig, configuredKey: ChainKey, override: st
 }
 
 function loadSource(): string {
-  if (existsSync(ENV_PATH)) return readFileSync(ENV_PATH, "utf8")
+  if (existsSync(envPath())) return readFileSync(envPath(), "utf8")
   if (existsSync(EXAMPLE_PATH)) return readFileSync(EXAMPLE_PATH, "utf8")
   return ""
 }
@@ -959,8 +964,8 @@ async function main() {
     process.exit(1)
   }
   if (decision.action === "write") {
-    writeFileSync(ENV_PATH, decision.text, { mode: 0o600 })
-    chmodSync(ENV_PATH, 0o600)
+    writeFileSync(envPath(), decision.text, { mode: 0o600 })
+    chmodSync(envPath(), 0o600)
     console.log("wrote TREASURY_PRIVATE_KEY to .env")
   } else if (decision.action === "refuse") {
     console.log("TREASURY_PRIVATE_KEY is already set. .env was not changed.")

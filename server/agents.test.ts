@@ -3,7 +3,8 @@ import { generatePrivateKey, privateKeyToAccount } from "viem/accounts"
 import { chainFromEnv } from "../shared/chain"
 import { botEnrollMessage, loginMessage } from "../shared/login"
 import { marketPreferences } from "../shared/market"
-import { enrollBot, resurrectBot } from "./agents"
+import { handleAgents, enrollBot, resurrectBot } from "./agents"
+import { withChain } from "./activeChain"
 import { holdBurn, refundBurn } from "./custody"
 import { getDb, useDatabase } from "./db"
 import { advance, board, credit, notePrint, placeBuyIns, resetRuntime, youFor, type Print } from "./rounds"
@@ -43,6 +44,26 @@ beforeEach(() => {
   process.env.AGENT_SECRET = "test-secret"
   resetRuntime()
   useDatabase(":memory:")
+})
+
+test("NEAR agent routes are rejected while the NEAR share is 0", async () => {
+  const previousBase = process.env.AGENT_SPLIT_BASE
+  const previousNear = process.env.AGENT_SPLIT_NEAR
+  process.env.AGENT_SPLIT_BASE = "100"
+  process.env.AGENT_SPLIT_NEAR = "0"
+  try {
+    const url = new URL("http://127.0.0.1/api/agents/book")
+    const response = await withChain("near-testnet", () =>
+      handleAgents(new Request(url), url, { mint: async () => {}, publish: () => {} }),
+    )
+    expect(response.status).toBe(403)
+    expect(await response.json()).toEqual({ error: "Agents are not running on NEAR." })
+  } finally {
+    if (previousBase === undefined) delete process.env.AGENT_SPLIT_BASE
+    else process.env.AGENT_SPLIT_BASE = previousBase
+    if (previousNear === undefined) delete process.env.AGENT_SPLIT_NEAR
+    else process.env.AGENT_SPLIT_NEAR = previousNear
+  }
 })
 
 test("one poor row does not reject the good rows, and a retry does not double the stake", () => {

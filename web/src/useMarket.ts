@@ -33,6 +33,7 @@ import { tickerFor } from "../../shared/source"
 import { dismissRound, dueBuyIns, emptyNotices, settleNotice, tickNotices } from "./resultNotice"
 import { applyBookPatch } from "./boardStream"
 import type { AccountMessage, Board, Config, ServerStreamMessage, Side, SnapshotMessage, You } from "./types"
+import { withChainQuery } from "./runtimeConfig"
 
 function readTape(value: unknown): TapePoint[] | null {
   if (!Array.isArray(value)) return null
@@ -88,6 +89,9 @@ export function useMarket(token: string | null, seed: You | null = null, initial
   const youRef = useRef<You | null>(null)
   const boardRef = useRef<Board | null>(null)
   const configRef = useRef(config)
+  const chainKeyRef = useRef(initialConfig.chainKey)
+  chainKeyRef.current = config.chainKey
+  const api = useCallback((path: string) => withChainQuery(path, chainKeyRef.current), [])
   const feedRef = useRef<"live" | "stale">(feed)
   feedRef.current = feed
   const seedRef = useRef<TapePoint[] | null>(null)
@@ -215,7 +219,7 @@ export function useMarket(token: string | null, seed: You | null = null, initial
   }, [])
 
   const reload = useCallback(async (opts?: { tape?: boolean }): Promise<You | null> => {
-    const response = await fetch("/api/state", { headers: headers(tokenRef.current), cache: "no-store" })
+    const response = await fetch(api("/api/state"), { headers: headers(tokenRef.current), cache: "no-store" })
     if (response.status === 401) {
       setUnauthorized(true)
       setYou(null)
@@ -276,7 +280,7 @@ export function useMarket(token: string | null, seed: You | null = null, initial
     if (tapeRequestsRef.current.has(key)) return
     tapeRequestsRef.current.add(key)
     try {
-      const response = await fetch(`/api/tape?from=${start}&to=${end}`)
+      const response = await fetch(api(`/api/tape?from=${start}&to=${end}`))
       if (!response.ok) return
       const points = readTape((await response.json()).tape)
       if (points) chartRef.current?.merge(points)
@@ -365,7 +369,7 @@ export function useMarket(token: string | null, seed: You | null = null, initial
     if (!token) setYou(null)
     const seen = youEpoch.current
     let cancel = false
-    fetch("/api/state", { headers: headers(token), cache: "no-store" })
+    fetch(api("/api/state"), { headers: headers(token), cache: "no-store" })
       .then(async (response) => {
         if (response.status === 401) {
           if (!cancel) {
@@ -492,7 +496,7 @@ export function useMarket(token: string | null, seed: You | null = null, initial
       const protocol = location.protocol === "https:" ? "wss" : "ws"
       let current: WebSocket
       try {
-        current = new WebSocket(`${protocol}://${location.host}/ws`)
+        current = new WebSocket(`${protocol}://${location.host}${api("/ws")}`)
       } catch {
         scheduleRetry()
         return
@@ -798,7 +802,7 @@ export function useMarket(token: string | null, seed: You | null = null, initial
     const offline = connectionErrorNow()
     if (offline) return { ok: false, message: offline, dropped: false, txHash: null }
     try {
-      const response = await fetch("/api/grant", {
+      const response = await fetch(api("/api/grant"), {
         method: "POST",
         headers: headers(tokenRef.current),
       })
@@ -866,7 +870,7 @@ export function useMarket(token: string | null, seed: You | null = null, initial
     const offline = connectionErrorNow()
     if (offline) return offline
     try {
-      const response = await fetch("/api/withdraw", {
+      const response = await fetch(api("/api/withdraw"), {
         method: "POST",
         headers: headers(tokenRef.current, true),
         body: JSON.stringify({ amount }),

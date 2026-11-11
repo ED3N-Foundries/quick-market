@@ -1,6 +1,6 @@
 import type { ChainKey } from "../shared/chain"
-import { marketPreferences } from "../shared/market"
 import { isNearAccountId } from "../shared/near"
+import { activeChainKey } from "./activeChain"
 
 export function parseMicros(input: unknown): number | null {
   if (typeof input !== "string") return null
@@ -20,7 +20,7 @@ export function normalizeAddress(input: unknown): string | null {
 }
 
 /** EVM addresses stay `0x` + 40 hex. NEAR account ids are accepted only on a NEAR launch. */
-export function normalizeAccount(input: unknown, chainKey: ChainKey = marketPreferences.chain): string | null {
+export function normalizeAccount(input: unknown, chainKey: ChainKey = activeChainKey()): string | null {
   if (chainKey !== "near-testnet") return normalizeAddress(input)
   if (typeof input !== "string") return null
   const account = input.trim()

@@ -9,6 +9,8 @@ import {
   type WireTapePoint,
   type You,
 } from "../shared/stream"
+import type { ChainKey } from "../shared/chain"
+import { activeChainKey, withChain } from "./activeChain"
 import { hub, type MarketSocket, type PublishReport } from "./hub"
 
 type StreamDeps = {
@@ -32,7 +34,7 @@ export type StreamMetricSnapshot = {
 export class MarketStream {
   readonly epoch = crypto.randomUUID()
   private seq = 0
-  private previousBoard: Board | null = null
+  private previousBoards = new Map<ChainKey, Board | null>()
   private messages = new Map<string, MessageMetric>()
   private peers = { sent: 0, coalesced: 0, recovered: 0, closed: 0 }
   private boardBuilds = { count: 0, totalMs: 0, maxMs: 0, lastMs: 0 }
@@ -40,6 +42,11 @@ export class MarketStream {
   constructor(private deps: StreamDeps) {}
 
   snapshot(peer: MarketSocket) {
+    if (peer.data.chain) return withChain(peer.data.chain, () => this.writeSnapshot(peer))
+    return this.writeSnapshot(peer)
+  }
+
+  private writeSnapshot(peer: MarketSocket) {
     const address = peer.data.address
     const message: ServerStreamMessage = {
       type: "snapshot",
@@ -57,6 +64,11 @@ export class MarketStream {
   }
 
   account(peer: MarketSocket, unauthorized = false) {
+    if (peer.data.chain) return withChain(peer.data.chain, () => this.writeAccount(peer, unauthorized))
+    return this.writeAccount(peer, unauthorized)
+  }
+
+  private writeAccount(peer: MarketSocket, unauthorized = false) {
     const address = peer.data.address
     const message: ServerStreamMessage = {
       type: "account",
@@ -68,10 +80,11 @@ export class MarketStream {
   }
 
   tick(price: string, exchangeTs: number, serverNow: number, feed: FeedState) {
-    this.broadcast({ type: "tick", price, exchangeTs, serverNow, feed })
+    this.broadcast({ type: "tick", price, exchangeTs, serverNow, feed }, null)
   }
 
   book(serverNow: number, feed: FeedState) {
+    const chain = activeChainKey()
     const next = this.buildBoard()
     const message = {
       type: "book" as const,
@@ -79,15 +92,15 @@ export class MarketStream {
       feed,
       ticker: this.deps.ticker(),
       handoff: this.deps.handoff(),
-      board: boardPatch(this.previousBoard, next),
+      board: boardPatch(this.previousBoards.get(chain) ?? null, next),
     }
-    this.previousBoard = next
-    this.broadcast(message)
+    this.previousBoards.set(chain, next)
+    this.broadcast(message, chain)
   }
 
   settled(event: SettlementEvent, serverNow: number) {
     const { payouts, balances: _balances, ...result } = event
-    this.broadcast({ type: "settled", serverNow, ...result })
+    this.broadcast({ type: "settled", serverNow, ...result }, activeChainKey())
     for (const payout of payouts) {
       const you = this.deps.youFor(payout.address)
       if (!you) continue
@@ -102,7 +115,7 @@ export class MarketStream {
           payoutMicros: payout.payoutMicros,
         },
       }
-      this.note("account", hub.sendTo(payout.address, message, (peer) => this.snapshot(peer)))
+      this.note("account", hub.sendTo(payout.address, message, (peer) => this.snapshot(peer), activeChainKey()))
     }
   }
 
@@ -125,9 +138,16 @@ export class MarketStream {
     return board
   }
 
-  private broadcast<T extends { type: string; serverNow: number }>(message: T) {
+  private broadcast<T extends { type: string; serverNow: number }>(message: T, chain: ChainKey | null) {
     const framed = { ...message, epoch: this.epoch, seq: ++this.seq }
-    this.note(message.type, hub.broadcast(framed, (peer) => this.snapshot(peer)))
+    this.note(
+      message.type,
+      hub.broadcast(
+        framed,
+        (peer) => this.snapshot(peer),
+        chain ? (peer) => peer.data.chain == null || peer.data.chain === chain : undefined,
+      ),
+    )
   }
 
   private note(type: string, report: PublishReport) {

@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import type { PublicConfig } from "../../shared/market"
-import { runtimeChain } from "./runtimeConfig"
+import { chosenMarket, runtimeChain, withChainQuery } from "./runtimeConfig"
 
 const baseConfig: PublicConfig = {
   windowSeconds: 10,
@@ -41,6 +41,18 @@ test("runtime config can select dormant NEAR support with the same bundle", () =
   })
   expect(chain.family).toBe("near")
   expect(chain.key).toBe("near-testnet")
+})
+
+test("a fresh visit opens Near when both markets are on", () => {
+  const near = { ...baseConfig, chainId: 0, chainKey: "near-testnet" as const, chainName: "NEAR Testnet", usdc: "qm.testnet", treasury: "treasury.testnet" }
+  const markets = [baseConfig, near]
+  expect(chosenMarket(markets, null, "near-testnet")?.chainKey).toBe("near-testnet")
+  expect(chosenMarket(markets, "base-sepolia", "near-testnet")?.chainKey).toBe("base-sepolia")
+  expect(chosenMarket(markets, "near-testnet", "base-sepolia")?.chainKey).toBe("near-testnet")
+  expect(chosenMarket([baseConfig], "near-testnet", "base-sepolia")?.chainKey).toBe("base-sepolia")
+  expect(withChainQuery("/api/state", "near-testnet")).toBe("/api/state?chain=near-testnet")
+  expect(withChainQuery("/api/rounds?limit=10&mine=1", "base-sepolia")).toBe("/api/rounds?limit=10&mine=1&chain=base-sepolia")
+  expect(withChainQuery("/ws", "near-testnet")).toBe("/ws?chain=near-testnet")
 })
 
 test("inconsistent runtime chain identity is rejected", () => {

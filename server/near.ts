@@ -1,8 +1,8 @@
 import { existsSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 import bs58 from "bs58"
-import { activeChainKey } from "./activeChain"
-import { configuredChain, loadEnv } from "./env"
+import { activeChainKey, withChain } from "./activeChain"
+import { loadEnv, nearTreasurySecret, rpcFor } from "./env"
 import { getDb } from "./db"
 import { normalizeAccount } from "./money"
 import { credit, withdraw, youFor, type You } from "./rounds"
@@ -53,7 +53,11 @@ export function currentTreasuryReport(): TreasuryReport | null {
 }
 
 export function nearRpcUrl(): string {
-  return loadEnv().rpcUrl || configuredChain().rpc
+  return rpcFor("near-testnet")
+}
+
+function signingKey(): string {
+  return nearTreasurySecret()
 }
 
 export function nearFaultMessage(error: unknown): string {
@@ -69,16 +73,37 @@ export function nearFaultMessage(error: unknown): string {
   return "Treasury could not prepare the withdraw"
 }
 
+function rpcErrorText(error: { message?: string; data?: unknown }): string {
+  if (typeof error.data === "string" && error.data) return error.data
+  if (error.data !== undefined && error.data !== null) {
+    const encoded = JSON.stringify(error.data)
+    if (encoded && encoded !== "{}" && encoded !== "null") return encoded
+  }
+  return error.message || "NEAR RPC failed"
+}
+
 async function rpc(method: string, params: unknown): Promise<unknown> {
-  const response = await fetch(nearRpcUrl(), {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ jsonrpc: "2.0", id: "quick-market", method, params }),
-  })
-  if (!response.ok) throw new Error(`NEAR RPC returned ${response.status}`)
-  const body = (await response.json()) as { result?: unknown; error?: { message?: string } }
-  if (body.error) throw new Error(body.error.message ?? "NEAR RPC failed")
-  return body.result
+  let last = "NEAR RPC failed"
+  const attempts = method === "send_tx" ? 1 : 4
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    try {
+      const response = await fetch(nearRpcUrl(), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: "quick-market", method, params }),
+      })
+      if (!response.ok) throw new Error(`NEAR RPC returned ${response.status}`)
+      const body = (await response.json()) as { result?: unknown; error?: { message?: string; data?: unknown } }
+      if (body.error) throw new Error(rpcErrorText(body.error))
+      return body.result
+    } catch (error) {
+      last = error instanceof Error ? error.message : "NEAR RPC failed"
+      const transient = last === "Server error" || last.startsWith("NEAR RPC returned")
+      if (!transient || attempt + 1 === attempts) break
+      await new Promise((resolve) => setTimeout(resolve, 1000 * (attempt + 1)))
+    }
+  }
+  throw new Error(last)
 }
 
 function missingAccount(error: unknown): boolean {
@@ -282,7 +307,7 @@ export async function bootNear(treasury: string): Promise<TreasuryReport> {
       await enqueue(() =>
         submit({
           signerId: treasury,
-          secretKey: env.treasuryPrivateKey,
+          secretKey: signingKey(),
           receiverId: token,
           actions: [encodeFunctionCall("mint", jsonArgs({ account_id: treasury, amount: planned.mintMicros.toString() }), GAS, 0n)],
         }),
@@ -292,7 +317,7 @@ export async function bootNear(treasury: string): Promise<TreasuryReport> {
       await enqueue(() =>
         submit({
           signerId: treasury,
-          secretKey: env.treasuryPrivateKey,
+          secretKey: signingKey(),
           receiverId: transfer.to,
           actions: [encodeTransfer(transfer.yocto)],
         }),
@@ -345,12 +370,12 @@ export function fundedAgents(report: TreasuryReport): Set<string> {
 export async function mintNearToTreasury(amountMicros: number, onHash?: (hash: string) => void): Promise<void> {
   if (!Number.isSafeInteger(amountMicros) || amountMicros <= 0) throw new Error("Amount is invalid")
   const env = loadEnv()
-  const treasury = await accountFromSecret(env.treasuryPrivateKey)
+  const treasury = await accountFromSecret(signingKey())
   if (!treasury) throw new Error("TREASURY_PRIVATE_KEY must be an ed25519 NEAR secret key")
   const hash = await enqueue(() =>
     submit({
       signerId: treasury,
-      secretKey: env.treasuryPrivateKey,
+      secretKey: signingKey(),
       receiverId: env.tokenAccount.trim(),
       actions: [encodeFunctionCall("mint", jsonArgs({ account_id: treasury, amount: String(amountMicros) }), GAS, 0n)],
     }),
@@ -408,15 +433,15 @@ export async function requestNearWithdraw(
     if (!Number.isSafeInteger(amountMicros) || amountMicros <= 0) return { ok: false, error: "Amount is invalid" }
     if (amountMicros > you.balanceMicros) return { ok: false, error: "Insufficient balance" }
     const env = loadEnv()
-    const treasury = await accountFromSecret(env.treasuryPrivateKey)
+    const treasury = await accountFromSecret(signingKey())
     if (!treasury) return { ok: false, error: "TREASURY_PRIVATE_KEY must be an ed25519 NEAR secret key" }
     let raw = ""
     let hash = ""
     try {
-      const viewed = await nextNonce(treasury, env.treasuryPrivateKey)
+      const viewed = await nextNonce(treasury, signingKey())
       const signed = await signTransaction({
         signerId: treasury,
-        secretKey: env.treasuryPrivateKey,
+        secretKey: signingKey(),
         nonce: viewed.nonce,
         receiverId: env.tokenAccount.trim(),
         blockHash: viewed.blockHash,
@@ -464,7 +489,7 @@ export async function requestNearBurn(address: string, amountMicros: number): Pr
     if (!isImplicitAccount(address)) return { ok: false, error: "Address is invalid" }
     if (!Number.isSafeInteger(amountMicros) || amountMicros <= 0) return { ok: false, error: "Amount is invalid" }
     const env = loadEnv()
-    const treasury = await accountFromSecret(env.treasuryPrivateKey)
+    const treasury = await accountFromSecret(signingKey())
     if (!treasury) return { ok: false, error: "TREASURY_PRIVATE_KEY must be an ed25519 NEAR secret key" }
     const id = crypto.randomUUID()
     try {
@@ -488,7 +513,7 @@ export async function requestNearBurn(address: string, amountMicros: number): Pr
     try {
       const hash = await submit({
         signerId: treasury,
-        secretKey: env.treasuryPrivateKey,
+        secretKey: signingKey(),
         receiverId: env.tokenAccount.trim(),
         actions: [encodeFunctionCall("burn", jsonArgs({ amount: String(amountMicros) }), GAS, 0n)],
       })
@@ -639,16 +664,19 @@ async function resumeNearWithdrawals() {
 }
 
 export function startNearCustody(treasury: string) {
+  const chainKey = activeChainKey()
   const runtime = globalThis as unknown as { quickMarketNearCustody?: ReturnType<typeof setInterval> }
   if (runtime.quickMarketNearCustody) clearInterval(runtime.quickMarketNearCustody)
   const tick = () => {
-    if (polling) return
-    polling = true
-    Promise.all([
-      pollNearDeposits(treasury).catch((error) => console.error(error)),
-      resumeNearWithdrawals().catch((error) => console.error(error)),
-    ]).finally(() => {
-      polling = false
+    withChain(chainKey, () => {
+      if (polling) return
+      polling = true
+      Promise.all([
+        pollNearDeposits(treasury).catch((error) => console.error(error)),
+        resumeNearWithdrawals().catch((error) => console.error(error)),
+      ]).finally(() => {
+        polling = false
+      })
     })
   }
   tick()

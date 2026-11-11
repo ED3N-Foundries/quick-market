@@ -51,7 +51,15 @@ import { useSession } from "./wallet"
 import { History } from "./history"
 import { briefTx, FundOverlay, GrantOverlay, WithdrawOverlay } from "./overlays"
 
-export function App({ initialConfig }: { initialConfig: Config }) {
+export function App({
+  initialConfig,
+  markets,
+  onMarket,
+}: {
+  initialConfig: Config
+  markets: Config[]
+  onMarket: (key: Config["chainKey"]) => void
+}) {
   const { lang, text } = useI18n()
   const langRef = useRef(lang)
   langRef.current = lang
@@ -496,6 +504,19 @@ export function App({ initialConfig }: { initialConfig: Config }) {
             <span className="logomark" aria-hidden="true">😭</span>
             Quick Market
           </span>
+          <div className="market-switch" role="group" aria-label={text.marketSwitch}>
+            {markets.map((item) => (
+              <button
+                key={item.chainKey}
+                type="button"
+                className="market-switch-btn"
+                aria-pressed={item.chainKey === market.config.chainKey}
+                onClick={() => onMarket(item.chainKey)}
+              >
+                {item.chainKey === "near-testnet" ? text.marketNear : text.marketBase}
+              </button>
+            ))}
+          </div>
           {(lost || (market.seenLive && degraded)) && (
             <LinkQualityBadge link={market.link} blocked={lost} />
           )}
@@ -1006,6 +1027,7 @@ export function App({ initialConfig }: { initialConfig: Config }) {
         windowMs={market.config.windowSeconds * 1000}
         blocked={paused}
         notice={lost}
+        chainKey={market.config.chainKey}
       />
       {(market.notices.length > 0 || market.lateNotices.length > 0) && (
         <PricePops anchorRef={balanceMark}>

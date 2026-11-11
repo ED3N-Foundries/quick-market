@@ -5,6 +5,7 @@ import { getDb, useDatabase } from "./db"
 import { parseMicros } from "./money"
 import { handoffBanner } from "../shared/source"
 import { marketPreferences } from "../shared/market"
+import { withChain } from "./activeChain"
 import { adoptFeed, advance, board, credit, ensureUser, failFeed, feedStatus, handoffNow, listRounds, noteAlive, notePrint, placeBuyIn, placeBuyIns, recentSettles, resetRuntime, resumeAtFor, roundDetail, tapePoints, tickerNow, withdraw, youFor, type Print, type Side } from "./rounds"
 
 const USDC = 1_000_000
@@ -521,6 +522,38 @@ test("insufficient balance does not open a bet", () => {
   expect(youFor(you)?.openBuyIns).toEqual([])
 })
 
+
+test("settling a Near round does not pay the Base round with the same id", () => {
+  const baseWho = address(81)
+  const nearWho = "cd".repeat(32)
+  notePrint(print("100.00", T - 20))
+  withChain("base-sepolia", () => {
+    grant(baseWho, 100 * USDC)
+    advance(T + 10)
+    expect(bet({ address: baseWho, side: "up", stakeMicros: 10 * USDC, now: T + 100 }).ok).toBe(true)
+  })
+  withChain("near-testnet", () => {
+    grant(nearWho, 100 * USDC)
+    advance(T + 10)
+    expect(bet({ address: nearWho, side: "down", stakeMicros: 20 * USDC, now: T + 120 }).ok).toBe(true)
+  })
+  notePrint(print("100.00", T + WINDOW - 20))
+  withChain("base-sepolia", () => {
+    advance(T + WINDOW + 5)
+  })
+  withChain("near-testnet", () => {
+    advance(T + WINDOW + 5)
+  })
+  notePrint(print("101.00", T + WINDOW + MARKET - 4_000))
+  const settled = withChain("near-testnet", () => advance(T + WINDOW + MARKET + 5))
+  expect(settled.settled.some((event) => event.roundId === MARKET_ID)).toBe(true)
+  const baseYou = withChain("base-sepolia", () => youFor(baseWho))
+  const nearYou = withChain("near-testnet", () => youFor(nearWho))
+  expect(baseYou?.openBuyIns).toEqual([{ roundId: MARKET_ID, side: "up", stakeMicros: 10 * USDC }])
+  expect(baseYou?.balanceMicros).toBe(90 * USDC)
+  expect(nearYou?.openBuyIns).toEqual([])
+  expect(nearYou?.balanceMicros).not.toBe(baseYou?.balanceMicros)
+})
 
 test("one database keeps chain balances, rounds, and history separate", () => {
   const baseAddress = address(77)

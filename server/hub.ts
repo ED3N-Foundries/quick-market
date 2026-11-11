@@ -1,10 +1,11 @@
 import type { ServerWebSocket } from "bun"
+import type { ChainKey } from "../shared/chain"
 
 export const HUB_BUFFER_LIMIT = 256 * 1024
 const RECOVER_BUFFER_LIMIT = 16 * 1024
 const COALESCE_BUFFER_LIMIT = 64 * 1024
 
-export type SocketData = { address: string | null }
+export type SocketData = { address: string | null; chain: ChainKey }
 export type MarketSocket = ServerWebSocket<SocketData>
 
 export type HubPeer = {
@@ -105,16 +106,17 @@ export const hub = {
     sockets.delete(ws)
     recovery.delete(ws)
   },
-  broadcast(message: unknown, recover: (peer: MarketSocket) => void) {
-    return publishTo(sockets, JSON.stringify(message), { recover })
+  broadcast(message: unknown, recover: (peer: MarketSocket) => void, filter?: (peer: MarketSocket) => boolean) {
+    return publishTo(sockets, JSON.stringify(message), { recover, filter })
   },
   send(ws: MarketSocket, message: unknown) {
     return publishTo(new Set([ws]), JSON.stringify(message))
   },
-  sendTo(address: string, message: unknown, recover: (peer: MarketSocket) => void) {
+  sendTo(address: string, message: unknown, recover: (peer: MarketSocket) => void, chain?: ChainKey) {
     return publishTo(sockets, JSON.stringify(message), {
       recover,
-      filter: (peer) => peer.data.address === address,
+      filter: (peer) =>
+        peer.data.address === address && (chain === undefined || peer.data.chain == null || peer.data.chain === chain),
     })
   },
 }

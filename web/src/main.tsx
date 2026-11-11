@@ -2,7 +2,8 @@ import { useEffect, useState } from "react"
 import { createRoot } from "react-dom/client"
 import { App } from "./App"
 import { LanguageProvider } from "./i18n"
-import { fetchRuntimeConfig, type RuntimeConfig } from "./runtimeConfig"
+import { chosenMarket, fetchMarkets, MARKET_STORAGE_KEY, runtimeChain, type MarketsPayload } from "./runtimeConfig"
+import type { ChainKey } from "../../shared/chain"
 import { WalletProviders } from "./wallet"
 import "./styles.css"
 
@@ -57,17 +58,29 @@ function Splash({
   )
 }
 
+function readStoredMarket(): string | null {
+  try {
+    return localStorage.getItem(MARKET_STORAGE_KEY)
+  } catch {
+    return null
+  }
+}
+
 function Bootstrap() {
-  const [runtime, setRuntime] = useState<RuntimeConfig | null>(null)
+  const [payload, setPayload] = useState<MarketsPayload | null>(null)
+  const [chainKey, setChainKey] = useState<ChainKey | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [attempt, setAttempt] = useState(0)
 
   useEffect(() => {
     let cancel = false
     setError(null)
-    void fetchRuntimeConfig()
+    void fetchMarkets()
       .then((value) => {
-        if (!cancel) setRuntime(value)
+        if (cancel) return
+        const chosen = chosenMarket(value.markets, readStoredMarket(), value.defaultChainKey)
+        setPayload(value)
+        setChainKey(chosen?.chainKey ?? null)
       })
       .catch((reason: unknown) => {
         if (!cancel) setError(reason instanceof Error ? reason.message : "Could not load market configuration.")
@@ -86,11 +99,31 @@ function Bootstrap() {
       />
     )
   }
-  if (!runtime)
-    return <Splash copy="Warming up the market" />
+  const config = payload?.markets.find((market) => market.chainKey === chainKey) ?? null
+  if (!payload || !config) return <Splash copy="Warming up the market" />
+  let chain
+  try {
+    chain = runtimeChain(config)
+  } catch (reason) {
+    return (
+      <Splash
+        copy="Could not load the market"
+        detail={reason instanceof Error ? reason.message : "Could not load market configuration."}
+        retry={() => setAttempt((value) => value + 1)}
+      />
+    )
+  }
+  const select = (key: ChainKey) => {
+    try {
+      localStorage.setItem(MARKET_STORAGE_KEY, key)
+    } catch {
+      // The choice still applies for this page.
+    }
+    setChainKey(key)
+  }
   return (
-    <WalletProviders chain={runtime.chain}>
-      <App initialConfig={runtime.config} />
+    <WalletProviders key={chain.key} chain={chain}>
+      <App initialConfig={config} markets={payload.markets} onMarket={select} />
     </WalletProviders>
   )
 }

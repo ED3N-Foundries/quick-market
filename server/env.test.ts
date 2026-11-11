@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test"
 import { marketPreferences } from "../shared/market"
 import { generateNearSecret } from "../shared/nearKey"
-import { loadEnv, parseTokenAccount, parseTreasuryKey } from "./env"
+import { enabledMarketKeys, loadEnv, nearTreasurySecret, parseNearTreasuryKey, parseTokenAccount, parseTreasuryKey, rpcFor } from "./env"
 
 const hex = "ab".repeat(32)
 
@@ -37,6 +37,28 @@ test("a NEAR launch accepts an ed25519 secret and rejects an EVM key", async () 
   expect(parseTokenAccount("")).toBe("")
   expect(parseTokenAccount(made.account)).toBe(made.account)
   expect(() => parseTokenAccount("not an account")).toThrow("TOKEN_ACCOUNT")
+})
+
+test("each market turns on only from its own keys", async () => {
+  const made = await generateNearSecret()
+  const usdc = `0x${"cd".repeat(20)}`
+  const base = loadEnv({ TREASURY_PRIVATE_KEY: `0x${hex}`, USDC_ADDRESS: usdc })
+  expect(enabledMarketKeys(base)).toEqual(["base-sepolia"])
+  expect(nearTreasurySecret(base)).toBe("")
+  const near = loadEnv({ NEAR_TREASURY_PRIVATE_KEY: made.secretKey, TOKEN_ACCOUNT: made.account })
+  expect(enabledMarketKeys(near)).toEqual(["near-testnet"])
+  expect(nearTreasurySecret(near)).toBe(made.secretKey)
+  const both = loadEnv({
+    TREASURY_PRIVATE_KEY: `0x${hex}`,
+    USDC_ADDRESS: usdc,
+    NEAR_TREASURY_PRIVATE_KEY: made.secretKey,
+    TOKEN_ACCOUNT: made.account,
+  })
+  expect(enabledMarketKeys(both)).toEqual(["base-sepolia", "near-testnet"])
+  expect(parseNearTreasuryKey("")).toBe("")
+  expect(() => parseNearTreasuryKey(`0x${hex}`)).toThrow("NEAR_TREASURY_PRIVATE_KEY")
+  expect(rpcFor("near-testnet", { ...both, rpcUrl: "https://sepolia.base.org" })).toBe("https://rpc.testnet.near.org")
+  expect(rpcFor("base-sepolia", { ...both, rpcUrl: "https://rpc.testnet.near.org" })).not.toContain("near")
 })
 
 test("deployment defaults fill blank process settings", () => {

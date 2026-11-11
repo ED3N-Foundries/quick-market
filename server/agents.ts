@@ -2,10 +2,11 @@ import { recoverMessageAddress, type Hex } from "viem"
 import { botEnrollMessage, nearBotEnrollMessage, LOGIN_SKEW_MS } from "../shared/login"
 import { isImplicitAccount } from "../shared/near"
 import { verifyNearMessage } from "../shared/nearKey"
+import { agentMarketAllowed, parseAgentSplit } from "../shared/split"
 import { activeChainKey } from "./activeChain"
 import { requestBurn } from "./custody"
 import { getDb } from "./db"
-import { configuredChain } from "./env"
+import { chainConfig } from "./env"
 import { normalizeAccount } from "./money"
 import { requestNearBurn } from "./near"
 import { credit, openBook, placeBuyIns, recentSettles, settledSince, tapeTail, youFor, type BuyInOrder } from "./rounds"
@@ -32,10 +33,10 @@ export async function enrollBot(input: {
   now: number
   mint: (amountMicros: number) => Promise<void>
 }): Promise<{ ok: true; balanceMicros: number; seeded: boolean } | { ok: false; error: string }> {
-  let chainKey: ReturnType<typeof configuredChain>["key"]
+  let chainKey: ReturnType<typeof chainConfig>["key"]
   let chainId: number
   try {
-    const chain = configuredChain()
+    const chain = chainConfig()
     chainKey = chain.key
     chainId = chain.id
   } catch (error) {
@@ -150,6 +151,14 @@ export async function handleAgents(
   url: URL,
   deps: { mint: (amountMicros: number) => Promise<void>; publish: () => void },
 ): Promise<Response> {
+  let split
+  try {
+    split = parseAgentSplit(process.env.AGENT_SPLIT_BASE, process.env.AGENT_SPLIT_NEAR)
+  } catch (error) {
+    return json({ error: error instanceof Error ? error.message : "Split is invalid" }, 500)
+  }
+  if (!agentMarketAllowed(activeChainKey(), split)) return json({ error: "Agents are not running on NEAR." }, 403)
+
   if (req.method === "GET" && url.pathname === "/api/agents/book") {
     const since = Number(url.searchParams.get("since") ?? 0)
     const tail = Number(url.searchParams.get("tail") ?? 90_000)
@@ -203,7 +212,7 @@ export async function handleAgents(
     const amount = body?.amountMicros
     if (typeof amount !== "number") return json({ error: "Amount is invalid" }, 400)
     const who = normalizeAccount(String(body?.address ?? "")) ?? ""
-    const result = configuredChain().key === "near-testnet" ? await requestNearBurn(who, amount) : await requestBurn(who, amount)
+    const result = activeChainKey() === "near-testnet" ? await requestNearBurn(who, amount) : await requestBurn(who, amount)
     if (!result.ok) return json({ error: result.error, you: youFor(who) }, 400)
     return json({ txHash: result.txHash, you: youFor(who) })
   }

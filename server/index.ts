@@ -1,10 +1,14 @@
 import { dirname, join } from "node:path"
+import type { ChainKey } from "../shared/chain"
 import { loadMarket, requireExplicitChain, TICK_MS, type PublicConfig } from "../shared/market"
 import { feeBps, marketMs, MIN_STAKE_MICROS, priceSource, viewMs, windowMs, type PriceSource } from "./config"
 import { nextMarketAt, planWake, runWake, type MarketTiming } from "./clock"
 import { takeTick } from "./tick"
-import { configuredChain, loadEnv } from "./env"
+import { enabledMarketKeys, loadEnv } from "./env"
+import { activeChainKey, withChain } from "./activeChain"
 import { startChainRuntime, type ChainRuntime } from "./chainRuntime"
+import { pickChain } from "./markets"
+import { readSessionToken, sessionChainForToken } from "./session"
 import { grantSettings } from "./grant"
 import { hub } from "./hub"
 import { bindHttp, handleSafe, json } from "./http"
@@ -39,11 +43,19 @@ import {
   tickerNow,
   youFor,
 } from "./rounds"
-import { readSessionToken } from "./session"
 
-let activeChain: ChainRuntime
-let chain: ReturnType<typeof configuredChain>
-let treasury: string
+
+const runtimes = new Map<ChainKey, ChainRuntime>()
+
+function liveKeys(): ChainKey[] {
+  return [...runtimes.keys()]
+}
+
+function runtimeFor(key: ChainKey = activeChainKey()): ChainRuntime {
+  const found = runtimes.get(key)
+  if (!found) throw new Error(`Market ${key} is off`)
+  return found
+}
 
 const bootEnv = (() => {
   try {
@@ -73,9 +85,18 @@ const serveUi = bootNodeEnv() === "production"
 async function bootServer() {
   requireExplicitChain()
   loadMarket()
-  activeChain = await startChainRuntime()
-  chain = activeChain.chain
-  treasury = activeChain.treasury
+  const wanted = enabledMarketKeys()
+  if (wanted.length === 0) {
+    throw new Error("Fill Base keys (TREASURY_PRIVATE_KEY and USDC_ADDRESS) or NEAR keys (NEAR_TREASURY_PRIVATE_KEY and TOKEN_ACCOUNT).")
+  }
+  for (const key of wanted) {
+    try {
+      runtimes.set(key, await startChainRuntime(key))
+    } catch (error) {
+      if (key !== "near-testnet" || runtimes.size === 0) throw error
+      console.error(error instanceof Error ? error.message : error)
+    }
+  }
 }
 
 try {
@@ -91,11 +112,11 @@ try {
 }
 
 function grantsOpen(): boolean {
-  return activeChain.grantsOpen
+  return runtimeFor().grantsOpen
 }
 
 function mintTreasury(amount: number, onHash?: (hash: string) => void): Promise<void> {
-  return activeChain.mint(amount, onHash)
+  return runtimeFor().mint(amount, onHash)
 }
 
 let pending: { price: string; exchangeTs: number; source: PriceSource } | null = null
@@ -135,24 +156,32 @@ runtime.quickMarketStopOracle = startOracle({
     noteAlive(at)
   },
   onBreak(event) {
-    const settled = failFeed(event.from, event.to, event.at)
     try {
       noteFeedBreak(event.from, event.to, event.to ? "switched" : "waiting for a fresh venue")
     } catch {
       // ignore
     }
-    for (const item of settled) stream.settled(item, event.at)
-    publishRound(event.at)
+    for (const key of liveKeys()) {
+      withChain(key, () => {
+        const settled = failFeed(event.from, event.to, event.at)
+        for (const item of settled) stream.settled(item, event.at)
+        publishRound(event.at)
+      })
+    }
     arm(event.at)
   },
   onAdopt(event) {
-    adoptFeed(event.to, event.at)
     try {
       noteFeedAdopt(event.to)
     } catch {
       // ignore
     }
-    publishRound(event.at)
+    for (const key of liveKeys()) {
+      withChain(key, () => {
+        adoptFeed(event.to, event.at)
+        publishRound(event.at)
+      })
+    }
     arm(event.at)
   },
 })
@@ -206,13 +235,19 @@ function wake() {
     })
     runWake(plan, {
       advance: () => {
-        const result = advance(now)
-        awaitingStrike = result.awaitingPrice
+        let awaiting = false
+        for (const key of liveKeys()) {
+          withChain(key, () => {
+            const result = advance(now)
+            if (result.awaitingPrice) awaiting = true
+            const feed = feedStatus(now)
+            for (const event of result.settled) stream.settled(event, now)
+            if (result.broadcastRound || feed !== lastFeed) publishRound(now)
+          })
+        }
+        awaitingStrike = awaiting
         marketAt = nextMarketAt(now, timing())
-        const feed = feedStatus(now)
-        for (const event of result.settled) stream.settled(event, now)
-        if (result.broadcastRound || feed !== lastFeed) publishRound(now)
-        return result
+        return { awaitingPrice: awaiting }
       },
       fanout: () => {
         if (!pending) return
@@ -236,7 +271,8 @@ if (runtime.quickMarketTimer) clearTimeout(runtime.quickMarketTimer)
 wake()
 
 function publicConfig(): PublicConfig {
-  const grant = grantsOpen() ? grantSettings() : { amount: 0, intervalMs: 0 }
+  const current = runtimeFor()
+  const grant = current.grantsOpen ? grantSettings() : { amount: 0, intervalMs: 0 }
   return {
     windowSeconds: windowMs() / 1000,
     marketSeconds: marketMs() / 1000,
@@ -244,26 +280,37 @@ function publicConfig(): PublicConfig {
     feeBps: feeBps(),
     minStakeMicros: MIN_STAKE_MICROS,
     source: priceSource(),
-    chainId: chain.id,
-    chainKey: chain.key,
-    chainName: chain.name,
-    usdc: activeChain.token,
-    treasury,
-    moneyLabel: activeChain.moneyLabel,
-    tokenKind: activeChain.tokenKind,
-    tokenLabel: activeChain.tokenLabel,
+    chainId: current.chain.id,
+    chainKey: current.chain.key,
+    chainName: current.chain.name,
+    usdc: current.token,
+    treasury: current.treasury,
+    moneyLabel: current.moneyLabel,
+    tokenKind: current.tokenKind,
+    tokenLabel: current.tokenLabel,
     grantMicros: grant.amount,
     grantIntervalMs: grant.intervalMs,
   }
 }
 
+function marketsPayload() {
+  const live = liveKeys()
+  const defaultChainKey: ChainKey = live.includes("near-testnet") ? "near-testnet" : live[0]!
+  return {
+    defaultChainKey,
+    markets: live.map((key) => withChain(key, () => publicConfig())),
+  }
+}
+
 bindHttp({
   config: publicConfig,
-  chainKey: () => chain.key,
-  treasuryReport: () => activeChain.treasuryReport(),
+  markets: marketsPayload,
+  liveChains: liveKeys,
+  chainKey: () => activeChainKey(),
+  treasuryReport: () => runtimeFor().treasuryReport(),
   grantsOpen,
   mint: mintTreasury,
-  withdraw: (address, amount) => activeChain.withdraw(address, amount),
+  withdraw: (address, amount) => runtimeFor().withdraw(address, amount),
   publish: markRoundDirty,
   streamMetrics: () => stream.metrics(),
   serveUi,
@@ -376,7 +423,7 @@ if (process.env.QM_HEALTH_LOG !== "0") {
 
 const host = process.env.HOST?.trim() || "127.0.0.1"
 
-Bun.serve<{ address: string | null }>({
+Bun.serve<{ address: string | null; chain: ChainKey }>({
   port,
   hostname: host,
   // Default is 10s. A mint submit plus three blocks can run longer, and cutting
@@ -385,7 +432,14 @@ Bun.serve<{ address: string | null }>({
   fetch(req, server) {
     const url = new URL(req.url)
     if (url.pathname === "/ws") {
-      if (server.upgrade(req, { data: { address: null } })) return undefined as unknown as Response
+      const picked = pickChain({
+        raw: url.searchParams.get("chain"),
+        sessionChain: null,
+        live: liveKeys(),
+        agent: false,
+      })
+      if (!picked.ok) return json({ error: picked.error }, picked.status)
+      if (server.upgrade(req, { data: { address: null, chain: picked.chain } })) return undefined as unknown as Response
       return new Response("Expected websocket", { status: 400 })
     }
     return handleSafe(req).catch((error) => {
@@ -405,6 +459,7 @@ Bun.serve<{ address: string | null }>({
       stream.snapshot(ws)
     },
     message(ws, raw) {
+      withChain(ws.data.chain, () => {
       const size = typeof raw === "string" ? raw.length : raw.byteLength
       if (size > 2_048) return
       const text = typeof raw === "string" ? raw : raw.toString()
@@ -423,6 +478,12 @@ Bun.serve<{ address: string | null }>({
         return
       }
       if (body.type === "hello") {
+        const offered = typeof body.token === "string" ? sessionChainForToken(body.token) : null
+        if (offered && offered !== ws.data.chain) {
+          ws.data.address = null
+          stream.account(ws, true)
+          return
+        }
         const session = readSessionToken(body.token)
         ws.data.address = session.address
         stream.account(ws, session.rejected)
@@ -457,6 +518,7 @@ Bun.serve<{ address: string | null }>({
       })
       replyTo(result)
       if (result.ok) markRoundDirty()
+      })
     },
     close(ws) {
       wsPeers = Math.max(0, wsPeers - 1)
