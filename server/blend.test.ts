@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { averagePrice, compareGap, dollarGap, microPrice, movedAtLeast, withinDollars } from "./blend"
+import { addDecimal, averagePrice, compareDecimal, compareGap, dollarGap, microPrice, movedAtLeast, subDecimal, withinDollars } from "./blend"
 
 test("averagePrice halves two decimal strings without binary rounding", () => {
   expect(averagePrice("67234.10", "67234.10")).toBe("67234.10")
@@ -39,6 +39,21 @@ test("compareGap ranks the closer decimal and treats a bad price as farther", ()
   expect(compareGap("81620", "81400", "81600")).toBe(1)
   expect(compareGap("100", "100.00", "100")).toBe(0)
   expect(compareGap("100", "nope", "101")).toBe(1)
+})
+
+test("decimal add, subtract, and compare trim zeros and reject bad input", () => {
+  expect(addDecimal("1.50", "2.50")).toBe("4")
+  expect(addDecimal("1.10", "nope")).toBe("0")
+  expect(addDecimal("nope", "1")).toBe("0")
+  expect(subDecimal("nope", "1")).toBe("0")
+  expect(subDecimal("1.50", "nope")).toBe("1.50")
+  expect(subDecimal("1.20", "0.20")).toBe("1")
+  expect(subDecimal("1", "5")).toBe("0")
+  expect(compareDecimal("nope", "bad")).toBe(0)
+  expect(compareDecimal("nope", "1")).toBe(-1)
+  expect(compareDecimal("1", "nope")).toBe(1)
+  expect(compareDecimal("1.0", "1.00")).toBe(0)
+  expect(compareDecimal("1.01", "1")).toBe(1)
 })
 
 test("withinDollars keeps a $25 gap and drops a wider one", () => {

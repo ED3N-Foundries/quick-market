@@ -1,10 +1,9 @@
-import { compareGap, dollarGap, microPrice, movedAtLeast, withinDollars } from "./blend"
+import { addDecimal, compareDecimal, compareGap, dollarGap, microPrice, movedAtLeast, subDecimal, withinDollars } from "./blend"
 import { priceSource, type PriceSource } from "./config"
 import { openFeed, type FeedConn } from "./feedSocket"
 import type { Print } from "./rounds"
 
 const PRICE = /^\d+(\.\d+)?$/
-const MONEY = /^\d+(\.\d+)?$/
 
 /** A book quote older than this may be replaced by a trade. The switch clock is MOVE_MS. */
 export const BREAK_MS = 3_000
@@ -110,7 +109,7 @@ export function swingScore(samples: readonly SwingSample[], now: number): string
   let total = "0"
   for (const sample of samples) {
     if (sample.at > now || now - sample.at > RATE_MS) continue
-    total = addMoney(total, sample.dollars)
+    total = addDecimal(total, sample.dollars)
   }
   return total
 }
@@ -215,7 +214,7 @@ export function rankStandbys(
   const order = (venue: PriceSource) => VENUE_ORDER.indexOf(venue)
   return [...pool]
     .sort((a, b) => {
-      const swing = compareMoney(b.swing ?? "0", a.swing ?? "0")
+      const swing = compareDecimal(b.swing ?? "0", a.swing ?? "0")
       if (swing !== 0) return swing
       const prefer = Number(a.venue !== configured) - Number(b.venue !== configured)
       if (prefer !== 0) return prefer
@@ -253,61 +252,6 @@ function fastFreezeUntil(attempts: readonly BinanceAttempt[]): number {
     } else streak = 0
   }
   return until
-}
-
-function addMoney(left: string, right: string): string {
-  const a = moneyParts(left)
-  const b = moneyParts(right)
-  if (!a || !b) return "0"
-  const scale = Math.max(a.scale, b.scale)
-  return formatMoney(scaleMoney(a.n, a.scale, scale) + scaleMoney(b.n, b.scale, scale), scale)
-}
-
-/** Subtract `right` from `left`, floored at zero. Both sides are exact decimal strings. */
-function subMoney(left: string, right: string): string {
-  const a = moneyParts(left)
-  const b = moneyParts(right)
-  if (!a) return "0"
-  if (!b) return left
-  const scale = Math.max(a.scale, b.scale)
-  const x = scaleMoney(a.n, a.scale, scale)
-  const y = scaleMoney(b.n, b.scale, scale)
-  if (y >= x) return "0"
-  return formatMoney(x - y, scale)
-}
-
-function compareMoney(left: string, right: string): number {
-  const a = moneyParts(left)
-  const b = moneyParts(right)
-  if (!a && !b) return 0
-  if (!a) return -1
-  if (!b) return 1
-  const scale = Math.max(a.scale, b.scale)
-  const x = scaleMoney(a.n, a.scale, scale)
-  const y = scaleMoney(b.n, b.scale, scale)
-  if (x < y) return -1
-  if (x > y) return 1
-  return 0
-}
-
-function moneyParts(value: string): { n: bigint; scale: number } | null {
-  if (!MONEY.test(value)) return null
-  const [whole, frac = ""] = value.split(".")
-  const digits = `${whole}${frac}`.replace(/^0+(?=\d)/, "")
-  return { n: BigInt(digits.length === 0 ? "0" : digits), scale: frac.length }
-}
-
-function scaleMoney(n: bigint, from: number, to: number): bigint {
-  if (to <= from) return n / 10n ** BigInt(from - to)
-  return n * 10n ** BigInt(to - from)
-}
-
-function formatMoney(value: bigint, scale: number): string {
-  const text = value.toString().padStart(scale + 1, "0")
-  if (scale === 0) return text
-  const cut = text.length - scale
-  const trimmed = `${text.slice(0, cut)}.${text.slice(cut)}`.replace(/0+$/, "").replace(/\.$/, "")
-  return trimmed.length === 0 ? "0" : trimmed
 }
 
 type Feed = {
@@ -442,7 +386,7 @@ export function rebuildLeg(leg: Leg, now: number): void {
   const live = leg.samples.slice(leg.head).filter((sample) => sample.at <= now && now - sample.at <= RATE_MS)
   live.sort((a, b) => a.at - b.at)
   let total = "0"
-  for (const sample of live) total = addMoney(total, sample.dollars)
+  for (const sample of live) total = addDecimal(total, sample.dollars)
   leg.samples = live
   leg.head = 0
   leg.swing = total
@@ -474,7 +418,7 @@ export function pruneLeg(leg: Leg, now: number): void {
     const sample = leg.samples[head]!
     if (sample.at > now) break
     if (now - sample.at <= RATE_MS) break
-    swing = subMoney(swing, sample.dollars)
+    swing = subDecimal(swing, sample.dollars)
     head += 1
     changed = true
   }
@@ -518,7 +462,7 @@ export function noteLeg(leg: Leg, nextPrice: string | null, now: number): boolea
     return true
   }
   leg.samples.push({ at: now, dollars })
-  leg.swing = addMoney(leg.swing, dollars)
+  leg.swing = addDecimal(leg.swing, dollars)
   leg.price = nextPrice
   leg.movedAt = now
   return true

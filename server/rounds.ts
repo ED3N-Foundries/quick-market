@@ -280,10 +280,7 @@ function poolSums(roundId: number) {
   return { poolUpMicros, poolDownMicros, playersUp, playersDown }
 }
 
-const POOL_TRAY = 5
 const HISTORY_TRAY = 10
-// Live board skips the tray. Reconnects and round broadcasts no longer resend the current pool.
-const PUBLISH_TRAY = false
 
 function recentBuyIns(roundId: number, limit: number): { address: string; side: Side; stakeMicros: number; payoutMicros: number | null }[] {
   const rows = getDb()
@@ -301,10 +298,6 @@ function recentBuyIns(roundId: number, limit: number): { address: string; side: 
     stakeMicros: row.stake_micros,
     payoutMicros: row.payout_micros,
   }))
-}
-
-function trayFor(roundId: number): TrayRow[] {
-  return recentBuyIns(roundId, POOL_TRAY).map(({ address, side, stakeMicros }) => ({ address, side, stakeMicros }))
 }
 
 function toBand(row: RoundRow): Band {
@@ -334,7 +327,7 @@ function cardFor(id: number): PoolCard | null {
   ensureRound(id)
   const row = getRound(id)
   if (!row) return null
-  return { ...toBand(row), ...poolSums(id), tray: PUBLISH_TRAY ? trayFor(id) : [] }
+  return { ...toBand(row), ...poolSums(id), tray: [] }
 }
 
 /** A voided ride stays in history. It is not the market on screen. */
@@ -694,7 +687,7 @@ function closeRound(round: RoundRow, forceVoid = false): SettledEvent {
   }
 }
 
-export function advance(now: number): { settled: SettledEvent[]; broadcastRound: boolean } {
+export function advance(now: number): { settled: SettledEvent[]; broadcastRound: boolean; awaitingPrice: boolean } {
   const clock = clockAt(now)
   const settled: SettledEvent[] = []
   let broadcastRound = false
@@ -705,7 +698,7 @@ export function advance(now: number): { settled: SettledEvent[]; broadcastRound:
   }
   if (feedHeld(now)) {
     const voided = voidOpenRounds()
-    return { settled: voided, broadcastRound: broadcastRound || voided.length > 0 }
+    return { settled: voided, broadcastRound: broadcastRound || voided.length > 0, awaitingPrice: false }
   }
 
   reviveJoin(now)
@@ -722,9 +715,13 @@ export function advance(now: number): { settled: SettledEvent[]; broadcastRound:
   const locking = getDb()
     .query("SELECT * FROM rounds WHERE chain_key = ? AND status = 'open' AND strike IS NULL AND starts_at <= ?")
     .all(activeChainKey(), now) as RoundRow[]
+  let awaitingPrice = false
   for (const round of locking) {
     const print = priceAt(round.starts_at, round.ends_at - round.starts_at)
-    if (!print) continue
+    if (!print) {
+      awaitingPrice = true
+      continue
+    }
     const result = getDb()
       .query("UPDATE rounds SET strike = ? WHERE chain_key = ? AND id = ? AND strike IS NULL")
       .run(print.price, activeChainKey(), round.id)
@@ -736,7 +733,7 @@ export function advance(now: number): { settled: SettledEvent[]; broadcastRound:
     cachedKey = key
     broadcastRound = true
   }
-  return { settled, broadcastRound }
+  return { settled, broadcastRound, awaitingPrice }
 }
 
 export type HistoryRow = {

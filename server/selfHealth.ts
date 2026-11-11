@@ -1,7 +1,6 @@
 import { readFileSync, statSync } from "node:fs"
 import { statfsSync } from "node:fs"
 import type { Database } from "bun:sqlite"
-import { snapshotProcessHealth } from "./processHealth"
 
 // ---------------------------------------------------------------------------
 // Quick Market self-health sampler.
@@ -37,7 +36,19 @@ export type HostTotals = {
   dbBytes: number
 }
 
-export type Agg = { count: number; totalMs: number; maxMs: number }
+export type DiskNow = {
+  at: number
+  diskUsed: number
+  diskSize: number
+  dbBytes: number
+}
+
+let diskNow: DiskNow | null = null
+
+/** Latest disk and ledger size. Updated by the slow sampler, not by the market loop. */
+export function currentDisk(): DiskNow | null {
+  return diskNow
+}
 
 type CpuCounters = { user: number; sys: number; iowait: number; total: number }
 
@@ -332,6 +343,7 @@ export function __resetSelfHealthForTest(): void {
   if (defaultState.lagTimer) clearInterval(defaultState.lagTimer)
   defaultState = createSelfHealthState()
   spanDepth = 0
+  diskNow = null
 }
 
 // Active instrumented span (innermost timedQuery group). Single-threaded, so a
@@ -472,22 +484,6 @@ export function timedQuery<T>(group: string, fn: () => T, state: SelfHealthState
   }
 }
 
-function summarize(agg: Agg): { count: number; avg: number; max: number; p50: number; p90: number; p95: number; p99: number } {
-  const p = histPercentiles(agg.hist)
-  return { count: agg.count, avg: agg.count > 0 ? agg.totalMs / agg.count : 0, max: agg.maxMs, ...p }
-}
-
-function sumAll(map: Map<string, Agg>): Agg {
-  const out = newAgg()
-  for (const agg of map.values()) {
-    out.count += agg.count
-    out.totalMs += agg.totalMs
-    if (agg.maxMs > out.maxMs) out.maxMs = agg.maxMs
-    mergeHistInto(out.hist, agg.hist)
-  }
-  return out
-}
-
 export type SampleInput = {
   db: Database
   dataDir: string
@@ -503,145 +499,23 @@ export type SampleInput = {
 export function flushHealthSample(input: SampleInput): boolean {
   const state = input.state ?? defaultState
   try {
-    const proc = snapshotProcessHealth()
     const { totals, cpu } = sampleHostTotals(input.dataDir, input.dbPath, state.prevCpu)
     state.prevCpu = cpu
-    let selfCpuMs = 0
-    try {
-      const usage = process.cpuUsage()
-      if (state.prevSelfCpu) {
-        selfCpuMs = Math.max(0, (usage.user - state.prevSelfCpu.user + (usage.system - state.prevSelfCpu.system)) / 1000)
-      }
-      state.prevSelfCpu = { user: usage.user, system: usage.system }
-    } catch {
-      // ignore
-    }
-    let mem = { rss: 0, heapTotal: 0, heapUsed: 0, external: 0 }
-    try {
-      const m = process.memoryUsage()
-      mem = { rss: m.rss, heapTotal: m.heapTotal, heapUsed: m.heapUsed, external: m.external }
-    } catch {
-      // ignore
-    }
-    const req = summarize(sumAll(state.routes))
-    const q = summarize(sumAll(state.queries))
-    const tick = summarize(state.tick)
-    const lag = summarize(state.lag)
-    // Board timing: prefer the stream's cumulative boardBuilds when present
-    // (covers snapshot/book paths); otherwise use local tick-loop samples.
-    // Deltas give per-interval avg/max rather than lifetime averages.
-    let board = summarize(state.board)
-    if (input.streamBoard && input.streamBoard.count > 0) {
-      const dCount = input.streamBoard.count - state.prevBoardCount
-      const dTotal = input.streamBoard.totalMs - state.prevBoardTotalMs
-      if (dCount > 0 && dTotal >= 0) {
-        board = { count: dCount, avg: dTotal / dCount, max: input.streamBoard.maxMs, p50: board.p50, p90: board.p90, p95: board.p95, p99: board.p99 }
-      }
-      state.prevBoardCount = input.streamBoard.count
-      state.prevBoardTotalMs = input.streamBoard.totalMs
-    }
     const ts = Math.floor(input.now / 1000) * 1000
-    // Keep the largest hang suspects; the table is capped per flush.
+    diskNow = { at: input.now, diskUsed: totals.diskUsed, diskSize: totals.diskSize, dbBytes: totals.dbBytes }
+    // Stall rows only. Route and query histograms stay out of the ledger.
     const hangs = [...state.hangs].sort((a, b) => b.durationMs - a.durationMs).slice(0, MAX_HANGS_PER_FLUSH)
-    const write = input.db.transaction(() => {
-      input.db
-        .query(
-          `INSERT OR REPLACE INTO qm_health_sample
-           (ts, boot_id, boot_count, status, reason,
-            mem_total, mem_used, swap_used, cpu_user, cpu_sys, cpu_iowait, load1,
-            disk_size, disk_used, db_bytes,
-            self_rss, self_heap, self_external, self_cpu_ms,
-            lag_ms, lag_max, lag_p50, lag_p90, lag_p95, lag_p99, uptime_ms, peers, feed,
-            req_count, req_avg_ms, req_max_ms, req_p50, req_p90, req_p95, req_p99,
-            q_count, q_avg_ms, q_max_ms, q_p50, q_p90, q_p95, q_p99,
-            tick_count, tick_avg_ms, tick_max_ms, tick_p50, tick_p90, tick_p95, tick_p99,
-            board_count, board_avg_ms, board_max_ms, board_p50, board_p90, board_p95, board_p99)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .run(
-          ts,
-          proc.bootId,
-          proc.bootCount,
-          proc.status,
-          proc.reason ? proc.reason.slice(0, 300) : null,
-          totals.memTotal,
-          totals.memUsed,
-          totals.swapUsed,
-          totals.cpuUser,
-          totals.cpuSys,
-          totals.cpuIowait,
-          totals.load1,
-          totals.diskSize,
-          totals.diskUsed,
-          totals.dbBytes,
-          mem.rss,
-          mem.heapUsed,
-          mem.external,
-          Math.round(selfCpuMs * 100) / 100,
-          proc.eventLoopLagMs ?? null,
-          lag.max,
-          lag.p50,
-          lag.p90,
-          lag.p95,
-          lag.p99,
-          proc.uptimeMs,
-          input.peers ?? 0,
-          input.feed ?? null,
-          req.count,
-          req.avg,
-          req.max,
-          req.p50,
-          req.p90,
-          req.p95,
-          req.p99,
-          q.count,
-          q.avg,
-          q.max,
-          q.p50,
-          q.p90,
-          q.p95,
-          q.p99,
-          tick.count,
-          tick.avg,
-          tick.max,
-          tick.p50,
-          tick.p90,
-          tick.p95,
-          tick.p99,
-          board.count,
-          board.avg,
-          board.max,
-          board.p50,
-          board.p90,
-          board.p95,
-          board.p99,
-        )
-      const routeWrite = input.db.query(
-        `INSERT OR REPLACE INTO qm_health_route (ts, route, count, total_ms, max_ms, p50, p90, p95, p99, hist) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      for (const [route, agg] of state.routes) {
-        if (agg.count <= 0) continue
-        const p = histPercentiles(agg.hist)
-        routeWrite.run(ts, route, agg.count, agg.totalMs, agg.maxMs, p.p50, p.p90, p.p95, p.p99, encodeHist(agg.hist))
-      }
-      const queryWrite = input.db.query(
-        `INSERT OR REPLACE INTO qm_health_query (ts, grp, count, total_ms, max_ms, p50, p90, p95, p99, hist) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      for (const [grp, agg] of state.queries) {
-        if (agg.count <= 0) continue
-        const p = histPercentiles(agg.hist)
-        queryWrite.run(ts, grp, agg.count, agg.totalMs, agg.maxMs, p.p50, p.p90, p.p95, p.p99, encodeHist(agg.hist))
-      }
-      if (hangs.length > 0) {
+    if (hangs.length > 0) {
+      const write = input.db.transaction(() => {
         const hangWrite = input.db.query(
           `INSERT INTO qm_hangs (ts, duration_ms, kind, name, detail) VALUES (?, ?, ?, ?, ?)`,
         )
         for (const hang of hangs) {
           hangWrite.run(ts, hang.durationMs, hang.kind.slice(0, 32), hang.name.slice(0, 96), hang.detail ? hang.detail.slice(0, 300) : null)
         }
-      }
-    })
-    write()
+      })
+      write()
+    }
     // Disk pressure surfaces through the callback so the caller can degrade
     // process status (crash forensics: a full disk looks like a hang).
     try {

@@ -18,6 +18,7 @@ export type {
   SnapshotMessage,
   TickMessage,
   TrayRow,
+  GrantPending,
   You,
 } from "../../shared/stream"
 

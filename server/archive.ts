@@ -60,7 +60,7 @@ function trackArchive(
 
 function writeGzipJsonlSync(path: string, rows: Record<string, unknown>[]): number {
   // Synchronous gzip write. Batches are capped (BATCH rows) so per-call work
-  // stays small and never blocks the 16ms market tick for long.
+  // stays small so a batch does not stall the market loop for long.
   if (rows.length === 0) return 0
   const lines = rows.map((row) => JSON.stringify(row)).join("\n") + "\n"
   const bytes = gzipSync(Buffer.from(lines, "utf8"), { level: 6 })

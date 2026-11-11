@@ -103,6 +103,49 @@ function mulDec(left: Dec, right: Dec): Dec {
   return { n: left.n * right.n, scale: left.scale + right.scale }
 }
 
+function trimDecimal(text: string): string {
+  if (!text.includes(".")) return text
+  const trimmed = text.replace(/0+$/, "").replace(/\.$/, "")
+  return trimmed.length === 0 ? "0" : trimmed
+}
+
+/** Sum of two decimal strings. A value that will not parse yields "0". Trailing zeros are dropped. */
+export function addDecimal(left: string, right: string): string {
+  const a = parseDec(left)
+  const b = parseDec(right)
+  if (!a || !b) return "0"
+  const sum = addDec(a, b)
+  return trimDecimal(formatScaled(sum.n, sum.scale))
+}
+
+/** Subtract `right` from `left`, floored at zero. A missing left yields "0". A missing right returns `left`. */
+export function subDecimal(left: string, right: string): string {
+  const a = parseDec(left)
+  const b = parseDec(right)
+  if (!a) return "0"
+  if (!b) return left
+  const scale = Math.max(a.scale, b.scale)
+  const x = scaleTo(a.n, a.scale, scale)
+  const y = scaleTo(b.n, b.scale, scale)
+  if (y >= x) return "0"
+  return trimDecimal(formatScaled(x - y, scale))
+}
+
+/** Negative when `left` is smaller. An unparseable left sorts first. */
+export function compareDecimal(left: string, right: string): number {
+  const a = parseDec(left)
+  const b = parseDec(right)
+  if (!a && !b) return 0
+  if (!a) return -1
+  if (!b) return 1
+  const scale = Math.max(a.scale, b.scale)
+  const x = scaleTo(a.n, a.scale, scale)
+  const y = scaleTo(b.n, b.scale, scale)
+  if (x < y) return -1
+  if (x > y) return 1
+  return 0
+}
+
 function addDec(left: Dec, right: Dec): Dec {
   const scale = Math.max(left.scale, right.scale)
   return { n: scaleTo(left.n, left.scale, scale) + scaleTo(right.n, right.scale, scale), scale }

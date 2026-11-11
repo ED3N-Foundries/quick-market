@@ -1,18 +1,31 @@
 import { expect, test } from "bun:test"
+import { marketPreferences } from "../shared/market"
 import { generateNearSecret } from "../shared/nearKey"
 import { loadEnv, parseTokenAccount, parseTreasuryKey } from "./env"
 
 const hex = "ab".repeat(32)
 
 test("a missing treasury key stays empty and a bare hex key is normalized", () => {
-  expect(loadEnv({}).treasuryPrivateKey).toBe("")
-  expect(loadEnv({ TREASURY_PRIVATE_KEY: "  " }).treasuryPrivateKey).toBe("")
-  expect(loadEnv({ TREASURY_PRIVATE_KEY: hex }).treasuryPrivateKey).toBe(`0x${hex}`)
-  expect(loadEnv({ TREASURY_PRIVATE_KEY: `0x${hex}` }).treasuryPrivateKey).toBe(`0x${hex}`)
+  const previous = marketPreferences.chain
+  marketPreferences.chain = "base"
+  try {
+    expect(loadEnv({}).treasuryPrivateKey).toBe("")
+    expect(loadEnv({ TREASURY_PRIVATE_KEY: "  " }).treasuryPrivateKey).toBe("")
+    expect(loadEnv({ TREASURY_PRIVATE_KEY: hex }).treasuryPrivateKey).toBe(`0x${hex}`)
+    expect(loadEnv({ TREASURY_PRIVATE_KEY: `0x${hex}` }).treasuryPrivateKey).toBe(`0x${hex}`)
+  } finally {
+    marketPreferences.chain = previous
+  }
 })
 
 test("a malformed treasury key is rejected", () => {
-  expect(() => loadEnv({ TREASURY_PRIVATE_KEY: "nope" })).toThrow("32-byte")
+  const previous = marketPreferences.chain
+  marketPreferences.chain = "base"
+  try {
+    expect(() => loadEnv({ TREASURY_PRIVATE_KEY: "nope" })).toThrow("32-byte")
+  } finally {
+    marketPreferences.chain = previous
+  }
 })
 
 test("a NEAR launch accepts an ed25519 secret and rejects an EVM key", async () => {
