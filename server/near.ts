@@ -1,5 +1,3 @@
-import { existsSync, readFileSync } from "node:fs"
-import { join } from "node:path"
 import bs58 from "bs58"
 import { activeChainKey, withChain } from "./activeChain"
 import { loadEnv, nearTreasurySecret, rpcFor } from "./env"
@@ -8,7 +6,6 @@ import { normalizeAccount } from "./money"
 import { credit, withdraw, youFor, type You } from "./rounds"
 import {
   describeTreasury,
-  isImplicitAccount,
   isNearAccountId,
   ledgerChainConflict,
   ledgerChainMessage,
@@ -18,14 +15,13 @@ import {
   type TreasuryReport,
 } from "../shared/near"
 import { accountFromSecret, parseNearPublicKey, publicKeyBytes } from "../shared/nearKey"
-import { encodeFunctionCall, encodeTransfer, jsonArgs, signTransaction } from "./nearTx"
+import { encodeFunctionCall, jsonArgs, signTransaction } from "./nearTx"
 
 /** A missing key or invalid NEAR token stops the process before it listens. */
 export class NearConfigError extends Error {}
 
 const GAS = 30_000_000_000_000n
 const ONE_YOCTO = 1n
-const KEYS_PATH = join(process.cwd(), "agent", "keys.near.json")
 
 export type ParsedDeposit = {
   txHash: string
@@ -230,23 +226,6 @@ async function submit(input: {
   return result.transaction?.hash ?? signed.hash
 }
 
-export function nearAgentAccounts(): string[] {
-  if (!existsSync(KEYS_PATH)) return []
-  try {
-    const parsed = JSON.parse(readFileSync(KEYS_PATH, "utf8")) as unknown
-    if (!Array.isArray(parsed)) return []
-    const accounts: string[] = []
-    for (const row of parsed) {
-      if (!row || typeof row !== "object") continue
-      const account = (row as { account?: unknown }).account
-      if (typeof account === "string" && isImplicitAccount(account)) accounts.push(account)
-    }
-    return accounts
-  } catch {
-    return []
-  }
-}
-
 export function ledgerSumMicros(): bigint {
   const row = getDb()
     .query("SELECT COALESCE(SUM(balance_micros), 0) AS total FROM users WHERE chain_key = ?")
@@ -322,7 +301,7 @@ function failedReport(treasury: string, agents: string[], error: unknown): Treas
 
 function publishReport(report: TreasuryReport): TreasuryReport {
   latest = report
-  for (const line of report.lines) console.error(line)
+  if (!report.ok) for (const line of report.lines) console.error(line)
   return report
 }
 
@@ -330,17 +309,16 @@ export async function bootNear(treasury: string): Promise<TreasuryReport> {
   const env = loadEnv()
   const token = env.tokenAccount.trim()
   assertLedgerChain("near-testnet", env.dbPath)
-  const agents = nearAgentAccounts()
   try {
     assertQmMetadata(await readTokenMetadata(token))
   } catch (error) {
     if (error instanceof NearConfigError) throw error
     if (missingAccount(error)) throw new NearConfigError("TOKEN_ACCOUNT must be quick-market QM with 6 decimals.")
-    return failedReport(treasury, agents, error)
+    return failedReport(treasury, [], error)
   }
   try {
-    const first = await collectHoldings(treasury, agents)
-    const planned = planSeed({ treasury: first.treasury, ledgerMicros: ledgerSumMicros(), agents: first.agents })
+    const first = await collectHoldings(treasury, [])
+    const planned = planSeed({ treasury: first.treasury, ledgerMicros: ledgerSumMicros(), agents: [] })
     if (planned.mintMicros > 0n) {
       await enqueue(() =>
         submit({
@@ -351,21 +329,11 @@ export async function bootNear(treasury: string): Promise<TreasuryReport> {
         }),
       )
     }
-    for (const transfer of planned.transfers) {
-      await enqueue(() =>
-        submit({
-          signerId: treasury,
-          secretKey: signingKey(),
-          receiverId: transfer.to,
-          actions: [encodeTransfer(transfer.yocto)],
-        }),
-      )
-    }
-    const second = await collectHoldings(treasury, agents)
-    return publishReport(describeTreasury({ account: treasury, treasury: second.treasury, ledgerMicros: ledgerSumMicros(), agents: second.agents }))
+    const second = await collectHoldings(treasury, [])
+    return publishReport(describeTreasury({ account: treasury, treasury: second.treasury, ledgerMicros: ledgerSumMicros(), agents: [] }))
   } catch (error) {
     if (error instanceof NearConfigError) throw error
-    return failedReport(treasury, agents, error)
+    return failedReport(treasury, [], error)
   }
 }
 
@@ -379,22 +347,16 @@ export async function sendNearActions(input: {
 }
 
 export async function inspectNear(treasury: string): Promise<TreasuryReport> {
-  const agents = nearAgentAccounts()
   try {
-    const read = await collectHoldings(treasury, agents)
-    const report = describeTreasury({ account: treasury, treasury: read.treasury, ledgerMicros: ledgerSumMicros(), agents: read.agents })
+    const read = await collectHoldings(treasury, [])
+    const report = describeTreasury({ account: treasury, treasury: read.treasury, ledgerMicros: ledgerSumMicros(), agents: [] })
     latest = report
     return report
   } catch (error) {
-    const report = uncheckedReport(treasury, agents, error)
+    const report = uncheckedReport(treasury, [], error)
     latest = report
     return report
   }
-}
-
-export function fundedAgents(report: TreasuryReport): Set<string> {
-  const short = new Set(report.shortAgents.map((agent) => agent.account))
-  return new Set(nearAgentAccounts().filter((account) => !short.has(account)))
 }
 
 export async function mintNearToTreasury(amountMicros: number, onHash?: (hash: string) => void): Promise<void> {
@@ -510,60 +472,6 @@ export async function requestNearWithdraw(
       }
       console.error(error)
       return { ok: false, error: "Withdraw is pending", you: youFor(who) ?? undefined }
-    }
-  })
-}
-
-export async function requestNearBurn(address: string, amountMicros: number): Promise<{ ok: true; txHash: string } | { ok: false; error: string }> {
-  return enqueue(async () => {
-    if (!isImplicitAccount(address)) return { ok: false, error: "Address is invalid" }
-    if (!Number.isSafeInteger(amountMicros) || amountMicros <= 0) return { ok: false, error: "Amount is invalid" }
-    const env = loadEnv()
-    const treasury = await accountFromSecret(signingKey())
-    if (!treasury) return { ok: false, error: "TREASURY_PRIVATE_KEY must be an ed25519 NEAR secret key" }
-    const id = crypto.randomUUID()
-    try {
-      const tx = getDb().transaction(() => {
-        const row = getDb()
-          .query("SELECT balance_micros, is_bot FROM users WHERE chain_key = ? AND address = ?")
-          .get(activeChainKey(), address) as { balance_micros: number; is_bot: number } | null
-        if (!row || row.is_bot !== 1) throw new Error("Not a bot")
-        if (amountMicros > row.balance_micros) throw new Error("Insufficient balance")
-        getDb()
-          .query("UPDATE users SET balance_micros = balance_micros - ? WHERE chain_key = ? AND address = ?")
-          .run(amountMicros, activeChainKey(), address)
-        getDb()
-          .query(`INSERT INTO burns (chain_key, id, address, amount_micros, tx_hash, raw_tx, status, created_at) VALUES (?, ?, ?, ?, NULL, NULL, 'pending', ?)`)
-          .run(activeChainKey(), id, address, amountMicros, Date.now())
-      })
-      tx()
-    } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : "Burn failed" }
-    }
-    try {
-      const hash = await submit({
-        signerId: treasury,
-        secretKey: signingKey(),
-        receiverId: env.tokenAccount.trim(),
-        actions: [encodeFunctionCall("burn", jsonArgs({ amount: String(amountMicros) }), GAS, 0n)],
-      })
-      getDb()
-        .query("UPDATE burns SET status = 'sent', tx_hash = ? WHERE chain_key = ? AND id = ? AND status = 'pending'")
-        .run(hash, activeChainKey(), id)
-      return { ok: true, txHash: hash }
-    } catch (error) {
-      const refund = getDb().transaction(() => {
-        const row = getDb().query("SELECT status FROM burns WHERE chain_key = ? AND id = ?").get(activeChainKey(), id) as
-          | { status: string }
-          | null
-        if (!row || row.status !== "pending") return
-        credit(address, amountMicros)
-        getDb()
-          .query("UPDATE burns SET status = 'refunded' WHERE chain_key = ? AND id = ? AND status = 'pending'")
-          .run(activeChainKey(), id)
-      })
-      refund()
-      return { ok: false, error: nearFaultMessage(error) }
     }
   })
 }

@@ -100,8 +100,10 @@ export class MarketStream {
 
   settled(event: SettlementEvent, serverNow: number) {
     const { payouts, balances: _balances, ...result } = event
-    this.broadcast({ type: "settled", serverNow, ...result }, activeChainKey())
+    const chain = activeChainKey()
+    this.broadcast({ type: "settled", serverNow, ...result }, chain)
     for (const payout of payouts) {
+      if (!hub.connected(payout.address, chain)) continue
       const you = this.deps.youFor(payout.address)
       if (!you) continue
       const message: ServerStreamMessage = {

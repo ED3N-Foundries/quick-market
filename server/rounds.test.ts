@@ -57,6 +57,8 @@ test("history lists a later market ahead of an older round with a higher id", ()
   betRow.run("old", 500, who)
   betRow.run("new", 100, who)
   expect(listRounds(10, who, true).map((row) => row.id)).toEqual([100, 500])
+  expect(listRounds(10, null, false, 100).map((row) => row.id)).toEqual([500])
+  expect(listRounds(10, who, true, 50).map((row) => row.id)).toEqual([100, 500])
   const index = getDb().query("SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?").get("rounds_closed_starts")
   expect(index).toEqual({ name: "rounds_closed_starts" })
 })
@@ -240,10 +242,9 @@ test("a late receipt stays off the next market", () => {
   if (!invalid.ok) expect(invalid.error).toBe("Market is invalid")
 })
 
-test("a stale bot chunk does not fill the next window", () => {
+test("a stale chunk does not fill the next window", () => {
   const who = address(14)
   grant(who, 10 * USDC)
-  getDb().query("UPDATE users SET is_bot = 1 WHERE address = ?").run(who)
   notePrint(print("100", T - 20))
   advance(T + 10)
   const late = placeBuyIns({
@@ -314,7 +315,6 @@ test("the live board leaves the tray empty and the detail lists the newest buy-i
   for (let index = 0; index < 6; index++) {
     const bot = address(40 + index)
     grant(bot, 10 * USDC)
-    getDb().query("UPDATE users SET is_bot = 1 WHERE address = ?").run(bot)
     expect(bet({ address: bot, side: index % 2 === 0 ? "up" : "down", stakeMicros: USDC, now: T + 120 + index }).ok).toBe(true)
   }
   const card = board(T + 200).join
@@ -329,12 +329,11 @@ test("the live board leaves the tray empty and the detail lists the newest buy-i
   expect(detail?.round && "feeMicros" in detail.round).toBe(false)
 })
 
-test("settlement credits a bot and leaves that payout off the public event", () => {
+test("settlement credits every address and leaves balances off the event", () => {
   const you = address(21)
   const bot = address(22)
   grant(you, 100 * USDC)
   grant(bot, 100 * USDC)
-  getDb().query("UPDATE users SET is_bot = 1 WHERE address = ?").run(bot)
   notePrint(print("100.00", T - 20))
   advance(T + 10)
   expect(bet({ address: bot, side: "up", stakeMicros: 50 * USDC, now: T + 100 }).ok).toBe(true)
@@ -345,22 +344,33 @@ test("settlement credits a bot and leaves that payout off the public event", () 
   const closed = advance(T + WINDOW + MARKET + 5)
   const event = closed.settled.find((row) => row.roundId === MARKET_ID)
   expect(event?.winningSide).toBe("up")
-  expect(event?.payouts.some((payout) => payout.address === bot)).toBe(false)
-  expect(event?.balances.some((row) => row.address === bot)).toBe(false)
+  expect(event?.payouts.some((payout) => payout.address === bot)).toBe(true)
+  expect(event?.payouts.some((payout) => payout.address === you)).toBe(true)
+  expect(event?.balances).toEqual([])
   expect(event?.payouts.find((payout) => payout.address === you)?.payoutMicros).toBe(0)
   expect(youFor(bot)!.balanceMicros).toBeGreaterThan(100 * USDC - 50 * USDC)
 })
 
-test("a bot can bet the next window while a bet is still open", () => {
+test("one buy-in stays open, and a batch can still enter the next window", () => {
   const bot = address(11)
   grant(bot, 10 * USDC)
-  getDb().query("UPDATE users SET is_bot = 1 WHERE address = ?").run(bot)
   notePrint(print("100", T - 20))
   advance(T + 10)
   expect(bet({ address: bot, side: "up", stakeMicros: USDC, now: T + 100 }).ok).toBe(true)
   notePrint(print("100", T + WINDOW - 20))
   const next = bet({ address: bot, side: "down", stakeMicros: USDC, now: T + WINDOW + 10 })
-  expect(next.ok).toBe(true)
+  expect(next.ok).toBe(false)
+  if (!next.ok) expect(next.error).toBe("Your last buy-in is still open")
+  const batch = placeBuyIns({
+    now: T + WINDOW + 10,
+    roundId: MARKET_ID + 1,
+    orders: [{ address: bot, side: "down", stakeMicros: USDC }],
+  })
+  expect(batch.ok).toBe(true)
+  if (batch.ok) {
+    expect(batch.accepted).toBe(1)
+    expect(batch.results[0]).toMatchObject({ address: bot, ok: true, balanceMicros: 8 * USDC })
+  }
   const join = board(T + WINDOW + 10).join
   expect(join?.tray).toEqual([])
   expect(join?.poolDownMicros).toBe(USDC)
@@ -387,7 +397,6 @@ test("a feed break voids open markets, refunds the stake, and resumes the same w
   const who = address(22)
   grant(you)
   grant(who, 10 * USDC)
-  getDb().query("UPDATE users SET is_bot = 1 WHERE address = ?").run(who)
   notePrint(print("100.00", T - 20))
   advance(T + 10)
   expect(bet({ address: you, side: "up", stakeMicros: 50 * USDC, now: T + 100 }).ok).toBe(true)

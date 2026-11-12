@@ -3,7 +3,7 @@ import { afterEach, expect, test } from "bun:test"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { getDb, importLegacySwarm, useDatabase } from "./db"
+import { getDb, useDatabase } from "./db"
 
 let dir: string | null = null
 
@@ -151,6 +151,8 @@ test("the production Base schema preserves balances, open activity, sessions, an
   expect(db.query("SELECT tx_hash FROM deposits WHERE chain_key = 'base-sepolia'").get()).toEqual({ tx_hash: "deposit" })
   expect(db.query("SELECT id FROM withdrawals WHERE chain_key = 'base-sepolia'").get()).toEqual({ id: "withdraw" })
   expect(db.query("SELECT id FROM burns WHERE chain_key = 'base-sepolia'").get()).toEqual({ id: "burn" })
+  const columns = db.query("PRAGMA table_info(users)").all() as { name: string }[]
+  expect(columns.map((column) => column.name)).not.toContain("is_bot")
 
   useDatabase(path)
   expect(getDb().query("SELECT COUNT(*) AS n FROM buy_ins").get()).toEqual({ n: 2 })
@@ -173,39 +175,43 @@ test("a new database indexes buy-ins and permits the same market id on two chain
   expect(getDb().query("SELECT id FROM buy_ins WHERE chain_key = 'base-sepolia' AND address = '0xabc'").get()).toEqual({ id: "b1" })
 })
 
-test("the legacy agent database imports once into chain-scoped tables", () => {
+test("opening drops swarm tables, agent meta, and is_bot without touching balances", () => {
   dir = mkdtempSync(join(tmpdir(), "qm-db-"))
-  const path = join(dir, "legacy-swarm.sqlite")
+  const path = join(dir, "market.sqlite")
   const legacy = new Database(path)
   legacy.exec(`
-    CREATE TABLE wallets (
-      address TEXT PRIMARY KEY, idx INTEGER NOT NULL, online INTEGER NOT NULL, phase TEXT,
-      bankroll INTEGER NOT NULL, last_side TEXT, last_stake INTEGER, last_skip TEXT,
-      wins INTEGER NOT NULL, losses INTEGER NOT NULL, mind TEXT, tempo INTEGER, visit_end INTEGER,
-      enrolled INTEGER NOT NULL, rng_a INTEGER, gate_json TEXT, cursor INTEGER,
-      visit_start INTEGER, gap_end INTEGER, handled INTEGER NOT NULL DEFAULT 0,
-      woke_at INTEGER, slept_at INTEGER, updated_at INTEGER
+    CREATE TABLE users (
+      chain_key TEXT NOT NULL, address TEXT NOT NULL, balance_micros INTEGER NOT NULL,
+      created_at INTEGER NOT NULL, is_bot INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (chain_key, address)
     );
-    INSERT INTO wallets VALUES
-      ('0xabc', 4, 1, 'live', 500, 'up', 10, NULL, 2, 1, 'tape', 20, 999, 1, 123, '{}', 7, 100, 200, 0, 101, 102, 103);
-    CREATE TABLE windows (id INTEGER PRIMARY KEY, buy_ins INTEGER, skips INTEGER, up_micros INTEGER, down_micros INTEGER, at INTEGER);
-    INSERT INTO windows VALUES (7, 2, 1, 100, 200, 1000);
-    CREATE TABLE stakes (round_id INTEGER, address TEXT, side TEXT, stake_micros INTEGER, PRIMARY KEY (round_id, address));
-    INSERT INTO stakes VALUES (7, '0xabc', 'up', 100);
+    INSERT INTO users VALUES ('base-sepolia', '0xabc', 42000000, 1, 1);
+    CREATE TABLE wallets (chain_key TEXT, address TEXT, idx INTEGER);
+    INSERT INTO wallets VALUES ('base-sepolia', '0xabc', 4);
+    CREATE TABLE windows (chain_key TEXT, id INTEGER);
+    INSERT INTO windows VALUES ('base-sepolia', 7);
+    CREATE TABLE stakes (chain_key TEXT, round_id INTEGER, address TEXT);
+    INSERT INTO stakes VALUES ('base-sepolia', 7, '0xabc');
     CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-    INSERT INTO meta VALUES ('settle_cursor', '7');
+    INSERT INTO meta VALUES
+      ('chain_schema_v1', '1'),
+      ('custody_v1', '1'),
+      ('agent_swarm_v1', '1'),
+      ('base-sepolia:agent:settle_cursor', '7'),
+      ('base-sepolia:deposit_block', '91');
   `)
   legacy.close()
-  useDatabase(":memory:")
-  importLegacySwarm(getDb(), ":memory:", path)
-  importLegacySwarm(getDb(), ":memory:", path)
-  expect(getDb().query("SELECT idx, bankroll FROM wallets WHERE chain_key = 'base-sepolia' AND address = '0xabc'").get()).toEqual({
-    idx: 4,
-    bankroll: 500,
-  })
-  expect(getDb().query("SELECT up_micros FROM windows WHERE chain_key = 'base-sepolia' AND id = 7").get()).toEqual({ up_micros: 100 })
-  expect(getDb().query("SELECT stake_micros FROM stakes WHERE chain_key = 'base-sepolia' AND round_id = 7").get()).toEqual({
-    stake_micros: 100,
-  })
-  expect(getDb().query("SELECT value FROM meta WHERE key = 'base-sepolia:agent:settle_cursor'").get()).toEqual({ value: "7" })
+  useDatabase(path)
+  const db = getDb()
+  expect(db.query("SELECT balance_micros FROM users WHERE address = '0xabc'").get()).toEqual({ balance_micros: 42_000_000 })
+  const columns = db.query("PRAGMA table_info(users)").all() as { name: string }[]
+  expect(columns.map((column) => column.name)).not.toContain("is_bot")
+  for (const name of ["wallets", "windows", "stakes"]) {
+    expect(db.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(name)).toBeNull()
+  }
+  expect(db.query("SELECT value FROM meta WHERE key = 'agent_swarm_v1'").get()).toBeNull()
+  expect(db.query("SELECT value FROM meta WHERE key = 'base-sepolia:agent:settle_cursor'").get()).toBeNull()
+  expect(db.query("SELECT value FROM meta WHERE key = 'base-sepolia:deposit_block'").get()).toEqual({ value: "91" })
+  expect(db.query("SELECT value FROM meta WHERE key = 'chain_schema_v1'").get()).toEqual({ value: "1" })
+  expect(db.query("SELECT value FROM meta WHERE key = 'custody_v1'").get()).toEqual({ value: "1" })
 })

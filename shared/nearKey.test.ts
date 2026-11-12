@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test"
 import { KeyPairEd25519 } from "@near-js/crypto"
 import { KeyPairSigner } from "@near-js/signers"
-import { nearBotEnrollMessage, nearLoginMessage } from "./login"
+import { nearLoginMessage } from "./login"
 import {
   NEP413_RECIPIENT,
   accountFromSecret,
@@ -17,7 +17,7 @@ test("an agent signature matches the implicit account", async () => {
   const made = await generateNearSecret()
   const account = await accountFromSecret(made.secretKey)
   expect(account).toBe(made.account)
-  const message = nearBotEnrollMessage(made.account, 1_700_000_000_000, 8_000_000)
+  const message = nearLoginMessage(made.account, 1_700_000_000_000)
   const signature = await signNearMessage(message, made.secretKey)
   expect(signature).not.toBeNull()
   expect(await verifyNearMessage(message, made.account, signature!)).toBe(true)

@@ -1,11 +1,10 @@
-import { timingSafeEqual } from "node:crypto"
 import { recoverMessageAddress, type Hex } from "viem"
 import { LOGIN_SKEW_MS, SESSION_MS, loginMessage, nearLoginMessage } from "../shared/login"
-import { NEP413_RECIPIENT, parseNearPublicKey, verifyNep413, verifyNearMessage } from "../shared/nearKey"
+import { NEP413_RECIPIENT, parseNearPublicKey, verifyNep413 } from "../shared/nearKey"
 import { isImplicitAccount } from "../shared/near"
 import type { ChainKey } from "../shared/chain"
 import { activeChainKey } from "./activeChain"
-import { chainConfig, loadEnv } from "./env"
+import { chainConfig } from "./env"
 import { getDb } from "./db"
 import { normalizeAccount } from "./money"
 import { accessKeyOnAccount, nearRpcBusy } from "./near"
@@ -25,7 +24,7 @@ function hex(bytes: Uint8Array): string {
   return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("")
 }
 
-type NearSignFailure = "nonce" | "public-key" | "implicit-key" | "access-key" | "signature" | "mismatch" | "agent"
+type NearSignFailure = "nonce" | "public-key" | "implicit-key" | "access-key" | "signature" | "mismatch"
 
 function nearSignError(reason: NearSignFailure): string {
   const detail = {
@@ -35,7 +34,6 @@ function nearSignError(reason: NearSignFailure): string {
     "access-key": "This public key is not an access key on the account.",
     signature: "The signature is not 64 bytes.",
     mismatch: "The signature does not match the sign-in message (NEP-413, sha256, recipient quick-market, no callback URL).",
-    agent: "The agent signature does not match the enroll message.",
   }[reason]
   return `Signature is invalid\n${detail}`
 }
@@ -44,15 +42,10 @@ async function nearSignatureOk(input: {
   address: string
   signature: string
   issued: number
-  bot: boolean
   nonce?: unknown
   publicKey?: unknown
 }): Promise<true | NearSignFailure> {
   const message = nearLoginMessage(input.address, input.issued)
-  if (input.bot) {
-    const ok = isImplicitAccount(input.address) && (await verifyNearMessage(message, input.address, input.signature))
-    return ok ? true : "agent"
-  }
   const nonce = nonceBytes(input.nonce)
   if (!nonce) return "nonce"
   if (typeof input.publicKey !== "string" || !parseNearPublicKey(input.publicKey)) return "public-key"
@@ -79,7 +72,6 @@ export async function openSession(input: {
   signature: string
   issued: number
   now: number
-  botSecret?: unknown
   nonce?: unknown
   publicKey?: unknown
 }): Promise<{ ok: true; token: string; you: You } | { ok: false; error: string }> {
@@ -104,7 +96,6 @@ export async function openSession(input: {
         address,
         signature: input.signature,
         issued: input.issued,
-        bot: botSecretOk(input.botSecret),
         nonce: input.nonce,
         publicKey: input.publicKey,
       })
@@ -130,17 +121,9 @@ export async function openSession(input: {
   if (seen) return { ok: false, error: "Sign-in already used" }
 
   const token = randomToken()
-  const bot = botSecretOk(input.botSecret)
   const tx = db.transaction(() => {
     db.query("INSERT INTO login_sigs (chain_key, signature, expires_at) VALUES (?, ?, ?)").run(chainKey, input.signature, input.now + LOGIN_SKEW_MS)
-    if (bot) {
-      db.query(
-        `INSERT INTO users (chain_key, address, balance_micros, created_at, is_bot) VALUES (?, ?, 0, ?, 1)
-         ON CONFLICT(chain_key, address) DO UPDATE SET is_bot = 1`,
-      ).run(chainKey, address, input.now)
-    } else {
-      ensureUser(address)
-    }
+    ensureUser(address)
     db.query("INSERT INTO sessions (chain_key, token, address, expires_at) VALUES (?, ?, ?, ?)").run(chainKey, token, address, input.now + SESSION_MS)
   })
   tx()
@@ -176,11 +159,16 @@ export function readSession(req: Request, now = Date.now()): { address: string |
   return readSessionToken(match[1], now)
 }
 
+export function endSessionToken(token: string) {
+  if (!/^[0-9a-f]{64}$/i.test(token)) return
+  getDb().query("DELETE FROM sessions WHERE token = ?").run(token)
+}
+
 export function endSession(req: Request) {
   const header = req.headers.get("authorization") ?? ""
   const match = /^Bearer\s+([0-9a-f]{64})$/i.exec(header)
   if (!match) return
-  getDb().query("DELETE FROM sessions WHERE token = ?").run(match[1]!)
+  endSessionToken(match[1]!)
 }
 
 function randomToken(): string {
@@ -189,12 +177,3 @@ function randomToken(): string {
   return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("")
 }
 
-export function agentAuthorized(header: string | null): boolean {
-  return botSecretOk(header)
-}
-
-function botSecretOk(given: unknown): boolean {
-  const expected = loadEnv().agentSecret
-  if (!expected || typeof given !== "string" || given.length !== expected.length) return false
-  return timingSafeEqual(Buffer.from(given), Buffer.from(expected))
-}

@@ -10,7 +10,6 @@ export function pickChain(input: {
   raw: string | null
   sessionChain: ChainKey | null
   live: ChainKey[]
-  agent: boolean
 }): { ok: true; chain: ChainKey } | { ok: false; status: number; error: string } {
   if (input.live.length === 0) return { ok: false, status: 503, error: "No market is on" }
   if (input.raw !== null && !isChainKey(input.raw)) return { ok: false, status: 400, error: "Chain is invalid" }
@@ -21,7 +20,6 @@ export function pickChain(input: {
   }
   if (asked) return { ok: true, chain: asked }
   if (input.sessionChain && input.live.includes(input.sessionChain)) return { ok: true, chain: input.sessionChain }
-  if (input.agent && input.live.includes("base-sepolia")) return { ok: true, chain: "base-sepolia" }
   if (input.live.includes("near-testnet")) return { ok: true, chain: "near-testnet" }
   return { ok: true, chain: input.live[0]! }
 }

@@ -115,8 +115,17 @@ export const hub = {
   sendTo(address: string, message: unknown, recover: (peer: MarketSocket) => void, chain?: ChainKey) {
     return publishTo(sockets, JSON.stringify(message), {
       recover,
-      filter: (peer) =>
-        peer.data.address === address && (chain === undefined || peer.data.chain == null || peer.data.chain === chain),
+      filter: (peer) => sameAccount(peer, address, chain),
     })
   },
+  connected(address: string, chain?: ChainKey) {
+    for (const peer of sockets) {
+      if (sameAccount(peer, address, chain)) return true
+    }
+    return false
+  },
+}
+
+function sameAccount(peer: MarketSocket, address: string, chain?: ChainKey): boolean {
+  return peer.data.address === address && (chain === undefined || peer.data.chain == null || peer.data.chain === chain)
 }

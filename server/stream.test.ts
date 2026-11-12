@@ -89,3 +89,34 @@ test("settlement broadcasts no payouts and sends account results privately", () 
   expect(mineSent.filter((message) => message.type === "account")).toHaveLength(1)
   expect(otherSent.filter((message) => message.type === "account")).toHaveLength(0)
 })
+
+test("settlement does not build an account message for a quiet address", () => {
+  let calls = 0
+  const market = new MarketStream({
+    board: () => board,
+    tape: () => [{ t: 1, price: "100" }],
+    feed: () => "live",
+    ticker: () => tickerFor("binance"),
+    handoff: () => null,
+    youFor: () => {
+      calls += 1
+      return you
+    },
+    accountResults: () => [],
+  })
+  market.settled(
+    {
+      roundId: 2,
+      status: "settled",
+      resolution: "paid",
+      winningSide: "up",
+      strike: "100",
+      settle: "101",
+      feeMicros: 0,
+      payouts: [{ address: "quiet", side: "up", stakeMicros: 1_000_000, payoutMicros: 2_000_000 }],
+      balances: [],
+    },
+    11,
+  )
+  expect(calls).toBe(0)
+})

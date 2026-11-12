@@ -1142,6 +1142,51 @@ button.grant-status:disabled { cursor: default; }
   flex-direction: column;
   gap: 12px;
 }
+.agents-overlay {
+  width: min(460px, 100%);
+  max-height: min(80dvh, 640px);
+  overflow: auto;
+}
+.agents-overlay p,
+.agents-steps p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+.agents-steps { display: flex; flex-direction: column; gap: 8px; }
+.agents-steps h3 { margin: 8px 0 0; font-size: 13px; }
+.agents-url-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.agents-url-label { color: var(--muted); font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; }
+.agents-url {
+  flex: 1 1 160px;
+  min-width: 0;
+  color: var(--text);
+  font-size: 12px;
+  word-break: break-all;
+}
+.agents-box {
+  margin-top: 18px;
+  width: 100%;
+  text-align: left;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: transparent;
+  color: var(--muted);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  line-height: 1.45;
+  cursor: pointer;
+}
+.agents-box strong { color: var(--text); font-size: 13px; font-weight: 600; }
 .overlay-head {
   display: flex;
   justify-content: space-between;

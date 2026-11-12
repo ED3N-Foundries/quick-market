@@ -73,7 +73,7 @@ test("funding shows public addresses, the gap, and no key material", async () =>
   expect(nearChain?.token).toBe("qm.testnet")
   expect(nearChain?.native.short).toBe(true)
   expect(nearChain?.tokenBalance.short).toBe(true)
-  expect(nearChain?.shortAgents.map((row) => row.account)).toEqual([nearAccount])
+  expect(nearChain?.shortAgents).toEqual([])
   expect(nearChain?.explorer).toBe("https://testnet.nearblocks.io/address/treasury.testnet")
 
   const body = JSON.stringify(report)

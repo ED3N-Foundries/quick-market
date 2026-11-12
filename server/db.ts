@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite"
-import { existsSync, mkdirSync } from "node:fs"
-import { dirname, join, resolve } from "node:path"
+import { mkdirSync } from "node:fs"
+import { dirname } from "node:path"
 import type { ChainKey } from "../shared/chain"
 import { isNearAccountId } from "../shared/near"
 import { loadEnv } from "./env"
@@ -11,7 +11,6 @@ const CHAIN_TABLES: Record<string, string> = {
     address TEXT NOT NULL,
     balance_micros INTEGER NOT NULL,
     created_at INTEGER NOT NULL,
-    is_bot INTEGER NOT NULL DEFAULT 0,
     grant_at INTEGER,
     grant_pending_at INTEGER,
     grant_tx TEXT,
@@ -93,51 +92,6 @@ const CHAIN_TABLES: Record<string, string> = {
     raw_tx TEXT,
     status TEXT NOT NULL,
     created_at INTEGER NOT NULL
-  )`,
-  wallets: `CREATE TABLE IF NOT EXISTS wallets (
-    chain_key TEXT NOT NULL,
-    address TEXT NOT NULL,
-    idx INTEGER NOT NULL,
-    online INTEGER NOT NULL,
-    phase TEXT,
-    bankroll INTEGER NOT NULL,
-    last_side TEXT,
-    last_stake INTEGER,
-    last_skip TEXT,
-    wins INTEGER NOT NULL,
-    losses INTEGER NOT NULL,
-    mind TEXT,
-    tempo INTEGER,
-    visit_end INTEGER,
-    enrolled INTEGER NOT NULL,
-    rng_a INTEGER,
-    gate_json TEXT,
-    cursor INTEGER,
-    visit_start INTEGER,
-    gap_end INTEGER,
-    handled INTEGER NOT NULL DEFAULT 0,
-    woke_at INTEGER,
-    slept_at INTEGER,
-    updated_at INTEGER,
-    PRIMARY KEY (chain_key, address)
-  )`,
-  windows: `CREATE TABLE IF NOT EXISTS windows (
-    chain_key TEXT NOT NULL,
-    id INTEGER NOT NULL,
-    buy_ins INTEGER,
-    skips INTEGER,
-    up_micros INTEGER,
-    down_micros INTEGER,
-    at INTEGER,
-    PRIMARY KEY (chain_key, id)
-  )`,
-  stakes: `CREATE TABLE IF NOT EXISTS stakes (
-    chain_key TEXT NOT NULL,
-    round_id INTEGER NOT NULL,
-    address TEXT NOT NULL,
-    side TEXT NOT NULL,
-    stake_micros INTEGER NOT NULL,
-    PRIMARY KEY (chain_key, round_id, address)
   )`,
 }
 
@@ -370,6 +324,7 @@ function openDatabase(path: string): Database {
   migrateBuyIns(db)
   db.exec(SCHEMA)
   migrateChainSchema(db)
+  dropSwarm(db)
   ensureBuyInIndexes(db)
   migrateRoundSource(db)
   ensureRoundIndexes(db)
@@ -421,12 +376,13 @@ function migrateChainSchema(db: Database) {
   const migrate = db.transaction(() => {
     for (const [table, definition] of Object.entries(CHAIN_TABLES)) {
       const columns = tableColumns(db, table)
-      if (columns.includes("chain_key")) continue
+      if (columns.length === 0 || columns.includes("chain_key")) continue
+      const copy = columns.filter((column) => column !== "is_bot")
       const legacy = `${table}_before_chain`
       dropTableIndexes(db, table)
       db.exec(`ALTER TABLE ${table} RENAME TO ${legacy}`)
       db.exec(definition)
-      const names = columns.join(", ")
+      const names = copy.join(", ")
       db.query(`INSERT INTO ${table} (chain_key, ${names}) SELECT ?, ${names} FROM ${legacy}`).run(chain)
       db.exec(`DROP TABLE ${legacy}`)
     }
@@ -529,6 +485,19 @@ function migrateRoundSource(db: Database) {
   fill()
 }
 
+/** Swarm tables lived here before the runner kept its own file. Balances stay on users. */
+function dropSwarm(db: Database) {
+  db.exec("DROP TABLE IF EXISTS wallets")
+  db.exec("DROP TABLE IF EXISTS windows")
+  db.exec("DROP TABLE IF EXISTS stakes")
+  if (tableNames(db).has("meta")) {
+    db.exec("DELETE FROM meta WHERE key = 'agent_swarm_v1' OR key LIKE '%:agent:%'")
+  }
+  if (tableNames(db).has("users") && tableColumns(db, "users").includes("is_bot")) {
+    db.exec("ALTER TABLE users DROP COLUMN is_bot")
+  }
+}
+
 /** Demo balances were minted. Drop them once so they cannot be withdrawn as USDC. */
 export function migrateCustody(db: Database) {
   const row = db.query("SELECT value FROM meta WHERE key = ?").get("custody_v1") as { value: string } | null
@@ -541,48 +510,6 @@ export function migrateCustody(db: Database) {
     db.query("INSERT INTO meta (key, value) VALUES ('custody_v1', '1')").run()
   })
   tx()
-}
-
-export function importLegacySwarm(
-  db: Database,
-  mainPath: string,
-  legacyPath = join(process.cwd(), "agent", "swarm.sqlite"),
-) {
-  const done = db.query("SELECT value FROM meta WHERE key = 'agent_swarm_v1'").get()
-  if (done) return
-  if (!existsSync(legacyPath) || resolve(legacyPath) === resolve(mainPath)) {
-    db.query("INSERT OR IGNORE INTO meta (key, value) VALUES ('agent_swarm_v1', '1')").run()
-    return
-  }
-  const escaped = legacyPath.replace(/'/g, "''")
-  db.exec(`ATTACH DATABASE '${escaped}' AS legacy_swarm`)
-  try {
-    const names = tableNames(db, "legacy_swarm")
-    const rows = names.has("wallets")
-      ? (db.query("SELECT address FROM legacy_swarm.wallets").all() as { address: string }[])
-      : []
-    const chain: ChainKey = rows.some((row) => !row.address.startsWith("0x") && isNearAccountId(row.address)) ? "near-testnet" : "base-sepolia"
-    const copy = db.transaction(() => {
-      for (const table of ["wallets", "windows", "stakes"]) {
-        if (!names.has(table)) continue
-        const columns = tableColumns(db, table, "legacy_swarm").filter((column) => column !== "chain_key")
-        const namesSql = columns.join(", ")
-        db.query(
-          `INSERT OR IGNORE INTO ${table} (chain_key, ${namesSql})
-           SELECT ?, ${namesSql} FROM legacy_swarm.${table}`,
-        ).run(chain)
-      }
-      if (names.has("meta")) {
-        const metaRows = db.query("SELECT key, value FROM legacy_swarm.meta").all() as { key: string; value: string }[]
-        const write = db.query("INSERT OR IGNORE INTO meta (key, value) VALUES (?, ?)")
-        for (const row of metaRows) write.run(`${chain}:agent:${row.key}`, row.value)
-      }
-      db.query("INSERT OR IGNORE INTO meta (key, value) VALUES ('agent_swarm_v1', '1')").run()
-    })
-    copy()
-  } finally {
-    db.exec("DETACH DATABASE legacy_swarm")
-  }
 }
 
 export function getDb(): Database {

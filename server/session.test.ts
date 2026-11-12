@@ -7,14 +7,13 @@ import { loginMessage, nearLoginMessage, SESSION_MS } from "../shared/login"
 import { marketPreferences } from "../shared/market"
 import { NEP413_RECIPIENT, bs58, generateNearSecret, nep413Bytes, seedFromSecret } from "../shared/nearKey"
 import * as ed from "@noble/ed25519"
-import { getDb, useDatabase } from "./db"
+import { useDatabase } from "./db"
 import { NEAR_BUSY, openSession, readSessionToken } from "./session"
 import { NEAR_FALLBACK_RPC, NEAR_PUBLIC_RPC, nearRpcUrlFor } from "./near"
 
 beforeEach(() => {
   marketPreferences.chain = "base-sepolia"
   process.env.CHAIN = "base-sepolia"
-  process.env.AGENT_SECRET = "test-secret"
   useDatabase(":memory:")
 })
 
@@ -48,33 +47,6 @@ test("an old signature is rejected", async () => {
   const opened = await openSession({ address: account.address, signature, issued, now: Date.now() })
   expect(opened.ok).toBe(false)
 })
-
-test("the agent secret marks a bot and a wrong secret does not", async () => {
-  const chain = chainFromEnv("base-sepolia")
-  const bot = await sign(chain.id)
-  const human = await sign(chain.id)
-  const marked = await openSession({
-    address: bot.account.address,
-    signature: bot.signature,
-    issued: bot.issued,
-    now: bot.issued,
-    botSecret: "test-secret",
-  })
-  expect(marked.ok).toBe(true)
-  const plain = await openSession({
-    address: human.account.address,
-    signature: human.signature,
-    issued: human.issued,
-    now: human.issued,
-    botSecret: "nope",
-  })
-  expect(plain.ok).toBe(true)
-  const botRow = getDb().query("SELECT is_bot FROM users WHERE address = ?").get(bot.account.address.toLowerCase()) as { is_bot: number }
-  const humanRow = getDb().query("SELECT is_bot FROM users WHERE address = ?").get(human.account.address.toLowerCase()) as { is_bot: number }
-  expect(botRow.is_bot).toBe(1)
-  expect(humanRow.is_bot).toBe(0)
-})
-
 
 test("a missing hello token is anonymous and a bad token is rejected", async () => {
   const chain = chainFromEnv("base-sepolia")
@@ -213,17 +185,6 @@ test("a NEAR sign-in names the check that failed", async () => {
   expect(short).toEqual({
     ok: false,
     error: "Signature is invalid\nThe signature is not 64 bytes.",
-  })
-  const agent = await openSession({
-    address: made.account,
-    signature: "00",
-    issued,
-    now: issued,
-    botSecret: "test-secret",
-  })
-  expect(agent).toEqual({
-    ok: false,
-    error: "Signature is invalid\nThe agent signature does not match the enroll message.",
   })
   marketPreferences.chain = "base-sepolia"
 })

@@ -78,25 +78,21 @@ export async function settleGrantRequest<T>(input: {
 
 type GrantRow = {
   grant_at: number | null
-  is_bot: number
   grant_pending_at: number | null
 }
 
-/** One transaction. Eligible rows are not bots, are due, and have no pending grant. */
+/** One transaction. Eligible rows are due and have no pending grant. */
 function claimSlot(address: string, now: number, intervalMs: number, chainKey: ChainKey): boolean {
   const tx = getDb().transaction(() => {
     const row = getDb()
-      .query("SELECT grant_at, is_bot, grant_pending_at FROM users WHERE chain_key = ? AND address = ?")
+      .query("SELECT grant_at, grant_pending_at FROM users WHERE chain_key = ? AND address = ?")
       .get(chainKey, address) as GrantRow | null
     if (!row) {
       getDb()
-        .query(
-          "INSERT INTO users (chain_key, address, balance_micros, created_at, is_bot, grant_pending_at) VALUES (?, ?, 0, ?, 0, ?)",
-        )
+        .query("INSERT INTO users (chain_key, address, balance_micros, created_at, grant_pending_at) VALUES (?, ?, 0, ?, ?)")
         .run(chainKey, address, now, now)
       return true
     }
-    if (row.is_bot === 1) return false
     if (row.grant_pending_at != null) return false
     if (!grantDue(row.grant_at, now, intervalMs)) return false
     const result = getDb()

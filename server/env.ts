@@ -11,28 +11,24 @@ import { activeChainKey } from "./activeChain"
 export type Env = {
   treasuryPrivateKey: string
   nearTreasuryPrivateKey: string
-  agentSecret: string
   rpcUrl: string
   usdcAddress: string
   tokenAccount: string
   dbPath: string
   port: number
   apiUrl: string
-  swarmPin: number | null
   nodeEnv: string | undefined
 }
 
 type EnvSource = {
   TREASURY_PRIVATE_KEY?: string
   NEAR_TREASURY_PRIVATE_KEY?: string
-  AGENT_SECRET?: string
   RPC_URL?: string
   USDC_ADDRESS?: string
   TOKEN_ACCOUNT?: string
   DB_PATH?: string
   PORT?: string
   API_URL?: string
-  SWARM_PIN?: string
   NODE_ENV?: string
 }
 
@@ -92,7 +88,6 @@ const address = z.preprocess((value) => {
 const envSchema = z.object({
   treasuryPrivateKey: treasuryKey,
   nearTreasuryPrivateKey: nearTreasuryKey,
-  agentSecret: z.preprocess((value) => (typeof value === "string" ? value : ""), z.string()),
   rpcUrl: z.preprocess((value) => {
     const raw = unset(value)
     return raw === undefined ? "" : raw
@@ -111,7 +106,6 @@ const envSchema = z.object({
     const raw = unset(value)
     return raw === undefined ? "http://127.0.0.1:3001" : raw
   }, z.string().min(1)),
-  swarmPin: z.preprocess(unset, z.coerce.number().optional()).transform((value) => value ?? null),
   nodeEnv: z.preprocess((value) => {
     const raw = unset(value)
     return typeof raw === "string" ? raw : undefined
@@ -125,14 +119,12 @@ export function loadEnv(env: EnvSource = process.env): Env {
   return envSchema.parse({
     treasuryPrivateKey: env.TREASURY_PRIVATE_KEY,
     nearTreasuryPrivateKey: env.NEAR_TREASURY_PRIVATE_KEY,
-    agentSecret: env.AGENT_SECRET,
     rpcUrl: env.RPC_URL,
     usdcAddress: env.USDC_ADDRESS,
     tokenAccount: env.TOKEN_ACCOUNT,
     dbPath: env.DB_PATH,
     port: env.PORT,
     apiUrl: env.API_URL,
-    swarmPin: env.SWARM_PIN,
     nodeEnv: env.NODE_ENV,
   })
 }

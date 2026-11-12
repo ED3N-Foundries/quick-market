@@ -162,6 +162,18 @@ export type Copy = {
   mintingGrantNear: string
   approveNear: string
   waitingNear: string
+  agentsLabel: string
+  agentsLine: string
+  agentsUrl: string
+  agentsCopy: string
+  agentsCopied: string
+  agentsGrokTitle: string
+  agentsGrok: string
+  agentsClaudeTitle: string
+  agentsClaude: string
+  agentsOtherTitle: string
+  agentsOther: string
+  agentsTools: string
   nearReport: ReportPhrases
   confirmationsIn: string
   waitingOne: string
@@ -337,15 +349,25 @@ const en: Copy = {
   mintingGrantNear: "Minting the grant on NEAR Testnet. This can take a bit.",
   approveNear: "Approve the sign-in in Meteor",
   waitingNear: "Waiting for Meteor",
+  agentsLabel: "Agents",
+  agentsLine: "A Grok, Claude, or other MCP client can trade here.",
+  agentsUrl: "Connector",
+  agentsCopy: "Copy",
+  agentsCopied: "Copied",
+  agentsGrokTitle: "Grok",
+  agentsGrok:
+    "New Connector, then Custom, and paste this URL. Grok’s servers must reach a public HTTPS URL, which these hostnames already are. Leave extra auth empty.",
+  agentsClaudeTitle: "Claude",
+  agentsClaude:
+    "Customize, Connectors, Add custom connector. Name it Quick Market, paste this URL, and leave OAuth blank. Then turn the connector on in the chat. Claude also connects from its own cloud, so the URL is the public one.",
+  agentsOtherTitle: "Other clients",
+  agentsOther: "Any other client that takes a remote MCP URL uses this same address.",
+  agentsTools: "These tools read the book, sign in by signing the login message in the wallet, place a buy-in, claim the testnet grant, and withdraw.",
   nearReport: {
     treasury: (account) => `near-testnet treasury ${account}`,
     near: (have, need) => `NEAR ${have} (need ${need})`,
     qm: (have, need) => `QM ${have} (need ${need})`,
     treasuryReady: "treasury ready",
-    agentsReady: "agents ready",
-    agentsCount: (ready, total) => `agents ${ready}/${total}`,
-    agentNear: (account, have, need) => `${account} NEAR ${have} (need ${need})`,
-    agentMissing: (account) => `${account} missing`,
   },
   confirmationsIn: "Confirmations in. Crediting the balance.",
   waitingOne: "Waiting on 1 confirmation",
@@ -521,15 +543,24 @@ const zhTW: Copy = {
   mintingGrantNear: "正在 NEAR 測試網鑄造撥款。可能需要一點時間。",
   approveNear: "請在 Meteor 核准登入",
   waitingNear: "正在等待 Meteor",
+  agentsLabel: "代理",
+  agentsLine: "Grok、Claude 或其他 MCP 客戶端可以在這裡交易。",
+  agentsUrl: "連接網址",
+  agentsCopy: "複製",
+  agentsCopied: "已複製",
+  agentsGrokTitle: "Grok",
+  agentsGrok: "選 New Connector，再選 Custom，貼上這個網址。Grok 的伺服器必須能連到公開的 HTTPS 網址，這些網域已經是。額外的驗證留空。",
+  agentsClaudeTitle: "Claude",
+  agentsClaude:
+    "打開 Customize，再打開 Connectors，新增自訂連接器。名稱填 Quick Market，貼上這個網址，OAuth 留空。然後在對話裡打開這個連接器。Claude 也是從它自己的雲端連線，所以用的是公開網址。",
+  agentsOtherTitle: "其他客戶端",
+  agentsOther: "任何接受遠端 MCP 網址的客戶端都用同一個地址。",
+  agentsTools: "這些工具可以讀盤口、在錢包裡簽登入訊息來登入、下一注、領取測試網撥款，以及提領。",
   nearReport: {
     treasury: (account) => `near-testnet 金庫 ${account}`,
     near: (have, need) => `NEAR ${have}（需要 ${need}）`,
     qm: (have, need) => `QM ${have}（需要 ${need}）`,
     treasuryReady: "金庫就緒",
-    agentsReady: "代理就緒",
-    agentsCount: (ready, total) => `代理 ${ready}/${total}`,
-    agentNear: (account, have, need) => `${account} NEAR ${have}（需要 ${need}）`,
-    agentMissing: (account) => `${account} 尚未建立`,
   },
   confirmationsIn: "確認已完成。正在入帳。",
   waitingOne: "還差 1 次確認",

@@ -78,29 +78,31 @@ test("the report names a short treasury and a short agent in token units", () =>
   expect(report.nearNeed).toBe("0.5")
   expect(report.token).toBe("50")
   expect(report.tokenNeed).toBe("100")
-  expect(report.lines[0]).toBe("near-testnet treasury treasury.testnet")
-  expect(report.lines).toContain("NEAR 0.25 (need 0.5)")
-  expect(report.lines).toContain("QM 50 (need 100)")
-  expect(report.lines).toContain("agents 0/1")
-  expect(report.lines).toContain(`${"a".repeat(64)} missing`)
+  expect(report.lines).toEqual([
+    "near-testnet treasury treasury.testnet",
+    "NEAR 0.25 (need 0.5)",
+    "QM 50 (need 100)",
+  ])
+  expect(report.shortAgents).toEqual([])
+  expect(report.lines.join("\n")).not.toContain("a".repeat(64))
   expect(formatYocto(floor)).toBe("0.05")
   expect(formatQm(100_000_000n)).toBe("100")
   const chinese = reportLines(report, copy("zh-TW").nearReport)
   expect(chinese[0]).toContain("金庫")
-  expect(chinese.join("\n")).toContain("尚未建立")
+  expect(chinese.join("\n")).not.toContain("尚未建立")
   expect(reportLines(report, englishReport)[1]).toBe("NEAR 0.25 (need 0.5)")
 })
 
-test("a ready treasury and an empty agent set are ready", () => {
+test("a ready treasury prints no banner", () => {
   const report = describeTreasury({
     account: "t",
     treasury: { exists: true, nearYocto: reserve, tokenMicros: 1n },
     ledgerMicros: 1n,
-    agents: [],
+    agents: [{ account: "a".repeat(64), holding: { exists: false, nearYocto: 0n, tokenMicros: 0n } }],
   })
   expect(report.ok).toBe(true)
-  expect(report.lines).toContain("treasury ready")
-  expect(report.lines).toContain("agents ready")
+  expect(report.lines).toEqual([])
+  expect(report.shortAgents).toEqual([])
 })
 
 test("the legacy ledger guard identifies the incompatible account family", () => {

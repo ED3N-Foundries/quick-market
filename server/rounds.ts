@@ -54,7 +54,6 @@ type BetRow = {
   stake_micros: number
   payout_micros: number | null
   created_at: number
-  is_bot?: number
 }
 
 class BuyInError extends Error {
@@ -422,7 +421,7 @@ export function ensureUser(address: string): You {
   const existing = youFor(address)
   if (existing) return existing
   getDb()
-    .query("INSERT INTO users (chain_key, address, balance_micros, created_at, is_bot) VALUES (?, ?, 0, ?, 0)")
+    .query("INSERT INTO users (chain_key, address, balance_micros, created_at) VALUES (?, ?, 0, ?)")
     .run(activeChainKey(), address, Date.now())
   return { address, balanceMicros: 0, grantAt: null, grantPending: null, openBuyIns: [] }
 }
@@ -503,12 +502,11 @@ export function placeBuyIn(input: {
 
       releaseStaleGrant(input.address, input.now)
       const row = getDb()
-        .query("SELECT balance_micros, grant_at, is_bot, grant_pending_at, grant_tx FROM users WHERE chain_key = ? AND address = ?")
+        .query("SELECT balance_micros, grant_at, grant_pending_at, grant_tx FROM users WHERE chain_key = ? AND address = ?")
         .get(activeChainKey(), input.address) as
         | {
             balance_micros: number
             grant_at: number | null
-            is_bot: number
             grant_pending_at: number | null
             grant_tx: string | null
           }
@@ -516,10 +514,9 @@ export function placeBuyIn(input: {
       let balance = row?.balance_micros ?? 0
       const grantAt = row?.grant_at ?? null
       const grantPending = grantPendingFrom(row?.grant_pending_at ?? null, row?.grant_tx ?? null)
-      const bot = row?.is_bot === 1
       if (!row) {
         getDb()
-          .query("INSERT INTO users (chain_key, address, balance_micros, created_at, is_bot) VALUES (?, ?, 0, ?, 0)")
+          .query("INSERT INTO users (chain_key, address, balance_micros, created_at) VALUES (?, ?, 0, ?)")
           .run(activeChainKey(), input.address, input.now)
         balance = 0
       }
@@ -528,8 +525,6 @@ export function placeBuyIn(input: {
       const onThis = opens.find((bet) => bet.roundId === id)
       for (const bet of opens) {
         if (bet.roundId === id) continue
-        // Bots keep filling every window while earlier markets are still resolving.
-        if (bot) continue
         throw new BuyInError("Your last buy-in is still open")
       }
       if (onThis && onThis.side !== input.side) throw new BuyInError("You are already on the other side")
@@ -591,11 +586,7 @@ function namedRound(roundId: number, now: number): number {
 
 function loadBets(roundId: number): BetRow[] {
   return getDb()
-    .query(
-      `SELECT b.*, COALESCE(u.is_bot, 0) AS is_bot
-       FROM buy_ins b LEFT JOIN users u ON u.chain_key = b.chain_key AND u.address = b.address
-       WHERE b.chain_key = ? AND b.round_id = ? ORDER BY b.created_at ASC`,
-    )
+    .query("SELECT * FROM buy_ins WHERE chain_key = ? AND round_id = ? ORDER BY created_at ASC")
     .all(activeChainKey(), roundId) as BetRow[]
 }
 
@@ -661,16 +652,12 @@ function closeRound(round: RoundRow, forceVoid = false): SettledEvent {
   })
   tx()
 
-  const bots = new Set(bets.filter((bet) => bet.is_bot === 1).map((bet) => bet.address))
-  const payouts = outcome.payouts
-    .filter((payout) => !bots.has(payout.address))
-    .map((payout) => ({
-      address: payout.address,
-      side: payout.side,
-      stakeMicros: payout.stakeMicros,
-      payoutMicros: payout.payoutMicros,
-    }))
-  const addresses = [...new Set(payouts.map((payout) => payout.address))]
+  const payouts = outcome.payouts.map((payout) => ({
+    address: payout.address,
+    side: payout.side,
+    stakeMicros: payout.stakeMicros,
+    payoutMicros: payout.payoutMicros,
+  }))
   return {
     roundId: round.id,
     status: outcome.resolution === "void" ? "void" : "settled",
@@ -680,10 +667,7 @@ function closeRound(round: RoundRow, forceVoid = false): SettledEvent {
     settle: outcome.settle,
     feeMicros: outcome.feeMicros,
     payouts,
-    balances: addresses.map((address) => ({
-      address,
-      balanceMicros: youFor(address)?.balanceMicros ?? 0,
-    })),
+    balances: [],
   }
 }
 
@@ -775,24 +759,40 @@ function mapHistory(row: RoundRow & { my_side?: Side; my_stake?: number; my_payo
   return base
 }
 
-export function listRounds(limit: number, address?: string | null, mine = false): HistoryRow[] {
+export function listRounds(limit: number, address?: string | null, mine = false, after?: number | null): HistoryRow[] {
   const capped = Math.min(Math.max(limit, 1), 100)
+  const forward = after != null && Number.isSafeInteger(after)
   if (mine && address) {
-    const rows = getDb()
-      .query(
-        `SELECT r.*, b.side AS my_side, b.stake_micros AS my_stake, b.payout_micros AS my_payout
-         FROM rounds r
-         JOIN buy_ins b ON b.chain_key = r.chain_key AND b.round_id = r.id AND b.address = ?
-         WHERE r.chain_key = ? AND r.status != 'open'
-         ORDER BY r.starts_at DESC, r.id DESC
-         LIMIT ?`,
-      )
-      .all(address, activeChainKey(), capped) as (RoundRow & { my_side: Side; my_stake: number; my_payout: number | null })[]
+    const rows = forward
+      ? (getDb()
+          .query(
+            `SELECT r.*, b.side AS my_side, b.stake_micros AS my_stake, b.payout_micros AS my_payout
+             FROM rounds r
+             JOIN buy_ins b ON b.chain_key = r.chain_key AND b.round_id = r.id AND b.address = ?
+             WHERE r.chain_key = ? AND r.status != 'open' AND r.id > ?
+             ORDER BY r.id ASC
+             LIMIT ?`,
+          )
+          .all(address, activeChainKey(), after, capped) as (RoundRow & { my_side: Side; my_stake: number; my_payout: number | null })[])
+      : (getDb()
+          .query(
+            `SELECT r.*, b.side AS my_side, b.stake_micros AS my_stake, b.payout_micros AS my_payout
+             FROM rounds r
+             JOIN buy_ins b ON b.chain_key = r.chain_key AND b.round_id = r.id AND b.address = ?
+             WHERE r.chain_key = ? AND r.status != 'open'
+             ORDER BY r.starts_at DESC, r.id DESC
+             LIMIT ?`,
+          )
+          .all(address, activeChainKey(), capped) as (RoundRow & { my_side: Side; my_stake: number; my_payout: number | null })[])
     return rows.map(mapHistory)
   }
-  const rows = getDb()
-    .query("SELECT * FROM rounds WHERE chain_key = ? AND status != 'open' ORDER BY starts_at DESC, id DESC LIMIT ?")
-    .all(activeChainKey(), capped) as RoundRow[]
+  const rows = forward
+    ? (getDb()
+        .query("SELECT * FROM rounds WHERE chain_key = ? AND status != 'open' AND id > ? ORDER BY id ASC LIMIT ?")
+        .all(activeChainKey(), after, capped) as RoundRow[])
+    : (getDb()
+        .query("SELECT * FROM rounds WHERE chain_key = ? AND status != 'open' ORDER BY starts_at DESC, id DESC LIMIT ?")
+        .all(activeChainKey(), capped) as RoundRow[])
   return rows.map(mapHistory)
 }
 
@@ -866,7 +866,7 @@ export function roundDetail(id: number) {
 
 export type BuyInOrder = { address: string; side: Side; stakeMicros: number }
 
-export type BuyInRowResult = { address: string; ok: true } | { address: string; ok: false; error: string }
+export type BuyInRowResult = { address: string; ok: true; balanceMicros: number } | { address: string; ok: false; error: string }
 
 export function placeBuyIns(input: {
   orders: BuyInOrder[]
@@ -897,14 +897,14 @@ export function placeBuyIns(input: {
   })
   const lookup = [...new Set(prepared.flatMap((order) => (order.address ? [order.address] : [])))]
   const run = getDb().transaction(() => {
-    const users = new Map<string, { balance: number; bot: boolean }>()
+    const users = new Map<string, { balance: number }>()
     const taken = new Set<string>()
     if (lookup.length > 0) {
       const marks = lookup.map(() => "?").join(",")
       const userRows = getDb()
-        .query(`SELECT address, balance_micros, is_bot FROM users WHERE chain_key = ? AND address IN (${marks})`)
-        .all(activeChainKey(), ...lookup) as { address: string; balance_micros: number; is_bot: number }[]
-      for (const row of userRows) users.set(row.address, { balance: row.balance_micros, bot: row.is_bot === 1 })
+        .query(`SELECT address, balance_micros FROM users WHERE chain_key = ? AND address IN (${marks})`)
+        .all(activeChainKey(), ...lookup) as { address: string; balance_micros: number }[]
+      for (const row of userRows) users.set(row.address, { balance: row.balance_micros })
       const betRows = getDb()
         .query(`SELECT address FROM buy_ins WHERE chain_key = ? AND round_id = ? AND address IN (${marks})`)
         .all(activeChainKey(), id, ...lookup) as { address: string }[]
@@ -919,8 +919,8 @@ export function placeBuyIns(input: {
         continue
       }
       const user = users.get(order.address)
-      if (!user?.bot) {
-        results.push({ address: order.address, ok: false, error: "Not a bot" })
+      if (!user) {
+        results.push({ address: order.address, ok: false, error: "Unknown wallet" })
         continue
       }
       if (order.side !== "up" && order.side !== "down") {
@@ -941,15 +941,16 @@ export function placeBuyIns(input: {
         continue
       }
       taken.add(order.address)
-      spent.set(order.address, (spent.get(order.address) ?? 0) + order.stakeMicros)
+      const spentAfter = (spent.get(order.address) ?? 0) + order.stakeMicros
+      spent.set(order.address, spentAfter)
       accepted.push({ address: order.address, side: order.side, stakeMicros: order.stakeMicros })
-      results.push({ address: order.address, ok: true })
+      results.push({ address: order.address, ok: true, balanceMicros: user.balance - spentAfter })
     }
     const insert = getDb().query(
       `INSERT OR IGNORE INTO buy_ins (chain_key, id, round_id, address, side, stake_micros, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
     )
     const debit = getDb().query(
-      `UPDATE users SET balance_micros = balance_micros - ? WHERE chain_key = ? AND address = ? AND is_bot = 1 AND balance_micros >= ?`,
+      `UPDATE users SET balance_micros = balance_micros - ? WHERE chain_key = ? AND address = ? AND balance_micros >= ?`,
     )
     const undo = getDb().query(`DELETE FROM buy_ins WHERE chain_key = ? AND round_id = ? AND address = ?`)
     const missed = new Set<string>()

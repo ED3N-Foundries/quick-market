@@ -466,7 +466,6 @@ Bun.serve<{ address: string | null; chain: ChainKey }>({
         raw: url.searchParams.get("chain"),
         sessionChain: null,
         live: liveKeys(),
-        agent: false,
       })
       if (!picked.ok) return json({ error: picked.error }, picked.status)
       if (server.upgrade(req, { data: { address: null, chain: picked.chain } })) return undefined as unknown as Response

@@ -329,37 +329,6 @@ type BurnRow = {
   status: string
 }
 
-export function holdBurn(address: string, amountMicros: number): { ok: true; id: string } | { ok: false; error: string } {
-  const who = normalizeAddress(address)
-  if (!who) return { ok: false, error: "Address is invalid" }
-  if (!Number.isSafeInteger(amountMicros) || amountMicros <= 0) return { ok: false, error: "Amount is invalid" }
-  const id = crypto.randomUUID()
-  try {
-    const tx = getDb().transaction(() => {
-      const row = getDb().query("SELECT balance_micros, is_bot FROM users WHERE chain_key = ? AND address = ?").get(activeChainKey(), who) as
-        | { balance_micros: number; is_bot: number }
-        | null
-      if (!row || row.is_bot !== 1) throw new Error("Not a bot")
-      if (amountMicros > row.balance_micros) throw new Error("Insufficient balance")
-      getDb()
-        .query("UPDATE users SET balance_micros = balance_micros - ? WHERE chain_key = ? AND address = ?")
-        .run(amountMicros, activeChainKey(), who)
-      getDb()
-        .query(
-          `INSERT INTO burns (chain_key, id, address, amount_micros, tx_hash, raw_tx, status, created_at)
-           VALUES (?, ?, ?, ?, NULL, NULL, 'pending', ?)`,
-        )
-        .run(activeChainKey(), id, who, amountMicros, Date.now())
-    })
-    tx()
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Burn failed"
-    if (message === "Not a bot" || message === "Insufficient balance") return { ok: false, error: message }
-    throw error
-  }
-  return { ok: true, id }
-}
-
 export function refundBurn(id: string) {
   const tx = getDb().transaction(() => {
     const row = burnRow(id)
@@ -400,17 +369,6 @@ export async function submitBurn(id: string): Promise<{ ok: true; txHash: string
     }
   }
   return finishBurn(id)
-}
-
-export function requestBurn(
-  address: string,
-  amountMicros: number,
-): Promise<{ ok: true; txHash: string } | { ok: false; error: string }> {
-  return enqueue(async () => {
-    const held = holdBurn(address, amountMicros)
-    if (!held.ok) return held
-    return submitBurn(held.id)
-  })
 }
 
 export async function resumeBurns() {

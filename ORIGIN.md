@@ -12,7 +12,7 @@ The original product brief, the progress checklist that went with it, and the 20
 
 ## Migration
 
-On 2026-11-10 the chain-scoped schema (`chain_key` on users, rounds, buy-ins, custody, sessions, and agent state) cut over on `project-ed3n.local`, and trading history was reset: rounds, buy-ins, and ticks were wiped while users, balances ($380,536.55 across 5,368 wallets), deposits, withdrawals, burns, sessions, and meta were kept. The treasury and `deploy/quick-market.env` were untouched (0.0285 Base Sepolia ETH, ~$753k QM USDC on-chain, so no faucet top-up was needed). Rollback image `ed3n/quick-market:pre-multichain-20261110` is on the host.
+On 2026-11-10 the chain-scoped schema (`chain_key` on users, rounds, buy-ins, custody, and sessions) cut over on `project-ed3n.local`, and trading history was reset: rounds, buy-ins, and ticks were wiped while users, balances ($380,536.55 across 5,368 wallets), deposits, withdrawals, burns, sessions, and meta were kept. The treasury and `deploy/quick-market.env` were untouched (0.0285 Base Sepolia ETH, ~$753k QM USDC on-chain, so no faucet top-up was needed). Rollback image `ed3n/quick-market:pre-multichain-20261110` is on the host.
 
 Backups on `project-ed3n.local`:
 

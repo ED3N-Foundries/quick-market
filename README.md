@@ -20,15 +20,15 @@ On NEAR, `TOKEN_ACCOUNT` is the quick-market NEP-141 contract (`QM`, 6 decimals)
 
 Both books share the BTC tape. Balances, rounds, sessions, grants, deposits, and withdrawals stay on their own `chain_key`. `RPC_URL` is used for a market only when the URL matches that family. Base Sepolia keeps Phantom, quick-market USDC grants, deposits, and withdrawals. Base mainnet uses Circle USDC and does not grant test funds.
 
-`AGENT_SPLIT_BASE` and `AGENT_SPLIT_NEAR` are whole numbers that sum to 100. They are `100` and `0` today, so the swarm (private repo `ED3N-Foundries/quick-market-agent`) keeps betting on Base Sepolia. A NEAR share other than 0 stops the runner before enroll, and the server rejects `/api/agents` on NEAR while that share is 0. Filling NEAR keys does not point the swarm at NEAR. Base mainnet still refuses the swarm. `AGENT_SECRET` authorizes the agent API. The dashboard line includes `split base 100 / near 0`. `bun run feeds` shows the live source and backup venues. Closing the dashboard leaves the server up.
+`/mcp` is a streamable-HTTP MCP endpoint on this process. A client signs in by signing the login message in its wallet. The tools read the book, place a buy-in, claim the testnet grant, and withdraw. `bun run feeds` shows the live source and backup venues. Closing the dashboard leaves the server up.
 
 ## Architecture
 
-Bun serves HTTP and a websocket. One SQLite database holds chain-scoped users, rounds, buy-ins, custody, sessions, and agent state, plus a shared BTC price tape. Legacy runner state is imported once; the runner keeps its own SQLite file and no longer shares this one. React draws the screen. The server wakes for the next price fanout, every 100ms, or for the next window boundary, strike, settle, or handoff resume. Between those moments it does not poll SQLite.
+Bun serves HTTP and a websocket. One SQLite database holds chain-scoped users, rounds, buy-ins, custody, and sessions, plus a shared BTC price tape. React draws the screen. The server wakes for the next price fanout, every 100ms, or for the next window boundary, strike, settle, or handoff resume. Between those moments it does not poll SQLite.
 
 Buy-in windows tile UTC time. Each lasts `WINDOW_SECONDS`, and the next opens when the previous closes. Market `id` is `floor(now / window)`. Its book opens at `id * window`, the strike locks when that window closes, and it settles `MARKET_SECONDS` later. A buy-in names that window. If the server receives it outside the window, the buy-in is rejected and is not placed on the window that is open on arrival.
 
-A human may hold one open buy-in. Another window returns "Your last buy-in is still open". Adding to the same side of the current buy-in is allowed. The other side is not. Agent wallets are exempt. A buy-in needs a live feed: a print within the last 5 seconds. The minimum stake is 1 USDC.
+One buy-in on the page holds one open position. Another window returns "Your last buy-in is still open". Adding to the same side of the current buy-in is allowed. The other side is not. A buy-in needs a live feed: a print within the last 5 seconds. The minimum stake is 1 USDC.
 
 Balances, stakes, fees, and payouts are integer micros. One USDC is one million micros. Strike and settle prices stay exchange strings. The fee is `FEE_BPS` of a paid two-sided pot. Each winner is paid their share of the pot after that fee. A one-sided pool returns every stake and takes no fee. A settle equal to the strike is a push and does the same. A market with no usable print for the strike or the settle is void and stakes return.
 
@@ -42,7 +42,7 @@ A browser buy-in is an authenticated websocket command with a UUID. The accepted
 
 ## UX
 
-The screen is the chart, then Up, the stake, and Down. On a narrow window those three stack. The pool list under them is collapsed until opened. Bots are marked Bot. Previous rounds sit below that, with All and My plays. The footer states the window lengths, what up, down, push, and void mean, the fee, the feed name, and withdraw.
+The screen is the chart, then Up, the stake, and Down. On a narrow window those three stack. The pool list under them is collapsed until opened. Previous rounds sit below that, with All and My plays. The footer states the window lengths, what up, down, push, and void mean, the fee, the feed name, and withdraw. Under that, Agents opens the MCP connector steps.
 
 With no open buy-in the clock reads Buy-in and counts down to the window close. A 10 second buy-in reads 9.9 down to 0.0 and continues into the next window, and after a reconnect the clock follows the open window. The chart is that fixed window. The price sits left of the clock, and the lock on it spins until the strike. The pair badge sits above the price, with the feed's brand mark beside it. Up and Down show that side's share of the pool, the money and order count, and, with an amount entered, that stake's percent of the side and what it gets back. With no amount the line stays "$1 gets $y", or "$1 back" when the other side is empty.
 

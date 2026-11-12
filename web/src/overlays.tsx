@@ -1,4 +1,4 @@
-import { useEffect } from "react"
+import { useEffect, useState } from "react"
 import {
   chainBadgeText,
   chainNetworkLabel,
@@ -327,6 +327,68 @@ export function WithdrawOverlay({
           </p>
         )}
         {error && <p className="note bad">{localize(lang, error)}</p>}
+      </div>
+    </div>
+  )
+}
+
+export function AgentsOverlay({ onClose }: { onClose: () => void }) {
+  const { text } = useI18n()
+  const [copied, setCopied] = useState(false)
+  const url = `${window.location.origin}/mcp`
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose()
+    }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [onClose])
+  return (
+    <div className="fund-back" onClick={onClose}>
+      <div
+        className="fund-overlay agents-overlay"
+        role="dialog"
+        aria-modal="true"
+        aria-label={text.agentsLabel}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <header className="overlay-head">
+          <h2>{text.agentsLabel}</h2>
+          <button type="button" className="overlay-close" aria-label={text.close} onClick={onClose}>
+            {"×"}
+          </button>
+        </header>
+        <p>{text.agentsLine}</p>
+        <div className="agents-url-row">
+          <span className="agents-url-label">{text.agentsUrl}</span>
+          <code className="agents-url">{url}</code>
+          <button
+            type="button"
+            onClick={() => {
+              void navigator.clipboard.writeText(url).then(
+                () => setCopied(true),
+                () => setCopied(false),
+              )
+            }}
+          >
+            {copied ? text.agentsCopied : text.agentsCopy}
+          </button>
+        </div>
+        <div className="agents-steps">
+          <h3>{text.agentsGrokTitle}</h3>
+          <p>
+            <a href="https://grok.com/connectors" target="_blank" rel="noreferrer">
+              grok.com/connectors
+            </a>
+            {". "}
+            {text.agentsGrok}
+          </p>
+          <h3>{text.agentsClaudeTitle}</h3>
+          <p>{text.agentsClaude}</p>
+          <h3>{text.agentsOtherTitle}</h3>
+          <p>{text.agentsOther}</p>
+        </div>
+        <p>{text.agentsTools}</p>
       </div>
     </div>
   )

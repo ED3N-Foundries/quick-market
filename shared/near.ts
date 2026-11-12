@@ -58,10 +58,6 @@ export type ReportPhrases = {
   near: (have: string, need: string) => string
   qm: (have: string, need: string) => string
   treasuryReady: string
-  agentsReady: string
-  agentsCount: (ready: number, total: number) => string
-  agentNear: (account: string, have: string, need: string) => string
-  agentMissing: (account: string) => string
 }
 
 export const englishReport: ReportPhrases = {
@@ -69,10 +65,6 @@ export const englishReport: ReportPhrases = {
   near: (have, need) => `NEAR ${have} (need ${need})`,
   qm: (have, need) => `QM ${have} (need ${need})`,
   treasuryReady: "treasury ready",
-  agentsReady: "agents ready",
-  agentsCount: (ready, total) => `agents ${ready}/${total}`,
-  agentNear: (account, have, need) => `${account} NEAR ${have} (need ${need})`,
-  agentMissing: (account) => `${account} missing`,
 }
 
 export function isNearAccountId(value: string): boolean {
@@ -132,17 +124,9 @@ export function planSeed(input: {
   return { mintMicros, transfers }
 }
 
-export function reportLines(report: Pick<TreasuryReport, "account" | "near" | "nearNeed" | "token" | "tokenNeed" | "treasuryReady" | "agentsReady" | "agentsTotal" | "shortAgents">, phrases: ReportPhrases): string[] {
-  const lines = [phrases.treasury(report.account), phrases.near(report.near, report.nearNeed), phrases.qm(report.token, report.tokenNeed)]
-  if (report.treasuryReady) lines.push(phrases.treasuryReady)
-  if (report.shortAgents.length === 0) lines.push(phrases.agentsReady)
-  else {
-    lines.push(phrases.agentsCount(report.agentsReady, report.agentsTotal))
-    for (const agent of report.shortAgents) {
-      lines.push(agent.missing ? phrases.agentMissing(agent.account) : phrases.agentNear(agent.account, agent.near, agent.need))
-    }
-  }
-  return lines
+export function reportLines(report: Pick<TreasuryReport, "account" | "near" | "nearNeed" | "token" | "tokenNeed" | "treasuryReady">, phrases: ReportPhrases): string[] {
+  if (report.treasuryReady) return []
+  return [phrases.treasury(report.account), phrases.near(report.near, report.nearNeed), phrases.qm(report.token, report.tokenNeed)]
 }
 
 export function describeTreasury(input: {
@@ -153,37 +137,19 @@ export function describeTreasury(input: {
   agentFloorYocto?: bigint
   treasuryReserveYocto?: bigint
 }): TreasuryReport {
-  const floor = input.agentFloorYocto ?? AGENT_FLOOR_YOCTO
   const reserve = input.treasuryReserveYocto ?? TREASURY_RESERVE_YOCTO
-  const floorLabel = formatYocto(floor)
-  const shortAgents: ShortAgent[] = []
-  let ready = 0
-  const ordered = [...input.agents].sort((left, right) => (left.account < right.account ? -1 : left.account > right.account ? 1 : 0))
-  for (const agent of ordered) {
-    const have = agent.holding.exists ? agent.holding.nearYocto : 0n
-    if (agent.holding.exists && have >= floor) {
-      ready += 1
-      continue
-    }
-    shortAgents.push({
-      account: agent.account,
-      near: formatYocto(have),
-      need: floorLabel,
-      missing: !agent.holding.exists,
-    })
-  }
   const treasuryReady = input.treasury.exists && input.treasury.nearYocto >= reserve && input.treasury.tokenMicros >= input.ledgerMicros
   const report: TreasuryReport = {
-    ok: treasuryReady && shortAgents.length === 0,
+    ok: treasuryReady,
     account: input.account,
     near: formatYocto(input.treasury.nearYocto),
     nearNeed: formatYocto(reserve),
     token: formatQm(input.treasury.tokenMicros),
     tokenNeed: formatQm(input.ledgerMicros),
     treasuryReady,
-    agentsReady: ready,
-    agentsTotal: input.agents.length,
-    shortAgents,
+    agentsReady: 0,
+    agentsTotal: 0,
+    shortAgents: [],
     lines: [],
   }
   report.lines = reportLines(report, englishReport)

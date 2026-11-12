@@ -48,7 +48,7 @@ import { ChainLogo, NearLogo, PhantomLogo } from "./logos"
 import { ToastStack, useToasts } from "./toasts"
 import { useSession } from "./wallet"
 import { History } from "./history"
-import { briefTx, FundOverlay, GrantOverlay, WithdrawOverlay } from "./overlays"
+import { AgentsOverlay, briefTx, FundOverlay, GrantOverlay, WithdrawOverlay } from "./overlays"
 
 export function App({
   initialConfig,
@@ -95,6 +95,7 @@ export function App({
   const [withdrawing, setWithdrawing] = useState(false)
   const [following, setFollowing] = useState(true)
   const [briefOpen, setBriefOpen] = useState(false)
+  const [agentsOpen, setAgentsOpen] = useState(false)
   const briefChecked = useRef(false)
   const scrub = useScrub(chart)
   const { toasts, upsert: upsertToast, dismiss: dismissToast } = useToasts()
@@ -1040,6 +1041,11 @@ export function App({
         </div>
         <LanguageSelect />
       </footer>
+      <button type="button" className="agents-box" onClick={() => setAgentsOpen(true)}>
+        <strong>{text.agentsLabel}</strong>
+        <span>{text.agentsLine}</span>
+      </button>
+      {agentsOpen && <AgentsOverlay onClose={() => setAgentsOpen(false)} />}
     </div>
   )
 }

@@ -4,7 +4,6 @@ import type { ChainKey } from "../shared/chain"
 import { parseLang, stampHtml, type Lang } from "../shared/lang"
 import { MINT_CONFIRMATIONS } from "../shared/mint"
 import type { PublicConfig } from "../shared/market"
-import { handleAgents } from "./agents"
 import { priceSource, viewMs, windowMs } from "./config"
 import { getDb } from "./db"
 import { feedsNow } from "./feeds"
@@ -35,7 +34,8 @@ import {
 } from "./rounds"
 import { withChain } from "./activeChain"
 import { pickChain } from "./markets"
-import { agentAuthorized, endSession, NEAR_BUSY, openSession, readSession, sessionChainForToken } from "./session"
+import { handleMcp } from "./mcp"
+import { endSession, NEAR_BUSY, openSession, readSession, sessionChainForToken } from "./session"
 
 export type HttpDeps = {
   config: () => PublicConfig
@@ -259,7 +259,6 @@ async function postSession(req: Request): Promise<Response> {
     signature: String(body?.signature ?? ""),
     issued,
     now: Date.now(),
-    botSecret: body?.botSecret,
     nonce: body?.nonce,
     publicKey: body?.publicKey,
   })
@@ -370,12 +369,6 @@ async function postWithdraw(req: Request): Promise<Response> {
   return json({ you: result.you, txHash: result.txHash })
 }
 
-function postAgents(req: Request, url: URL): Response | Promise<Response> {
-  const http = useDeps()
-  if (!agentAuthorized(req.headers.get("x-agent-secret"))) return json({ error: "Unauthorized" }, 401)
-  return handleAgents(req, url, { mint: (amount) => http.mint(amount), publish: http.publish })
-}
-
 function postBuyIn(req: Request): Promise<Response> {
   const http = useDeps()
   const now = Date.now()
@@ -480,16 +473,15 @@ export async function handle(req: Request): Promise<Response> {
     raw: url.searchParams.get("chain"),
     sessionChain: token ? sessionChainForToken(token) : null,
     live,
-    agent: url.pathname.startsWith("/api/agents/"),
   })
   if (!picked.ok) return json({ error: picked.error }, picked.status)
   return withChain(picked.chain, () => handleScoped(req, url))
 }
 
 async function handleScoped(req: Request, url: URL): Promise<Response> {
+  if (url.pathname === "/mcp") return handleMcp(req, useDeps())
   const exact = routes[`${req.method} ${url.pathname}`]
   if (exact) return exact(req, url)
-  if (url.pathname.startsWith("/api/agents/")) return postAgents(req, url)
   if (req.method === "GET" && /^\/api\/rounds\/\d+$/.test(url.pathname)) {
     const detail = getRound(url)
     if (detail) return detail
