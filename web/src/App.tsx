@@ -772,15 +772,18 @@ export function App({
             <>
               <label className="stake-field">
                 <span>{text.amount}</span>
-                <input
-                  inputMode="decimal"
-                  value={stake}
-                  onChange={(event) => {
-                    stakeHeld.current = null
-                    setStake(event.target.value)
-                  }}
-                  disabled={!you || paused || grantInFlight || session.signing}
-                />
+                <span className="stake-input">
+                  <span className="stake-prefix" aria-hidden="true">$</span>
+                  <input
+                    inputMode="decimal"
+                    value={stake}
+                    onChange={(event) => {
+                      stakeHeld.current = null
+                      setStake(event.target.value)
+                    }}
+                    disabled={!you || paused || grantInFlight || session.signing}
+                  />
+                </span>
               </label>
               <div className="chips">
                 <button type="button" onClick={() => chip(25)} disabled={!you || paused || grantInFlight || session.signing}>
@@ -1045,7 +1048,7 @@ export function App({
         <strong>{text.agentsLabel}</strong>
         <span>{text.agentsLine}</span>
       </button>
-      {agentsOpen && <AgentsOverlay onClose={() => setAgentsOpen(false)} />}
+      {agentsOpen && <AgentsOverlay chainKey={market.config.chainKey} onClose={() => setAgentsOpen(false)} />}
     </div>
   )
 }

@@ -3,12 +3,13 @@ import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js"
 import * as z from "zod"
 import { MINT_CONFIRMATIONS } from "../shared/mint"
-import { loginMessage, nearLoginMessage } from "../shared/login"
+import { LOGIN_SKEW_MS, loginMessage, nearLoginMessage } from "../shared/login"
 import type { ChainKey } from "../shared/chain"
+import { NEP413_RECIPIENT } from "../shared/nearKey"
 import type { PublicConfig } from "../shared/market"
-import { activeChainKey } from "./activeChain"
+import { activeChainKey, withChain } from "./activeChain"
 import { chainConfig } from "./env"
-import { grantSettings, noteGrantTx, settleGrantRequest, startGrant } from "./grant"
+import { grantOnSignIn, grantSettings, noteGrantTx, settleGrantRequest, startGrant } from "./grant"
 import { normalizeAccount, parseMicros } from "./money"
 import {
   accountResults,
@@ -39,6 +40,7 @@ type Bound = { address: string; token: string }
 type LiveSession = {
   transport: WebStandardStreamableHTTPServerTransport
   accounts: Map<string, Bound>
+  chain: ChainKey
 }
 
 const sessions = new Map<string, LiveSession>()
@@ -93,20 +95,68 @@ function stakeOf(stake: string | undefined, stakeMicros: number | undefined): nu
   return parseMicros(stake)
 }
 
+function grantSentence(): string {
+  const settings = grantSettings()
+  const dollars = settings.amount / 1_000_000
+  const money = Number.isInteger(dollars) ? `$${dollars}` : `$${dollars.toFixed(2)}`
+  const minutes = settings.intervalMs / 60_000
+  const every = Number.isInteger(minutes) && minutes >= 1 ? `${minutes} minutes` : `${settings.intervalMs} ms`
+  return `The grant on this market is ${money} every ${every}. Call claim_grant again after nextGrantAt.`
+}
+
+function grantView(address: string) {
+  const settings = grantSettings()
+  const you = youFor(address)
+  const grantAt = you?.grantAt ?? null
+  return {
+    amountMicros: settings.amount,
+    intervalMs: settings.intervalMs,
+    nextGrantAt: grantAt == null ? Date.now() : grantAt + settings.intervalMs,
+    grantNote: grantSentence(),
+  }
+}
+
+function beginGrant(deps: McpDeps, address: string) {
+  if (!deps.grantsOpen()) return
+  const you = youFor(address)
+  if (!grantOnSignIn(you?.grantAt ?? null)) return
+  const settings = grantSettings()
+  const chainKey = activeChainKey()
+  const started = startGrant({
+    address,
+    now: Date.now(),
+    chainKey,
+    amount: settings.amount,
+    intervalMs: settings.intervalMs,
+    mint: (amount) => deps.mint(amount, (hash) => noteGrantTx(address, hash, chainKey)),
+  })
+  if (started.claimed) {
+    void started.done.catch((error) => {
+      console.error(error instanceof Error ? error.message : error)
+    })
+  }
+}
+
 function registerTools(server: McpServer, accounts: Map<string, Bound>, deps: McpDeps) {
+  const market = chainConfig()
+  const other = market.key === "near-testnet" ? "base-sepolia" : "near-testnet"
+  const grantLine = deps.grantsOpen() ? grantSentence() : "Grants are closed on this market."
   server.registerTool(
     "markets",
     {
-      description: "List the markets that are on, and which one this connection is using.",
+      description: `This connection trades only ${market.name} (${market.key}). The other market is /mcp?chain=${other}. A session token on this connector URL is already signed in. Call account.`,
       annotations: readOnly,
     },
-    async () => textResult({ ...deps.markets(), chain: activeChainKey() }),
+    async () => textResult({ ...deps.markets(), chain: activeChainKey(), grantNote: grantLine }),
   )
 
   server.registerTool(
     "login_message",
     {
-      description: "The exact string a wallet signs to sign in. The signature is made locally. This server never sees a private key.",
+      description:
+        market.key === "near-testnet"
+          ? `The NEAR Testnet sign-in message for this connection. The wallet signs NEP-413: SHA-256 of the tagged payload (the message, the returned nonce, recipient ${NEP413_RECIPIENT}, no callback). Call sign_in with address, signature, issued, nonce, and publicKey. The message expires in 2 minutes. This server never sees a private key.`
+          : `The ${market.name} sign-in message for this connection. personal_sign that exact string. Call sign_in with address, signature, and issued. The message expires in 2 minutes. This server never sees a private key.`,
       inputSchema: { address: z.string() },
       annotations: readOnly,
     },
@@ -115,8 +165,27 @@ function registerTools(server: McpServer, accounts: Map<string, Bound>, deps: Mc
       const who = normalizeAccount(address, chain)
       if (!who) return fail("Address is invalid")
       const issued = Date.now()
-      const message = chain === "near-testnet" ? nearLoginMessage(who, issued) : loginMessage(chainConfig().id, who, issued)
-      return textResult({ address: who, message, issued })
+      if (chain === "near-testnet") {
+        const nonce = Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("base64")
+        return textResult({
+          chain,
+          address: who,
+          message: nearLoginMessage(who, issued),
+          issued,
+          expiresInMs: LOGIN_SKEW_MS,
+          nonce,
+          recipient: NEP413_RECIPIENT,
+          how: `NEP-413. Sign SHA-256 of the tagged payload (message, nonce, recipient ${NEP413_RECIPIENT}, no callback). Call sign_in with address, signature, issued, nonce, and publicKey (ed25519 base58).`,
+        })
+      }
+      return textResult({
+        chain,
+        address: who,
+        message: loginMessage(chainConfig().id, who, issued),
+        issued,
+        expiresInMs: LOGIN_SKEW_MS,
+        how: "personal_sign the message. Call sign_in with address, signature, and issued.",
+      })
     },
   )
 
@@ -124,7 +193,9 @@ function registerTools(server: McpServer, accounts: Map<string, Bound>, deps: Mc
     "sign_in",
     {
       description:
-        "Sign in an account. Pass the signature over the login_message string, plus issued, or pass a session token this server already issued to bind that account again. Later tools on this connection use the signed-in accounts and do not take the token. The result includes the address and the balance.",
+        market.key === "near-testnet"
+          ? `Sign in an account on NEAR Testnet. Pass address, signature, issued, nonce, and publicKey from login_message. Or pass a session token this server already issued. Later tools on this connection use the signed-in accounts and do not take the token. ${grantLine}`
+          : `Sign in an account on ${market.name}. Pass address, signature, and issued from login_message. Or pass a session token this server already issued. Later tools on this connection use the signed-in accounts and do not take the token. ${grantLine}`,
       inputSchema: {
         address: z.string().optional(),
         signature: z.string().optional(),
@@ -139,8 +210,14 @@ function registerTools(server: McpServer, accounts: Map<string, Bound>, deps: Mc
         const session = readSessionToken(args.token)
         if (!session.address) return fail("Sign in again")
         accounts.set(session.address, { address: session.address, token: args.token })
+        beginGrant(deps, session.address)
         const you = youFor(session.address)
-        return textResult({ address: session.address, balanceMicros: you?.balanceMicros ?? 0 })
+        return textResult({
+          address: session.address,
+          balanceMicros: you?.balanceMicros ?? 0,
+          pending: Boolean(you?.grantPending),
+          ...grantView(session.address),
+        })
       }
       if (!args.address || !args.signature || typeof args.issued !== "number") return fail("Sign-in expired")
       const opened = await openSession({
@@ -153,10 +230,14 @@ function registerTools(server: McpServer, accounts: Map<string, Bound>, deps: Mc
       })
       if (!opened.ok) return fail(opened.error)
       accounts.set(opened.you.address, { address: opened.you.address, token: opened.token })
+      beginGrant(deps, opened.you.address)
+      const you = youFor(opened.you.address)
       return textResult({
         address: opened.you.address,
-        balanceMicros: opened.you.balanceMicros,
+        balanceMicros: you?.balanceMicros ?? opened.you.balanceMicros,
         token: opened.token,
+        pending: Boolean(you?.grantPending),
+        ...grantView(opened.you.address),
       })
     },
   )
@@ -265,7 +346,7 @@ function registerTools(server: McpServer, accounts: Map<string, Bound>, deps: Mc
   server.registerTool(
     "account",
     {
-      description: "Balance, open buy-ins, and recent results for a signed-in account.",
+      description: `Balance, open buy-ins, recent results, and the grant timer for a signed-in account on ${market.name}. ${grantLine}`,
       inputSchema: { address: z.string().optional(), limit: z.number().int().optional() },
       annotations: readOnly,
     },
@@ -278,6 +359,8 @@ function registerTools(server: McpServer, accounts: Map<string, Bound>, deps: Mc
         balanceMicros: you?.balanceMicros ?? 0,
         you,
         results: accountResults(picked.bound.address, args.limit ?? 10),
+        pending: Boolean(you?.grantPending),
+        ...grantView(picked.bound.address),
       })
     },
   )
@@ -285,7 +368,7 @@ function registerTools(server: McpServer, accounts: Map<string, Bound>, deps: Mc
   server.registerTool(
     "place_buy_in",
     {
-      description: "Place one buy-in for a signed-in account. stake is a dollar string such as \"1\" or \"1.5\". stakeMicros is an integer count of micros. One USDC is 1000000.",
+      description: `Place one buy-in on ${market.name}. One open round at a time. A second buy-in while that round is still open fails. The other market is /mcp?chain=${other}. stake is a dollar string such as "1" or "1.5". stakeMicros is an integer count of micros. One USDC is 1000000.`,
       inputSchema: {
         address: z.string().optional(),
         side: z.enum(["up", "down"]),
@@ -351,7 +434,7 @@ function registerTools(server: McpServer, accounts: Map<string, Bound>, deps: Mc
   server.registerTool(
     "claim_grant",
     {
-      description: "Claim the testnet grant for a signed-in account, when grants are open on this market.",
+      description: `Claim the testnet grant on ${market.name}. ${grantLine}`,
       inputSchema: { address: z.string().optional() },
     },
     async (args) => claimGrant(accounts, deps, args.address),
@@ -425,6 +508,7 @@ async function claimGrant(accounts: Map<string, Bound>, deps: McpDeps, raw: stri
       txHash: you?.grantPending?.txHash ?? null,
       confirmations: MINT_CONFIRMATIONS,
       you,
+      ...grantView(address),
     })
   }
   const done = started.done
@@ -444,6 +528,7 @@ async function claimGrant(accounts: Map<string, Bound>, deps: McpDeps, raw: stri
         txHash: settled.txHash,
         confirmations: MINT_CONFIRMATIONS,
         you,
+        ...grantView(address),
       })
     }
     return textResult({
@@ -454,6 +539,7 @@ async function claimGrant(accounts: Map<string, Bound>, deps: McpDeps, raw: stri
       txHash: seenHash,
       confirmations: MINT_CONFIRMATIONS,
       you,
+      ...grantView(address),
     })
   } catch (error) {
     console.error(error instanceof Error ? error.message : error)
@@ -465,6 +551,7 @@ async function claimGrant(accounts: Map<string, Bound>, deps: McpDeps, raw: stri
         balanceMicros: you?.balanceMicros ?? 0,
         txHash: seenHash,
         you,
+        ...grantView(address),
       },
       true,
     )
@@ -480,7 +567,9 @@ export async function handleMcp(req: Request, deps: McpDeps): Promise<Response> 
   if (sessionId) {
     const live = sessions.get(sessionId)
     if (!live) return rpcError(404, "Session not found")
-    return live.transport.handleRequest(req)
+    const asked = new URL(req.url).searchParams.get("chain")
+    if (asked !== null && asked !== live.chain) return rpcError(400, "This connection is on another market")
+    return withChain(live.chain, () => live.transport.handleRequest(req))
   }
   if (req.method !== "POST") return rpcError(400, "Bad Request: Mcp-Session-Id header is required")
   let body: unknown
@@ -491,10 +580,18 @@ export async function handleMcp(req: Request, deps: McpDeps): Promise<Response> 
   }
   if (!isInitializeRequest(body)) return rpcError(400, "Bad Request: Server not initialized")
   const accounts = new Map<string, Bound>()
+  const chain = activeChainKey()
+  const token = new URL(req.url).searchParams.get("token")
+  if (token !== null) {
+    const session = readSessionToken(token)
+    if (!session.address) return rpcError(401, "Sign in again")
+    accounts.set(session.address, { address: session.address, token })
+    beginGrant(deps, session.address)
+  }
   const transport = new WebStandardStreamableHTTPServerTransport({
     sessionIdGenerator: () => crypto.randomUUID(),
     onsessioninitialized: (id) => {
-      sessions.set(id, { transport, accounts })
+      sessions.set(id, { transport, accounts, chain })
     },
     onsessionclosed: (id) => {
       sessions.delete(id)

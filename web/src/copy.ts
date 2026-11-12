@@ -173,6 +173,9 @@ export type Copy = {
   agentsClaude: string
   agentsOtherTitle: string
   agentsOther: string
+  agentsToken: string
+  agentsTokenHint: string
+  agentsTokenMissing: string
   agentsTools: string
   nearReport: ReportPhrases
   confirmationsIn: string
@@ -361,8 +364,11 @@ const en: Copy = {
   agentsClaude:
     "Customize, Connectors, Add custom connector. Name it Quick Market, paste this URL, and leave OAuth blank. Then turn the connector on in the chat. Claude also connects from its own cloud, so the URL is the public one.",
   agentsOtherTitle: "Other clients",
-  agentsOther: "Any other client that takes a remote MCP URL uses this same address.",
-  agentsTools: "These tools read the book, sign in by signing the login message in the wallet, place a buy-in, claim the testnet grant, and withdraw.",
+  agentsOther: "Any other client that takes a remote MCP URL uses this address. This address is the network on screen. The other network is the same path with its own ?chain= value.",
+  agentsToken: "Session",
+  agentsTokenHint: "This token is already on the connector URL. Connecting with that URL signs in this account.",
+  agentsTokenMissing: "Sign in on this page first. The connector URL then includes your session token.",
+  agentsTools: "These tools read the book, sign in, place one buy-in on this market, claim this market's testnet grant every 2 minutes, and withdraw. The other network is the other connector URL.",
   nearReport: {
     treasury: (account) => `near-testnet treasury ${account}`,
     near: (have, need) => `NEAR ${have} (need ${need})`,
@@ -554,8 +560,11 @@ const zhTW: Copy = {
   agentsClaude:
     "打開 Customize，再打開 Connectors，新增自訂連接器。名稱填 Quick Market，貼上這個網址，OAuth 留空。然後在對話裡打開這個連接器。Claude 也是從它自己的雲端連線，所以用的是公開網址。",
   agentsOtherTitle: "其他客戶端",
-  agentsOther: "任何接受遠端 MCP 網址的客戶端都用同一個地址。",
-  agentsTools: "這些工具可以讀盤口、在錢包裡簽登入訊息來登入、下一注、領取測試網撥款，以及提領。",
+  agentsOther: "任何接受遠端 MCP 網址的客戶端都用這個地址。這個地址是畫面上的這個網路。另一個網路是同一個路徑，換它自己的 ?chain= 值。",
+  agentsToken: "登入憑證",
+  agentsTokenHint: "這組憑證已經在上面的連接網址裡。用那個網址連上就會登入這個帳戶。",
+  agentsTokenMissing: "請先在這個頁面登入。連接網址就會帶上你的登入憑證。",
+  agentsTools: "這些工具可以讀盤口、登入、在這個市場下一注、每 2 分鐘領取這個市場的測試網撥款，以及提領。另一個網路用另一個連接網址。",
   nearReport: {
     treasury: (account) => `near-testnet 金庫 ${account}`,
     near: (have, need) => `NEAR ${have}（需要 ${need}）`,

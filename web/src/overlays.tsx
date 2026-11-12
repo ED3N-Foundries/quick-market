@@ -15,6 +15,7 @@ import { localize } from "./copy"
 import { useI18n } from "./i18n"
 import { ChainLogo } from "./logos"
 import { TokenBadge } from "./App"
+import { useSession } from "./wallet"
 
 export function AddressWithHover({ address, label }: { address: string; label?: string | null }) {
   return (
@@ -332,10 +333,19 @@ export function WithdrawOverlay({
   )
 }
 
-export function AgentsOverlay({ onClose }: { onClose: () => void }) {
+function connectorUrl(chainKey: string, token: string | null): string {
+  const url = new URL("/mcp", window.location.origin)
+  url.searchParams.set("chain", chainKey)
+  if (token) url.searchParams.set("token", token)
+  return url.toString()
+}
+
+export function AgentsOverlay({ chainKey, onClose }: { chainKey: string; onClose: () => void }) {
   const { text } = useI18n()
-  const [copied, setCopied] = useState(false)
-  const url = `${window.location.origin}/mcp`
+  const session = useSession()
+  const token = session.pageChain?.key === chainKey && session.token ? session.token : null
+  const [copied, setCopied] = useState<"url" | "token" | null>(null)
+  const url = connectorUrl(chainKey, token)
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") onClose()
@@ -343,6 +353,12 @@ export function AgentsOverlay({ onClose }: { onClose: () => void }) {
     window.addEventListener("keydown", onKey)
     return () => window.removeEventListener("keydown", onKey)
   }, [onClose])
+  const copy = (value: string, which: "url" | "token") => {
+    void navigator.clipboard.writeText(value).then(
+      () => setCopied(which),
+      () => setCopied(null),
+    )
+  }
   return (
     <div className="fund-back" onClick={onClose}>
       <div
@@ -362,18 +378,24 @@ export function AgentsOverlay({ onClose }: { onClose: () => void }) {
         <div className="agents-url-row">
           <span className="agents-url-label">{text.agentsUrl}</span>
           <code className="agents-url">{url}</code>
-          <button
-            type="button"
-            onClick={() => {
-              void navigator.clipboard.writeText(url).then(
-                () => setCopied(true),
-                () => setCopied(false),
-              )
-            }}
-          >
-            {copied ? text.agentsCopied : text.agentsCopy}
+          <button type="button" onClick={() => copy(url, "url")}>
+            {copied === "url" ? text.agentsCopied : text.agentsCopy}
           </button>
         </div>
+        {token ? (
+          <>
+            <div className="agents-url-row">
+              <span className="agents-url-label">{text.agentsToken}</span>
+              <code className="agents-url">{token}</code>
+              <button type="button" onClick={() => copy(token, "token")}>
+                {copied === "token" ? text.agentsCopied : text.agentsCopy}
+              </button>
+            </div>
+            <p>{text.agentsTokenHint}</p>
+          </>
+        ) : (
+          <p>{text.agentsTokenMissing}</p>
+        )}
         <div className="agents-steps">
           <h3>{text.agentsGrokTitle}</h3>
           <p>
