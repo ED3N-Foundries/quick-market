@@ -13,7 +13,7 @@ import {
 } from "./format"
 import { localize } from "./copy"
 import { useI18n } from "./i18n"
-import { AGENT_CHAINS, connectorUrl } from "./agentsUrl"
+import { agentConnectors } from "./agentsUrl"
 import { ClaudeLogo, ChainLogo, GrokLogo, OpenAiLogo } from "./logos"
 import { TokenBadge } from "./App"
 import { useSession } from "./wallet"
@@ -343,7 +343,8 @@ const agentClients = [
 export function AgentsOverlay({ chainKey, onClose }: { chainKey: string; onClose: () => void }) {
   const { text } = useI18n()
   const session = useSession()
-  const signedIn = session.pageChain?.key === chainKey ? session.token : null
+  const pageToken = session.pageChain?.key === chainKey ? session.token : null
+  const markets = agentConnectors(window.location.origin, { chainKey, token: pageToken })
   const [copied, setCopied] = useState<string | null>(null)
   useEffect(() => {
     if (!session.token) onClose()
@@ -361,7 +362,7 @@ export function AgentsOverlay({ chainKey, onClose }: { chainKey: string; onClose
       () => setCopied(null),
     )
   }
-  const labelFor = (key: (typeof AGENT_CHAINS)[number]) => (key === "near-testnet" ? text.chainNearNetwork : text.chainTestnetNetwork)
+  const labelFor = (key: string) => (key === "near-testnet" ? text.chainNearNetwork : text.chainTestnetNetwork)
   return (
     <div className="fund-back" onClick={onClose}>
       <div
@@ -378,22 +379,17 @@ export function AgentsOverlay({ chainKey, onClose }: { chainKey: string; onClose
           </button>
         </header>
         <p>{text.agentsIntro}</p>
-        {AGENT_CHAINS.map((key) => {
-          const token = key === chainKey ? signedIn : null
-          const url = connectorUrl(window.location.origin, key, token)
-          return (
-            <div key={key} className="agents-market">
-              <div className="agents-url-row">
-                <span className="agents-url-label">{labelFor(key)}</span>
-                <code className="agents-url">{url}</code>
-                <button type="button" onClick={() => copy(url, key)}>
-                  {copied === key ? text.agentsCopied : text.agentsCopy}
-                </button>
-              </div>
-              {!token && <p className="agents-url-note">{text.agentsOtherMarket}</p>}
+        {markets.map(({ chainKey: key, url }) => (
+          <div key={key} className="agents-market">
+            <div className="agents-url-row">
+              <span className="agents-url-label">{labelFor(key)}</span>
+              <code className="agents-url">{url}</code>
+              <button type="button" onClick={() => copy(url, key)}>
+                {copied === key ? text.agentsCopied : text.agentsCopy}
+              </button>
             </div>
-          )
-        })}
+          </div>
+        ))}
         <div className="agents-steps">
           {agentClients.map((client) => (
             <div key={client.name} className="agents-client">

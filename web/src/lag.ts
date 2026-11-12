@@ -214,6 +214,13 @@ export function connectionState(
   return { blocked: false, slow: false, reason: null }
 }
 
+/** The shimmer covers the chart only before the first price.
+ *  A cached print stays on screen while the feed is stale, the link is down, or a handoff is on. */
+export function chartCovered(input: { hasPrice: boolean; handoff: boolean; blocked: boolean }): boolean {
+  if (input.hasPrice) return false
+  return input.handoff || input.blocked
+}
+
 export function linkStatus(
   state: LagState,
   now: number,

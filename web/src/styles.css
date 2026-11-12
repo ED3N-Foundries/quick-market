@@ -1189,7 +1189,6 @@ button.grant-status:disabled { cursor: default; }
 .agents-client svg { width: 16px; height: 16px; flex: none; margin-top: 2px; }
 .agents-client p strong { color: var(--text); font-weight: 600; }
 .agents-market { display: flex; flex-direction: column; gap: 4px; }
-.agents-url-note { margin: 0; }
 .agents-url-row {
   display: flex;
   flex-wrap: wrap;

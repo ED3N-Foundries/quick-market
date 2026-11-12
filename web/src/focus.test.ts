@@ -206,3 +206,19 @@ test("a struck round that is still open counts to settlement", () => {
   expect(listedRoundIds(current, 16_000)).toContain(2)
 })
 
+test("a stale feed does not count a buy-in, and a running position still counts down", () => {
+  const current = board()
+  expect(clockFace(current, 12_000, null, null, "stale").kind).toBe("waiting")
+  const live = card(band(2, 10_000, "101"))
+  const riding = board({
+    blockStart: 20_000,
+    blockEnd: 30_000,
+    windowEndsAt: 25_000,
+    join: card(band(4, 20_000)),
+    live,
+    bands: [live],
+  })
+  const held = heldMarket(riding, [{ roundId: 2, side: "up", stakeMicros: 1_000_000 }], 16_000)
+  expect(clockFace(riding, 16_000, held, null, "stale").kind).toBe("settles")
+})
+

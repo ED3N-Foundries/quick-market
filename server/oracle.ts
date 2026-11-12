@@ -82,6 +82,12 @@ export function moveBreak(lastMoveAt: number | null, now: number): boolean {
   return now - lastMoveAt >= MOVE_MS
 }
 
+/** Clock for the switch. A print uses its own time. A venue that has never printed
+ *  still starts from boot, so a dead primary can leave for a live standby. */
+export function switchClockAt(lastMoveAt: number, bootAt: number): number {
+  return lastMoveAt > 0 ? lastMoveAt : bootAt
+}
+
 /** Any numeric difference counts. An equal value spelled two ways does not. */
 export function priceChanged(left: string, right: string): boolean {
   const gap = dollarGap(left, right)
@@ -713,6 +719,7 @@ export function startOracle(handlers: OracleHandlers): () => void {
     return walker.stop
   })
 
+  armBreak(switchClockAt(lastMoveAt, Date.now()))
   publish()
 
   return () => {

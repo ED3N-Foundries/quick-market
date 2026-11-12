@@ -77,7 +77,7 @@ export function heldStrike(market: { strike: string | null } | null): { price: n
 }
 
 export type ClockFace = {
-  kind: "buy-in" | "settles" | "opens"
+  kind: "buy-in" | "settles" | "opens" | "waiting"
   endsAt: number
   /** Finite span caps the painted tenths one step under the span. Infinity floors only. */
   spanMs: number
@@ -88,13 +88,20 @@ export type ClockFace = {
  *  A running position counts to settlement. Otherwise the buy-in window that
  *  contains now, including a local roll once the published end is behind.
  */
-export function clockFace(board: Board, now: number, held: Band | null, handoffResumeAt: number | null): ClockFace {
+export function clockFace(
+  board: Board,
+  now: number,
+  held: Band | null,
+  handoffResumeAt: number | null,
+  feed: "live" | "stale" = "live",
+): ClockFace {
   if (handoffResumeAt != null && handoffResumeAt > now) {
     return { kind: "opens", endsAt: handoffResumeAt, spanMs: Number.POSITIVE_INFINITY }
   }
   if (held && held.settlesAt > now) {
     return { kind: "settles", endsAt: held.settlesAt, spanMs: Number.POSITIVE_INFINITY }
   }
+  if (feed === "stale") return { kind: "waiting", endsAt: now, spanMs: Number.POSITIVE_INFINITY }
   const window = buyInWindow(board, now)
   return { kind: "buy-in", endsAt: window.end, spanMs: Math.max(1, window.end - window.start) }
 }

@@ -17,6 +17,7 @@ import {
   formatSwing,
   MOVE_MS,
   moveBreak,
+  switchClockAt,
   noteMove,
   OPEN_ARM_MS,
   pickStandby,
@@ -118,6 +119,14 @@ test("a price that changed inside five seconds keeps the market", () => {
   expect(moveBreak(0, 5_000)).toBe(false)
   expect(moveBreak(1_000, 1_000 + MOVE_MS - 1)).toBe(false)
   expect(moveBreak(1_000, 1_000 + MOVE_MS)).toBe(true)
+})
+
+test("a primary that has never printed still arms the switch clock from boot", () => {
+  const boot = 10_000
+  expect(switchClockAt(0, boot)).toBe(boot)
+  expect(moveBreak(switchClockAt(0, boot), boot + MOVE_MS - 1)).toBe(false)
+  expect(moveBreak(switchClockAt(0, boot), boot + MOVE_MS)).toBe(true)
+  expect(switchClockAt(boot + 500, boot)).toBe(boot + 500)
 })
 
 test("any price change counts, and an identical number does not", () => {

@@ -32,6 +32,7 @@ import type { Handoff, Ticker } from "../../shared/source"
 import { tickerFor } from "../../shared/source"
 import { dismissRound, dueBuyIns, emptyNotices, settleNotice, tickNotices } from "./resultNotice"
 import { applyBookPatch } from "./boardStream"
+import { tapeLead } from "./tapeLead"
 import type { AccountMessage, Board, Config, ServerStreamMessage, Side, SnapshotMessage, You } from "./types"
 import { withChainQuery } from "./runtimeConfig"
 
@@ -578,16 +579,32 @@ export function useMarket(token: string | null, seed: You | null = null, initial
           else setError(message.error ?? "Buy-in failed")
           return
         }
-        if (needsSnapshotRef.current) return
-        if (message.epoch !== epochRef.current || message.seq !== seqRef.current + 1) {
-          requestSnapshot()
-          return
-        }
-        seqRef.current = message.seq
-        if (message.type === "tick") {
+        if (message.type === "tick" || message.type === "book") {
+          const lead = tapeLead({
+            type: message.type,
+            needsSnapshot: needsSnapshotRef.current,
+            epoch: epochRef.current,
+            messageEpoch: message.epoch,
+          })
+          if (lead === "resync") {
+            requestSnapshot()
+            return
+          }
+          const inOrder = !needsSnapshotRef.current
+          if (inOrder && (message.epoch !== epochRef.current || message.seq !== seqRef.current + 1)) {
+            requestSnapshot()
+            return
+          }
+          if (inOrder) seqRef.current = message.seq
+          if (message.type === "tick") {
+            setFeed(message.feed)
+            pushTick(message.exchangeTs, message.price)
+            return
+          }
           setFeed(message.feed)
-          pushTick(message.exchangeTs, message.price)
-        } else if (message.type === "book") {
+          setTicker(message.ticker)
+          setHandoff(message.handoff)
+          if (!inOrder) return
           const currentBoard = boardRef.current
           if (!currentBoard) {
             requestSnapshot()
@@ -596,12 +613,15 @@ export function useMarket(token: string | null, seed: You | null = null, initial
           const next = applyBookPatch(currentBoard, message.board)
           boardRef.current = next
           setBoard(next)
-          setFeed(message.feed)
-          setTicker(message.ticker)
-          setHandoff(message.handoff)
-        } else if (message.type === "settled") {
-          setHistoryVersion((value) => value + 1)
+          return
         }
+        if (needsSnapshotRef.current) return
+        if (message.epoch !== epochRef.current || message.seq !== seqRef.current + 1) {
+          requestSnapshot()
+          return
+        }
+        seqRef.current = message.seq
+        if (message.type === "settled") setHistoryVersion((value) => value + 1)
       }
       current.onclose = () => {
         if (gen !== generation) return

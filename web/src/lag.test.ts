@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test"
 import {
   ageProbe,
+  chartCovered,
   connectionState,
   createLag,
   createProbe,
@@ -239,4 +240,12 @@ test("connectionState blocks on down link or stale feed, warns on slow", () => {
   expect(connectionState({ tone: "slow" }, "live")).toEqual({ blocked: false, slow: true, reason: null })
   expect(connectionState({ tone: "slow" }, "stale").blocked).toBe(true)
   expect(connectionState({ tone: "live" }, "live")).toEqual({ blocked: false, slow: false, reason: null })
+})
+
+test("the chart shimmer waits for a price, then stays off", () => {
+  expect(chartCovered({ hasPrice: false, handoff: false, blocked: true })).toBe(true)
+  expect(chartCovered({ hasPrice: false, handoff: true, blocked: false })).toBe(true)
+  expect(chartCovered({ hasPrice: false, handoff: false, blocked: false })).toBe(false)
+  expect(chartCovered({ hasPrice: true, handoff: true, blocked: true })).toBe(false)
+  expect(chartCovered({ hasPrice: true, handoff: false, blocked: true })).toBe(false)
 })

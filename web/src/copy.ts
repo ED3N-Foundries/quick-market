@@ -171,7 +171,6 @@ export type Copy = {
   agentsGrok: string
   agentsClaude: string
   agentsChat: string
-  agentsOtherMarket: string
   nearReport: ReportPhrases
   confirmationsIn: string
   waitingOne: string
@@ -356,7 +355,6 @@ const en: Copy = {
   agentsGrok: "Connectors, then Custom. Paste the link. Leave auth empty.",
   agentsClaude: "Customize, Connectors, add a custom connector named Quick Market. Paste the link. Leave OAuth empty.",
   agentsChat: "Plugins, add a custom MCP server. Paste the link. Choose no authentication.",
-  agentsOtherMarket: "Sign in on that market for its link.",
   nearReport: {
     treasury: (account) => `near-testnet treasury ${account}`,
     near: (have, need) => `NEAR ${have} (need ${need})`,
@@ -546,7 +544,6 @@ const zhTW: Copy = {
   agentsGrok: "選 Connectors，再選 Custom，貼上連結。驗證留空。",
   agentsClaude: "選 Customize，再選 Connectors，新增名為 Quick Market 的自訂連接器，貼上連結。OAuth 留空。",
   agentsChat: "選 Plugins，新增自訂 MCP 伺服器，貼上連結，選不驗證。",
-  agentsOtherMarket: "到那個市場登入，才會有它的連結。",
   nearReport: {
     treasury: (account) => `near-testnet 金庫 ${account}`,
     near: (have, need) => `NEAR ${have}（需要 ${need}）`,

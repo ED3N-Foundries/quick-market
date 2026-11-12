@@ -37,7 +37,7 @@ import { BALANCE_MS, balanceStep } from "./balanceMotion"
 import { grantLanded, grantTxUrl } from "./grantWatch"
 import { copy, localize } from "./copy"
 import { LanguageSelect, useI18n } from "./i18n"
-import { formatLag, lagButtonName, type LinkStatus } from "./lag"
+import { chartCovered, formatLag, lagButtonName, type LinkStatus } from "./lag"
 import { useMarket } from "./useMarket"
 import { FeedBadge } from "./venues"
 import { prefersReducedMotion } from "./sideFigures"
@@ -74,6 +74,8 @@ export function App({
   const boardRef = useRef(market.board)
   const openBuyInsRef = useRef<OpenBuyIn[]>([])
   const [chart, setChart] = useState<TapeChart | null>(null)
+  const hasPriceRef = useRef(false)
+  const [hasPrice, setHasPrice] = useState(false)
   const [stake, setStake] = useState("10")
   const stakeHeld = useRef<string | null>(null)
   const [windowTick, setWindowTick] = useState(0)
@@ -217,6 +219,10 @@ export function App({
       getLocale: () => langRef.current,
       onHead: (text) => {
         market.priceRef.current = text
+        if (text && !hasPriceRef.current) {
+          hasPriceRef.current = true
+          setHasPrice(true)
+        }
       },
     })
     chartRef.current = next
@@ -273,7 +279,7 @@ export function App({
   }, [market.config.tokenKind, market.config.chainId, market.config.grantMicros, market.config.grantIntervalMs])
   const heldSpan = board ? heldMarket(board, openBuyIns, now) : null
   const focus = focusPool(board, openBuyIns, now)
-  const face = board ? clockFace(board, now, heldSpan, handoff?.resumeAt ?? null) : null
+  const face = board ? clockFace(board, now, heldSpan, handoff?.resumeAt ?? null, market.feed) : null
   const total = (focus?.poolUpMicros ?? 0) + (focus?.poolDownMicros ?? 0)
   const held = openBuyIns.find((bet) => bet.roundId === focus?.id) ?? null
   const upQuote = focus ? quoteDollar("up", focus.poolUpMicros, focus.poolDownMicros, market.config.feeBps, lang) : "—"
@@ -291,6 +297,7 @@ export function App({
   })
   const betRoundId = focus?.id ?? null
   const paused = market.blocked
+  const covered = chartCovered({ hasPrice, handoff: handoff != null, blocked: paused })
   const lost = market.seenLive && paused
   const degraded = market.slow
   const canBet =
@@ -480,9 +487,15 @@ export function App({
           />
           <div className="clock-block">
             <span className="clock-label">
-              {face?.kind === "opens" ? text.opens : face?.kind === "settles" ? text.settles : text.buyIn}
+              {face?.kind === "opens"
+                ? text.opens
+                : face?.kind === "settles"
+                  ? text.settles
+                  : face?.kind === "waiting"
+                    ? text.priceDelayed
+                    : text.buyIn}
             </span>
-            {face ? (
+            {face && face.kind !== "waiting" ? (
               <Countdown endsAt={face.endsAt} spanMs={face.spanMs} offsetRef={market.offsetRef} />
             ) : (
               <span className="clock-line">
@@ -499,8 +512,8 @@ export function App({
 
       <section
         className="chart-wrap"
-        data-loading={handoff || paused ? "1" : undefined}
-        aria-busy={handoff || paused ? true : undefined}
+        data-loading={covered ? "1" : undefined}
+        aria-busy={covered ? true : undefined}
         onPointerDown={onPointerDown}
         onPointerMove={(event) => {
           if (handoffRef.current || paused) return
@@ -509,7 +522,7 @@ export function App({
         onPointerLeave={scrub.clear}
       >
         <canvas ref={canvasRef} />
-        {chart && !handoff && !paused && (
+        {chart && !covered && (
           <ChartOverlay
             chart={chart}
             board={board}
@@ -519,7 +532,7 @@ export function App({
             offsetRef={market.offsetRef}
           />
         )}
-        {(handoff || paused) && (
+        {covered && (
           <div className="chart-skeleton" aria-hidden="true">
             <span />
             <span />
@@ -533,7 +546,7 @@ export function App({
             <span>{handoffBanner(handoff.from, handoff.to, lang)}</span>
           </p>
         )}
-        {lost && !handoff && (
+        {lost && !handoff && market.connectionReason === "reconnecting" && (
           <p className="reconnect-banner" role="status">
             <span className="wait-spin" aria-hidden="true" />
             <span className="reconnect-title">{text.reconnectingMarket}</span>
@@ -542,7 +555,7 @@ export function App({
             </span>
           </p>
         )}
-        {market.feed === "stale" && !handoff && !paused && <p className="feed-flag">{text.priceDelayed}</p>}
+        {market.feed === "stale" && !handoff && hasPrice && <p className="feed-flag">{text.priceDelayed}</p>}
         {degraded && !paused && !handoff && (
           <p className="feed-flag" data-tone="slow">
             {text.slow} · ↑ {formatLag(market.link.upMs)} ↓ {formatLag(market.link.downMs)}
