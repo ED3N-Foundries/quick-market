@@ -12,7 +12,7 @@ import {
 import { privateKeyToAccount, type PrivateKeyAccount } from "viem/accounts"
 import { base, baseSepolia } from "viem/chains"
 import type { ChainConfig } from "../shared/chain"
-import { mintReceiptWait } from "../shared/mint"
+import { MINT_CONFIRMATIONS, MINT_RECEIPT_TIMEOUT_MS, confirmationDepth, grantStep } from "../shared/mint"
 import { mintAbi, usdcAbi } from "../shared/usdc"
 import { activeChainKey, withChain } from "./activeChain"
 import { getDb } from "./db"
@@ -97,19 +97,51 @@ async function signedTransfer(to: Address, amount: bigint): Promise<Hex> {
   return account.signTransaction(prepared as Parameters<PrivateKeyAccount["signTransaction"]>[0])
 }
 
+const GRANT_POLL_MS = 1_000
+
+type GrantReport = (progress: { txHash?: string; seen: number }) => void
+
 let pendingMintMicros = 0
 let pendingMintWaiters: {
   resolve: () => void
   reject: (error: unknown) => void
-  onHash?: (hash: Hash) => void
+  report?: GrantReport
 }[] = []
 let mintScheduled = false
 
-export async function mintToTreasury(amountMicros: number, onHash?: (hash: Hash) => void): Promise<void> {
+/** Follow a broadcast mint until it has the confirmation depth. Does not send another transaction. */
+export async function watchMint(hash: Hash, report: GrantReport): Promise<void> {
+  const { publicClient } = clients()
+  report({ txHash: hash, seen: grantStep(0, true) })
+  await pollGrantConfirmations(publicClient, hash, (seen) => report({ seen }))
+}
+
+async function pollGrantConfirmations(publicClient: ChainClient, hash: Hash, report: (seen: number) => void): Promise<void> {
+  const started = Date.now()
+  let last = -1
+  while (Date.now() - started < MINT_RECEIPT_TIMEOUT_MS) {
+    const [receipt, head] = await Promise.all([
+      publicClient.getTransactionReceipt({ hash }).catch(() => null),
+      publicClient.getBlockNumber(),
+    ])
+    const depth = confirmationDepth(head, receipt?.blockNumber ?? null)
+    const seen = grantStep(depth, true)
+    if (seen !== last) {
+      last = seen
+      report(seen)
+    }
+    if (receipt && receipt.status !== "success") throw new Error(`Mint failed ${hash}`)
+    if (receipt && depth >= MINT_CONFIRMATIONS) return
+    await new Promise((resolve) => setTimeout(resolve, GRANT_POLL_MS))
+  }
+  throw new Error(`Mint timed out ${hash}`)
+}
+
+export async function mintToTreasury(amountMicros: number, report?: GrantReport): Promise<void> {
   if (!Number.isSafeInteger(amountMicros) || amountMicros <= 0) throw new Error("Amount is invalid")
   return new Promise<void>((resolve, reject) => {
     pendingMintMicros += amountMicros
-    pendingMintWaiters.push({ resolve, reject, onHash })
+    pendingMintWaiters.push({ resolve, reject, report })
     if (mintScheduled) return
     mintScheduled = true
     const mintChain = activeChainKey()
@@ -132,13 +164,20 @@ export async function mintToTreasury(amountMicros: number, onHash?: (hash: Hash)
         })
         for (const waiter of waiters) {
           try {
-            waiter.onHash?.(hash)
+            waiter.report?.({ txHash: hash, seen: grantStep(0, true) })
           } catch (error) {
             console.error(error instanceof Error ? error.message : error)
           }
         }
-        const receipt = await publicClient.waitForTransactionReceipt(mintReceiptWait(hash))
-        if (receipt.status !== "success") throw new Error(`Mint failed ${hash}`)
+        await pollGrantConfirmations(publicClient, hash, (seen) => {
+          for (const waiter of waiters) {
+            try {
+              waiter.report?.({ seen })
+            } catch (error) {
+              console.error(error instanceof Error ? error.message : error)
+            }
+          }
+        })
       })).then(
         () => {
           for (const waiter of waiters) waiter.resolve()

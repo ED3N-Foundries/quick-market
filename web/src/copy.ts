@@ -164,19 +164,14 @@ export type Copy = {
   waitingNear: string
   agentsLabel: string
   agentsLine: string
-  agentsUrl: string
+  agentsSignIn: string
+  agentsIntro: string
   agentsCopy: string
   agentsCopied: string
-  agentsGrokTitle: string
   agentsGrok: string
-  agentsClaudeTitle: string
   agentsClaude: string
-  agentsOtherTitle: string
-  agentsOther: string
-  agentsToken: string
-  agentsTokenHint: string
-  agentsTokenMissing: string
-  agentsTools: string
+  agentsChat: string
+  agentsOtherMarket: string
   nearReport: ReportPhrases
   confirmationsIn: string
   waitingOne: string
@@ -353,22 +348,15 @@ const en: Copy = {
   approveNear: "Approve the sign-in in Meteor",
   waitingNear: "Waiting for Meteor",
   agentsLabel: "Agents",
-  agentsLine: "A Grok, Claude, or other MCP client can trade here.",
-  agentsUrl: "Connector",
+  agentsLine: "Grok, Claude, or ChatGPT.",
+  agentsSignIn: "Sign in first.",
+  agentsIntro: "Paste a link. It is already signed in on that market.",
   agentsCopy: "Copy",
   agentsCopied: "Copied",
-  agentsGrokTitle: "Grok",
-  agentsGrok:
-    "New Connector, then Custom, and paste this URL. Grok’s servers must reach a public HTTPS URL, which these hostnames already are. Leave extra auth empty.",
-  agentsClaudeTitle: "Claude",
-  agentsClaude:
-    "Customize, Connectors, Add custom connector. Name it Quick Market, paste this URL, and leave OAuth blank. Then turn the connector on in the chat. Claude also connects from its own cloud, so the URL is the public one.",
-  agentsOtherTitle: "Other clients",
-  agentsOther: "Any other client that takes a remote MCP URL uses this address. This address is the network on screen. The other network is the same path with its own ?chain= value.",
-  agentsToken: "Session",
-  agentsTokenHint: "This token is already on the connector URL. Connecting with that URL signs in this account.",
-  agentsTokenMissing: "Sign in on this page first. The connector URL then includes your session token.",
-  agentsTools: "These tools read the book, sign in, place one buy-in on this market, claim this market's testnet grant every 2 minutes, and withdraw. The other network is the other connector URL.",
+  agentsGrok: "Connectors, then Custom. Paste the link. Leave auth empty.",
+  agentsClaude: "Customize, Connectors, add a custom connector named Quick Market. Paste the link. Leave OAuth empty.",
+  agentsChat: "Plugins, add a custom MCP server. Paste the link. Choose no authentication.",
+  agentsOtherMarket: "Sign in on that market for its link.",
   nearReport: {
     treasury: (account) => `near-testnet treasury ${account}`,
     near: (have, need) => `NEAR ${have} (need ${need})`,
@@ -550,21 +538,15 @@ const zhTW: Copy = {
   approveNear: "請在 Meteor 核准登入",
   waitingNear: "正在等待 Meteor",
   agentsLabel: "代理",
-  agentsLine: "Grok、Claude 或其他 MCP 客戶端可以在這裡交易。",
-  agentsUrl: "連接網址",
+  agentsLine: "Grok、Claude 或 ChatGPT。",
+  agentsSignIn: "請先登入。",
+  agentsIntro: "貼上連結。這個連結已經登入那個市場。",
   agentsCopy: "複製",
   agentsCopied: "已複製",
-  agentsGrokTitle: "Grok",
-  agentsGrok: "選 New Connector，再選 Custom，貼上這個網址。Grok 的伺服器必須能連到公開的 HTTPS 網址，這些網域已經是。額外的驗證留空。",
-  agentsClaudeTitle: "Claude",
-  agentsClaude:
-    "打開 Customize，再打開 Connectors，新增自訂連接器。名稱填 Quick Market，貼上這個網址，OAuth 留空。然後在對話裡打開這個連接器。Claude 也是從它自己的雲端連線，所以用的是公開網址。",
-  agentsOtherTitle: "其他客戶端",
-  agentsOther: "任何接受遠端 MCP 網址的客戶端都用這個地址。這個地址是畫面上的這個網路。另一個網路是同一個路徑，換它自己的 ?chain= 值。",
-  agentsToken: "登入憑證",
-  agentsTokenHint: "這組憑證已經在上面的連接網址裡。用那個網址連上就會登入這個帳戶。",
-  agentsTokenMissing: "請先在這個頁面登入。連接網址就會帶上你的登入憑證。",
-  agentsTools: "這些工具可以讀盤口、登入、在這個市場下一注、每 2 分鐘領取這個市場的測試網撥款，以及提領。另一個網路用另一個連接網址。",
+  agentsGrok: "選 Connectors，再選 Custom，貼上連結。驗證留空。",
+  agentsClaude: "選 Customize，再選 Connectors，新增名為 Quick Market 的自訂連接器，貼上連結。OAuth 留空。",
+  agentsChat: "選 Plugins，新增自訂 MCP 伺服器，貼上連結，選不驗證。",
+  agentsOtherMarket: "到那個市場登入，才會有它的連結。",
   nearReport: {
     treasury: (account) => `near-testnet 金庫 ${account}`,
     near: (have, need) => `NEAR ${have}（需要 ${need}）`,

@@ -2,7 +2,7 @@ import { beforeEach, expect, test } from "bun:test"
 import { getDb, useDatabase } from "./db"
 import { GRANT_FOLLOW_MS, MINT_CONFIRMATIONS } from "../shared/mint"
 import { loadMarket, marketPreferences } from "../shared/market"
-import { applyGrant, cutoverAmount, grantDue, grantOnSignIn, grantSettings, noteGrantTx, settleGrantRequest } from "./grant"
+import { applyGrant, cutoverAmount, grantDue, grantOnSignIn, grantSettings, noteGrantTx, resumePendingGrants, settleGrantRequest } from "./grant"
 import { youFor } from "./rounds"
 
 const who = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -77,7 +77,7 @@ test("a second grant does not mint while one is still in flight", async () => {
   })
   await new Promise((resolve) => setTimeout(resolve, 0))
   expect(mints).toBe(1)
-  expect(youFor(who)?.grantPending).toEqual({ startedAt: 0, txHash: hash, confirmations: MINT_CONFIRMATIONS })
+  expect(youFor(who)?.grantPending).toEqual({ startedAt: 0, txHash: hash, seen: 1, confirmations: MINT_CONFIRMATIONS })
   const second = await applyGrant({
     address: who,
     now: 0,
@@ -200,6 +200,77 @@ test("a grant that finishes without a hash is done", async () => {
     hash: new Promise<string>(() => {}),
   })
   expect(settled).toEqual({ kind: "done", value: false })
+})
+
+test("grant progress moves from zero to the hash and then up to three", async () => {
+  const hash = `0x${"cd".repeat(32)}`
+  let release: () => void = () => {}
+  const gate = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const done = applyGrant({
+    address: who,
+    now: 0,
+    chainKey: "base-sepolia",
+    amount: 100_000_000,
+    intervalMs: hour,
+    mint: async (_amount, progress) => {
+      expect(youFor(who)?.grantPending).toEqual({ startedAt: 0, txHash: null, seen: 0, confirmations: MINT_CONFIRMATIONS })
+      progress({ txHash: hash, seen: 1 })
+      progress({ seen: 2 })
+      progress({ seen: 1 })
+      expect(youFor(who)?.grantPending?.seen).toBe(2)
+      await gate
+      progress({ seen: 3 })
+    },
+  })
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  expect(youFor(who)?.grantPending?.seen).toBe(2)
+  expect(youFor(who)?.grantPending?.txHash).toBe(hash)
+  release()
+  expect(await done).toBe(true)
+  expect(youFor(who)?.grantPending).toBeNull()
+  expect(youFor(who)?.balanceMicros).toBe(100_000_000)
+})
+
+test("a resumed hash is watched and credited without minting again", async () => {
+  const hash = `0x${"ef".repeat(32)}`
+  getDb()
+    .query(
+      "INSERT INTO users (chain_key, address, balance_micros, created_at, grant_pending_at, grant_tx, grant_seen) VALUES ('base-sepolia', ?, 0, 0, ?, ?, 1)",
+    )
+    .run(who, 40, hash)
+  let watched = ""
+  await resumePendingGrants({
+    chainKey: "base-sepolia",
+    amount: 100_000_000,
+    watch: async (got, report) => {
+      watched = got
+      report({ seen: 2 })
+      expect(youFor(who)?.grantPending?.seen).toBe(2)
+      report({ seen: 3 })
+    },
+  })
+  expect(watched).toBe(hash)
+  expect(youFor(who)?.grantPending).toBeNull()
+  expect(youFor(who)?.grantAt).toBe(40)
+  expect(youFor(who)?.balanceMicros).toBe(100_000_000)
+})
+
+test("a pending grant with no hash is cleared on resume", async () => {
+  getDb()
+    .query("INSERT INTO users (chain_key, address, balance_micros, created_at, grant_pending_at) VALUES ('base-sepolia', ?, 0, 0, ?)")
+    .run(who, Date.now())
+  await resumePendingGrants({
+    chainKey: "base-sepolia",
+    amount: 100_000_000,
+    watch: async () => {
+      throw new Error("no hash to watch")
+    },
+  })
+  expect(youFor(who)?.grantPending).toBeNull()
+  expect(youFor(who)?.balanceMicros).toBe(0)
+  expect(youFor(who)?.grantAt).toBeNull()
 })
 
 test("grant timing and cutover are pure", () => {

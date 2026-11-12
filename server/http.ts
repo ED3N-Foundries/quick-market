@@ -7,7 +7,7 @@ import type { PublicConfig } from "../shared/market"
 import { priceSource, viewMs, windowMs } from "./config"
 import { getDb } from "./db"
 import { feedsNow } from "./feeds"
-import { grantOnSignIn, grantSettings, noteGrantTx, settleGrantRequest, startGrant } from "./grant"
+import { grantOnSignIn, grantSettings, startGrant } from "./grant"
 import { listArchives } from "./archive"
 import {
   averageQueryStats,
@@ -45,7 +45,7 @@ export type HttpDeps = {
   treasuryReport: () => unknown
   fundingReport: () => Promise<unknown>
   grantsOpen: () => boolean
-  mint: (amount: number, onHash?: (hash: string) => void) => Promise<void>
+  mint: (amount: number, report?: (progress: { txHash?: string; seen: number }) => void) => Promise<void>
   withdraw: (address: string, amount: number) => Promise<{ ok: boolean; error?: string; you?: unknown; txHash?: string }>
   publish: () => void
   streamMetrics: () => unknown
@@ -272,7 +272,7 @@ async function postSession(req: Request): Promise<Response> {
       chainKey,
       amount: settings.amount,
       intervalMs: settings.intervalMs,
-      mint: (amount) => http.mint(amount, (hash) => noteGrantTx(result.you.address, hash, chainKey)),
+      mint: (amount, report) => http.mint(amount, report),
     })
     if (started.claimed) {
       void started.done.catch((error) => {
@@ -297,64 +297,28 @@ async function postGrant(req: Request): Promise<Response> {
   const now = Date.now()
   const settings = grantSettings()
   const chainKey = http.chainKey()
-  let seenHash: string | null = null
-  let reportHash: (hash: string) => void = () => {}
-  const hashPromise = new Promise<string>((resolve) => {
-    reportHash = (hash) => {
-      if (seenHash) return
-      seenHash = hash
-      resolve(hash)
-    }
-  })
   const started = startGrant({
     address,
     now,
     chainKey,
     amount: settings.amount,
     intervalMs: settings.intervalMs,
-    mint: (amount) =>
-      http.mint(amount, (hash) => {
-        noteGrantTx(address, hash, chainKey)
-        reportHash(hash)
-      }),
+    mint: (amount, report) => http.mint(amount, report),
   })
-  if (!started.claimed) {
-    const you = youFor(address)
-    return json({
-      granted: false,
-      pending: Boolean(you?.grantPending),
-      txHash: you?.grantPending?.txHash ?? null,
-      confirmations: MINT_CONFIRMATIONS,
-      you,
+  if (started.claimed) {
+    void started.done.catch((error) => {
+      console.error(error instanceof Error ? error.message : error)
     })
   }
-  const done = started.done
-  try {
-    const settled = await settleGrantRequest({ done, hash: hashPromise })
-    if (settled.kind === "pending") {
-      void done.then(
-        () => undefined,
-        (error) => console.error(error instanceof Error ? error.message : error),
-      )
-      return json({
-        granted: false,
-        pending: true,
-        txHash: settled.txHash,
-        confirmations: MINT_CONFIRMATIONS,
-        you: youFor(address),
-      })
-    }
-    return json({
-      granted: settled.value,
-      pending: false,
-      txHash: seenHash,
-      confirmations: MINT_CONFIRMATIONS,
-      you: youFor(address),
-    })
-  } catch (error) {
-    console.error(error instanceof Error ? error.message : error)
-    return json({ error: "The grant did not land. Try again.", txHash: seenHash, you: youFor(address) }, 502)
-  }
+  const you = youFor(address)
+  return json({
+    granted: false,
+    pending: Boolean(you?.grantPending),
+    txHash: you?.grantPending?.txHash ?? null,
+    seen: you?.grantPending?.seen ?? 0,
+    confirmations: MINT_CONFIRMATIONS,
+    you,
+  })
 }
 
 async function postWithdraw(req: Request): Promise<Response> {

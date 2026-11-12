@@ -116,8 +116,8 @@ function grantsOpen(): boolean {
   return runtimeFor().grantsOpen
 }
 
-function mintTreasury(amount: number, onHash?: (hash: string) => void): Promise<void> {
-  return runtimeFor().mint(amount, onHash)
+function mintTreasury(amount: number, report?: (progress: { txHash?: string; seen: number }) => void): Promise<void> {
+  return runtimeFor().mint(amount, report)
 }
 
 let pending: { price: string; exchangeTs: number; source: PriceSource } | null = null

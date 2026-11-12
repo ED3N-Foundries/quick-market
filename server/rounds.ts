@@ -380,9 +380,10 @@ function openBuyInsFor(address: string): OpenBuyIn[] {
   return rows.map((row) => ({ roundId: row.round_id, side: row.side, stakeMicros: row.stake_micros }))
 }
 
-function grantPendingFrom(pendingAt: number | null, txHash: string | null): GrantPending | null {
+function grantPendingFrom(pendingAt: number | null, txHash: string | null, seen: number | null): GrantPending | null {
   if (pendingAt == null) return null
-  return { startedAt: pendingAt, txHash, confirmations: MINT_CONFIRMATIONS }
+  const steps = typeof seen === "number" && Number.isFinite(seen) ? Math.max(0, Math.min(MINT_CONFIRMATIONS, Math.floor(seen))) : 0
+  return { startedAt: pendingAt, txHash, seen: steps, confirmations: MINT_CONFIRMATIONS }
 }
 
 /** A crashed mint must not stick. A live waiter in this process keeps the slot. */
@@ -396,23 +397,23 @@ function releaseStaleGrant(address: string, now = Date.now()) {
   const key = normalizeAddress(address) ?? address
   if (grantWaiting(key)) return
   getDb()
-    .query("UPDATE users SET grant_pending_at = NULL, grant_tx = NULL WHERE chain_key = ? AND address = ? AND grant_pending_at = ?")
+    .query("UPDATE users SET grant_pending_at = NULL, grant_tx = NULL, grant_seen = 0 WHERE chain_key = ? AND address = ? AND grant_pending_at = ?")
     .run(activeChainKey(), address, pendingAt)
 }
 
 export function youFor(address: string): You | null {
   releaseStaleGrant(address)
   const row = getDb()
-    .query("SELECT balance_micros, grant_at, grant_pending_at, grant_tx FROM users WHERE chain_key = ? AND address = ?")
+    .query("SELECT balance_micros, grant_at, grant_pending_at, grant_tx, grant_seen FROM users WHERE chain_key = ? AND address = ?")
     .get(activeChainKey(), address) as
-    | { balance_micros: number; grant_at: number | null; grant_pending_at: number | null; grant_tx: string | null }
+    | { balance_micros: number; grant_at: number | null; grant_pending_at: number | null; grant_tx: string | null; grant_seen: number | null }
     | null
   if (!row) return null
   return {
     address,
     balanceMicros: row.balance_micros,
     grantAt: row.grant_at,
-    grantPending: grantPendingFrom(row.grant_pending_at, row.grant_tx),
+    grantPending: grantPendingFrom(row.grant_pending_at, row.grant_tx, row.grant_seen),
     openBuyIns: openBuyInsFor(address),
   }
 }
@@ -502,18 +503,19 @@ export function placeBuyIn(input: {
 
       releaseStaleGrant(input.address, input.now)
       const row = getDb()
-        .query("SELECT balance_micros, grant_at, grant_pending_at, grant_tx FROM users WHERE chain_key = ? AND address = ?")
+        .query("SELECT balance_micros, grant_at, grant_pending_at, grant_tx, grant_seen FROM users WHERE chain_key = ? AND address = ?")
         .get(activeChainKey(), input.address) as
         | {
             balance_micros: number
             grant_at: number | null
             grant_pending_at: number | null
             grant_tx: string | null
+            grant_seen: number | null
           }
         | null
       let balance = row?.balance_micros ?? 0
       const grantAt = row?.grant_at ?? null
-      const grantPending = grantPendingFrom(row?.grant_pending_at ?? null, row?.grant_tx ?? null)
+      const grantPending = grantPendingFrom(row?.grant_pending_at ?? null, row?.grant_tx ?? null, row?.grant_seen ?? null)
       if (!row) {
         getDb()
           .query("INSERT INTO users (chain_key, address, balance_micros, created_at) VALUES (?, ?, 0, ?)")

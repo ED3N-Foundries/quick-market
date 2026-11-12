@@ -2,10 +2,10 @@ import { moneyLabel, requireSepoliaToken, tokenKind, tokenLabel, type ChainConfi
 import { requireNearToken, type TreasuryReport } from "../shared/near"
 import { accountFromSecret } from "../shared/nearKey"
 import { withChain } from "./activeChain"
-import { mintToTreasury, requestWithdraw, startCustody, treasuryAddress } from "./custody"
+import { mintToTreasury, requestWithdraw, startCustody, treasuryAddress, watchMint } from "./custody"
 import { getDb } from "./db"
 import { chainConfig, loadEnv, nearTreasurySecret } from "./env"
-import { grantSettings } from "./grant"
+import { grantSettings, resumePendingGrants } from "./grant"
 import {
   assertLedgerChain,
   bootNear,
@@ -13,6 +13,7 @@ import {
   mintNearToTreasury,
   requestNearWithdraw,
   startNearCustody,
+  watchNearGrant,
 } from "./near"
 import type { You } from "./rounds"
 
@@ -24,7 +25,7 @@ export type ChainRuntime = {
   moneyLabel: string
   tokenKind: ReturnType<typeof tokenKind>
   tokenLabel: string
-  mint: (amount: number, onHash?: (hash: string) => void) => Promise<void>
+  mint: (amount: number, report?: (progress: { txHash?: string; seen: number }) => void) => Promise<void>
   withdraw: (
     address: string,
     amount: number,
@@ -47,6 +48,14 @@ async function startScoped(key: ChainKey): Promise<ChainRuntime> {
     getDb()
     await bootNear(treasury)
     startNearCustody(treasury)
+    const settings = grantSettings()
+    void resumePendingGrants({
+      chainKey: chain.key,
+      amount: settings.amount,
+      watch: (hash, report) => withChain(chain.key, () => watchNearGrant(treasury, hash, report)),
+    }).catch((error) => {
+      console.error(error instanceof Error ? error.message : error)
+    })
     return {
       chain,
       treasury,
@@ -62,11 +71,20 @@ async function startScoped(key: ChainKey): Promise<ChainRuntime> {
   }
 
   requireSepoliaToken(chain)
-  grantSettings()
+  const settings = grantSettings()
   const treasury = treasuryAddress()
   getDb()
   assertLedgerChain(chain.key, env.dbPath)
   startCustody()
+  if (chain.key === "base-sepolia") {
+    void resumePendingGrants({
+      chainKey: chain.key,
+      amount: settings.amount,
+      watch: (hash, report) => withChain(chain.key, () => watchMint(hash as `0x${string}`, report)),
+    }).catch((error) => {
+      console.error(error instanceof Error ? error.message : error)
+    })
+  }
   return {
     chain,
     treasury,

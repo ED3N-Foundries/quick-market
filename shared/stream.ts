@@ -46,6 +46,8 @@ export type OpenBuyIn = { roundId: number; side: Side; stakeMicros: number }
 export type GrantPending = {
   startedAt: number
   txHash: string | null
+  /** How many of `confirmations` the server has seen. 0 as soon as the grant is claimed. */
+  seen: number
   confirmations: number
 }
 

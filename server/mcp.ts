@@ -9,7 +9,7 @@ import { NEP413_RECIPIENT } from "../shared/nearKey"
 import type { PublicConfig } from "../shared/market"
 import { activeChainKey, withChain } from "./activeChain"
 import { chainConfig } from "./env"
-import { grantOnSignIn, grantSettings, noteGrantTx, settleGrantRequest, startGrant } from "./grant"
+import { grantOnSignIn, grantSettings, startGrant } from "./grant"
 import { normalizeAccount, parseMicros } from "./money"
 import {
   accountResults,
@@ -30,7 +30,7 @@ import { endSessionToken, openSession, readSessionToken } from "./session"
 export type McpDeps = {
   markets: () => { defaultChainKey: ChainKey; markets: PublicConfig[] }
   grantsOpen: () => boolean
-  mint: (amount: number, onHash?: (hash: string) => void) => Promise<void>
+  mint: (amount: number, report?: (progress: { txHash?: string; seen: number }) => void) => Promise<void>
   withdraw: (address: string, amount: number) => Promise<{ ok: boolean; error?: string; you?: unknown; txHash?: string }>
   publish: () => void
 }
@@ -128,7 +128,7 @@ function beginGrant(deps: McpDeps, address: string) {
     chainKey,
     amount: settings.amount,
     intervalMs: settings.intervalMs,
-    mint: (amount) => deps.mint(amount, (hash) => noteGrantTx(address, hash, chainKey)),
+    mint: (amount, report) => deps.mint(amount, report),
   })
   if (started.claimed) {
     void started.done.catch((error) => {
@@ -477,85 +477,31 @@ async function claimGrant(accounts: Map<string, Bound>, deps: McpDeps, raw: stri
   const now = Date.now()
   const settings = grantSettings()
   const chainKey = activeChainKey()
-  let seenHash: string | null = null
-  let reportHash: (hash: string) => void = () => {}
-  const hashPromise = new Promise<string>((resolve) => {
-    reportHash = (hash) => {
-      if (seenHash) return
-      seenHash = hash
-      resolve(hash)
-    }
-  })
   const started = startGrant({
     address,
     now,
     chainKey,
     amount: settings.amount,
     intervalMs: settings.intervalMs,
-    mint: (amount) =>
-      deps.mint(amount, (hash) => {
-        noteGrantTx(address, hash, chainKey)
-        reportHash(hash)
-      }),
+    mint: (amount, report) => deps.mint(amount, report),
   })
-  if (!started.claimed) {
-    const you = youFor(address)
-    return textResult({
-      address,
-      balanceMicros: you?.balanceMicros ?? 0,
-      granted: false,
-      pending: Boolean(you?.grantPending),
-      txHash: you?.grantPending?.txHash ?? null,
-      confirmations: MINT_CONFIRMATIONS,
-      you,
-      ...grantView(address),
+  if (started.claimed) {
+    void started.done.catch((error) => {
+      console.error(error instanceof Error ? error.message : error)
     })
   }
-  const done = started.done
-  try {
-    const settled = await settleGrantRequest({ done, hash: hashPromise })
-    const you = youFor(address)
-    if (settled.kind === "pending") {
-      void done.then(
-        () => undefined,
-        (error) => console.error(error instanceof Error ? error.message : error),
-      )
-      return textResult({
-        address,
-        balanceMicros: you?.balanceMicros ?? 0,
-        granted: false,
-        pending: true,
-        txHash: settled.txHash,
-        confirmations: MINT_CONFIRMATIONS,
-        you,
-        ...grantView(address),
-      })
-    }
-    return textResult({
-      address,
-      balanceMicros: you?.balanceMicros ?? 0,
-      granted: settled.value,
-      pending: false,
-      txHash: seenHash,
-      confirmations: MINT_CONFIRMATIONS,
-      you,
-      ...grantView(address),
-    })
-  } catch (error) {
-    console.error(error instanceof Error ? error.message : error)
-    const you = youFor(address)
-    return textResult(
-      {
-        error: "The grant did not land. Try again.",
-        address,
-        balanceMicros: you?.balanceMicros ?? 0,
-        txHash: seenHash,
-        you,
-        ...grantView(address),
-      },
-      true,
-    )
-  }
+  const you = youFor(address)
+  return textResult({
+    address,
+    balanceMicros: you?.balanceMicros ?? 0,
+    granted: false,
+    pending: Boolean(you?.grantPending),
+    txHash: you?.grantPending?.txHash ?? null,
+    seen: you?.grantPending?.seen ?? 0,
+    confirmations: MINT_CONFIRMATIONS,
+    you,
+    ...grantView(address),
+  })
 }
 
 /** Streamable HTTP on `/mcp`. One connection remembers every account that signed in on it. */

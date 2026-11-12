@@ -13,7 +13,8 @@ import {
 } from "./format"
 import { localize } from "./copy"
 import { useI18n } from "./i18n"
-import { ChainLogo } from "./logos"
+import { AGENT_CHAINS, connectorUrl } from "./agentsUrl"
+import { ClaudeLogo, ChainLogo, GrokLogo, OpenAiLogo } from "./logos"
 import { TokenBadge } from "./App"
 import { useSession } from "./wallet"
 
@@ -333,19 +334,20 @@ export function WithdrawOverlay({
   )
 }
 
-function connectorUrl(chainKey: string, token: string | null): string {
-  const url = new URL("/mcp", window.location.origin)
-  url.searchParams.set("chain", chainKey)
-  if (token) url.searchParams.set("token", token)
-  return url.toString()
-}
+const agentClients = [
+  { Logo: GrokLogo, name: "Grok", href: "https://grok.com/connectors", label: "grok.com/connectors", text: "agentsGrok" },
+  { Logo: ClaudeLogo, name: "Claude", href: null, label: null, text: "agentsClaude" },
+  { Logo: OpenAiLogo, name: "ChatGPT", href: "https://chatgpt.com/plugins", label: "chatgpt.com/plugins", text: "agentsChat" },
+] as const
 
 export function AgentsOverlay({ chainKey, onClose }: { chainKey: string; onClose: () => void }) {
   const { text } = useI18n()
   const session = useSession()
-  const token = session.pageChain?.key === chainKey && session.token ? session.token : null
-  const [copied, setCopied] = useState<"url" | "token" | null>(null)
-  const url = connectorUrl(chainKey, token)
+  const signedIn = session.pageChain?.key === chainKey ? session.token : null
+  const [copied, setCopied] = useState<string | null>(null)
+  useEffect(() => {
+    if (!session.token) onClose()
+  }, [session.token, onClose])
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") onClose()
@@ -353,12 +355,13 @@ export function AgentsOverlay({ chainKey, onClose }: { chainKey: string; onClose
     window.addEventListener("keydown", onKey)
     return () => window.removeEventListener("keydown", onKey)
   }, [onClose])
-  const copy = (value: string, which: "url" | "token") => {
+  const copy = (value: string, which: string) => {
     void navigator.clipboard.writeText(value).then(
       () => setCopied(which),
       () => setCopied(null),
     )
   }
+  const labelFor = (key: (typeof AGENT_CHAINS)[number]) => (key === "near-testnet" ? text.chainNearNetwork : text.chainTestnetNetwork)
   return (
     <div className="fund-back" onClick={onClose}>
       <div
@@ -374,43 +377,42 @@ export function AgentsOverlay({ chainKey, onClose }: { chainKey: string; onClose
             {"×"}
           </button>
         </header>
-        <p>{text.agentsLine}</p>
-        <div className="agents-url-row">
-          <span className="agents-url-label">{text.agentsUrl}</span>
-          <code className="agents-url">{url}</code>
-          <button type="button" onClick={() => copy(url, "url")}>
-            {copied === "url" ? text.agentsCopied : text.agentsCopy}
-          </button>
-        </div>
-        {token ? (
-          <>
-            <div className="agents-url-row">
-              <span className="agents-url-label">{text.agentsToken}</span>
-              <code className="agents-url">{token}</code>
-              <button type="button" onClick={() => copy(token, "token")}>
-                {copied === "token" ? text.agentsCopied : text.agentsCopy}
-              </button>
+        <p>{text.agentsIntro}</p>
+        {AGENT_CHAINS.map((key) => {
+          const token = key === chainKey ? signedIn : null
+          const url = connectorUrl(window.location.origin, key, token)
+          return (
+            <div key={key} className="agents-market">
+              <div className="agents-url-row">
+                <span className="agents-url-label">{labelFor(key)}</span>
+                <code className="agents-url">{url}</code>
+                <button type="button" onClick={() => copy(url, key)}>
+                  {copied === key ? text.agentsCopied : text.agentsCopy}
+                </button>
+              </div>
+              {!token && <p className="agents-url-note">{text.agentsOtherMarket}</p>}
             </div>
-            <p>{text.agentsTokenHint}</p>
-          </>
-        ) : (
-          <p>{text.agentsTokenMissing}</p>
-        )}
+          )
+        })}
         <div className="agents-steps">
-          <h3>{text.agentsGrokTitle}</h3>
-          <p>
-            <a href="https://grok.com/connectors" target="_blank" rel="noreferrer">
-              grok.com/connectors
-            </a>
-            {". "}
-            {text.agentsGrok}
-          </p>
-          <h3>{text.agentsClaudeTitle}</h3>
-          <p>{text.agentsClaude}</p>
-          <h3>{text.agentsOtherTitle}</h3>
-          <p>{text.agentsOther}</p>
+          {agentClients.map((client) => (
+            <div key={client.name} className="agents-client">
+              <client.Logo />
+              <p>
+                <strong>{client.name}. </strong>
+                {client.href && client.label ? (
+                  <>
+                    <a href={client.href} target="_blank" rel="noreferrer">
+                      {client.label}
+                    </a>
+                    {". "}
+                  </>
+                ) : null}
+                {text[client.text]}
+              </p>
+            </div>
+          ))}
         </div>
-        <p>{text.agentsTools}</p>
       </div>
     </div>
   )

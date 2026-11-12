@@ -14,6 +14,7 @@ const CHAIN_TABLES: Record<string, string> = {
     grant_at INTEGER,
     grant_pending_at INTEGER,
     grant_tx TEXT,
+    grant_seen INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (chain_key, address)
   )`,
   rounds: `CREATE TABLE IF NOT EXISTS rounds (
@@ -331,7 +332,15 @@ function openDatabase(path: string): Database {
   ensureHealthIndexes(db)
   ensureHealthPxxColumns(db)
   migrateCustody(db)
+  ensureGrantSeen(db)
   return db
+}
+
+/** Existing ledgers predate the grant meter. The count starts at zero. */
+function ensureGrantSeen(db: Database) {
+  if (!tableNames(db).has("users")) return
+  if (tableColumns(db, "users").includes("grant_seen")) return
+  db.exec("ALTER TABLE users ADD COLUMN grant_seen INTEGER NOT NULL DEFAULT 0")
 }
 
 function tableNames(db: Database, schema = "main"): Set<string> {

@@ -208,6 +208,7 @@ async function submit(input: {
   secretKey: string
   receiverId: string
   actions: number[][]
+  waitUntil?: "INCLUDED" | "EXECUTED" | "FINAL"
 }): Promise<string> {
   const viewed = await nextNonce(input.signerId, input.secretKey)
   const signed = await signTransaction({
@@ -220,10 +221,39 @@ async function submit(input: {
   })
   const result = (await rpc("send_tx", {
     signed_tx_base64: Buffer.from(signed.signed).toString("base64"),
-    wait_until: "EXECUTED",
+    wait_until: input.waitUntil ?? "EXECUTED",
   })) as { status?: { Failure?: unknown }; transaction?: { hash?: string } }
   if (result.status && "Failure" in result.status) throw new Error(JSON.stringify(result.status.Failure))
   return result.transaction?.hash ?? signed.hash
+}
+
+type NearTxStatus = { status?: { Failure?: unknown; SuccessValue?: unknown } }
+
+function nearTxFailed(result: NearTxStatus): boolean {
+  return Boolean(result.status && "Failure" in result.status)
+}
+
+/** Included is step 1, executed is step 2, final is step 3. Does not send another transaction. */
+export async function watchNearGrant(
+  signerId: string,
+  hash: string,
+  report: (progress: { txHash?: string; seen: number }) => void,
+): Promise<void> {
+  report({ txHash: hash, seen: 1 })
+  const executed = (await rpc("EXPERIMENTAL_tx_status", {
+    tx_hash: hash,
+    sender_account_id: signerId,
+    wait_until: "EXECUTED",
+  })) as NearTxStatus
+  if (nearTxFailed(executed)) throw new Error(JSON.stringify(executed.status?.Failure))
+  report({ seen: 2 })
+  const final = (await rpc("EXPERIMENTAL_tx_status", {
+    tx_hash: hash,
+    sender_account_id: signerId,
+    wait_until: "FINAL",
+  })) as NearTxStatus
+  if (nearTxFailed(final)) throw new Error(JSON.stringify(final.status?.Failure))
+  report({ seen: 3 })
 }
 
 export function ledgerSumMicros(): bigint {
@@ -359,7 +389,10 @@ export async function inspectNear(treasury: string): Promise<TreasuryReport> {
   }
 }
 
-export async function mintNearToTreasury(amountMicros: number, onHash?: (hash: string) => void): Promise<void> {
+export async function mintNearToTreasury(
+  amountMicros: number,
+  report?: (progress: { txHash?: string; seen: number }) => void,
+): Promise<void> {
   if (!Number.isSafeInteger(amountMicros) || amountMicros <= 0) throw new Error("Amount is invalid")
   const env = loadEnv()
   const treasury = await accountFromSecret(signingKey())
@@ -370,9 +403,10 @@ export async function mintNearToTreasury(amountMicros: number, onHash?: (hash: s
       secretKey: signingKey(),
       receiverId: env.tokenAccount.trim(),
       actions: [encodeFunctionCall("mint", jsonArgs({ account_id: treasury, amount: String(amountMicros) }), GAS, 0n)],
+      waitUntil: "INCLUDED",
     }),
   )
-  onHash?.(hash)
+  await watchNearGrant(treasury, hash, (progress) => report?.(progress))
 }
 
 function debitWithdraw(address: string, amountMicros: number, raw: string, hash: string): string {

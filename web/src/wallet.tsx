@@ -81,10 +81,12 @@ function sessionYou(value: unknown): You | null {
   if (pending && typeof pending === "object") {
     const startedAt = pending.startedAt
     const confirmations = pending.confirmations
+    const seen = pending.seen
     if (typeof startedAt === "number" && Number.isSafeInteger(startedAt)) {
       grantPending = {
         startedAt,
         txHash: typeof pending.txHash === "string" ? pending.txHash : null,
+        seen: typeof seen === "number" && Number.isSafeInteger(seen) ? seen : 0,
         confirmations: typeof confirmations === "number" && Number.isSafeInteger(confirmations) ? confirmations : 3,
       }
     }

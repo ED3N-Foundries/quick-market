@@ -1129,6 +1129,10 @@ button.grant-status:disabled { cursor: default; }
   letter-spacing: 0;
   text-transform: none;
 }
+.stake-input:focus-within {
+  outline: 1px solid rgba(243, 240, 232, 0.4);
+  outline-offset: 2px;
+}
 .stake-field input {
   flex: 1;
   min-width: 0;
@@ -1143,6 +1147,8 @@ button.grant-status:disabled { cursor: default; }
   text-transform: none;
   opacity: 1;
 }
+.stake-field input:focus,
+.stake-field input:focus-visible { outline: none; }
 .stake-field input:disabled { color: var(--text); opacity: 1; cursor: default; }
 .chips, .funds { display: flex; gap: 6px; }
 .chips { margin-top: 8px; }
@@ -1178,8 +1184,12 @@ button.grant-status:disabled { cursor: default; }
   font-size: 13px;
   line-height: 1.45;
 }
-.agents-steps { display: flex; flex-direction: column; gap: 8px; }
-.agents-steps h3 { margin: 8px 0 0; font-size: 13px; }
+.agents-steps { display: flex; flex-direction: column; gap: 10px; }
+.agents-client { display: flex; gap: 8px; align-items: flex-start; }
+.agents-client svg { width: 16px; height: 16px; flex: none; margin-top: 2px; }
+.agents-client p strong { color: var(--text); font-weight: 600; }
+.agents-market { display: flex; flex-direction: column; gap: 4px; }
+.agents-url-note { margin: 0; }
 .agents-url-row {
   display: flex;
   flex-wrap: wrap;
@@ -1211,6 +1221,10 @@ button.grant-status:disabled { cursor: default; }
   cursor: pointer;
 }
 .agents-box strong { color: var(--text); font-size: 13px; font-weight: 600; }
+.agents-box:disabled { cursor: default; }
+.agents-head { display: flex; align-items: center; gap: 8px; }
+.agents-logos { display: inline-flex; align-items: center; gap: 6px; }
+.agents-logos svg { width: 16px; height: 16px; display: block; }
 .overlay-head {
   display: flex;
   justify-content: space-between;

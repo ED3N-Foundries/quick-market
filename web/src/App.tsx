@@ -34,7 +34,6 @@ import { readCachedBalance, visibleBalance } from "./balanceCache"
 import { TestnetBrief } from "./testnetBriefView"
 import { briefDue, readBriefAt, writeBriefAt } from "./testnetBrief"
 import { BALANCE_MS, balanceStep } from "./balanceMotion"
-import { readGrantConfirmations } from "./grantChain"
 import { grantLanded, grantTxUrl } from "./grantWatch"
 import { copy, localize } from "./copy"
 import { LanguageSelect, useI18n } from "./i18n"
@@ -44,7 +43,7 @@ import { FeedBadge } from "./venues"
 import { prefersReducedMotion } from "./sideFigures"
 import { useSideBook } from "./useSideBook"
 import { grantWaitStatus, loginStatus, shortWalletFault, SIGN_PROMPT } from "./phantomConnect"
-import { ChainLogo, NearLogo, PhantomLogo } from "./logos"
+import { ChainLogo, ClaudeLogo, GrokLogo, NearLogo, OpenAiLogo, PhantomLogo } from "./logos"
 import { ToastStack, useToasts } from "./toasts"
 import { useSession } from "./wallet"
 import { History } from "./history"
@@ -85,8 +84,6 @@ export function App({
   const [fundError, setFundError] = useState<string | null>(null)
   const [funding, setFunding] = useState(false)
   const [grantTx, setGrantTx] = useState<string | null>(null)
-  const [grantSeen, setGrantSeen] = useState(0)
-  const [grantNeeded, setGrantNeeded] = useState(MINT_CONFIRMATIONS)
   const [fundPhase, setFundPhase] = useState<"idle" | "phantom" | "confirming" | "pending">("idle")
   const [fundHash, setFundHash] = useState<string | null>(null)
   const [withdrawOpen, setWithdrawOpen] = useState(false)
@@ -117,28 +114,6 @@ export function App({
   useEffect(() => {
     if (!session.address) setWalletMenuOpen(false)
   }, [session.address])
-
-  const followHash = market.you?.grantPending?.txHash || (funding ? grantTx : null)
-  useEffect(() => {
-    if (!followHash) return
-    if (market.config.chainKey === "near-testnet") {
-      setGrantSeen(MINT_CONFIRMATIONS)
-      return
-    }
-    let cancel = false
-    setGrantSeen(0)
-    const tick = () => {
-      void readGrantConfirmations(followHash, market.config.chainId).then((seen) => {
-        if (!cancel) setGrantSeen((current) => Math.max(current, seen))
-      })
-    }
-    tick()
-    const id = window.setInterval(tick, 1_000)
-    return () => {
-      cancel = true
-      window.clearInterval(id)
-    }
-  }, [followHash, market.config.chainId, market.config.chainKey])
 
   const grantWatch = useRef<{ grantAt: number | null } | null>(null)
   useEffect(() => {
@@ -372,25 +347,22 @@ export function App({
       return
     }
     const txHash = grantPending?.txHash || grantTx
-    const needed = grantPending?.confirmations ?? grantNeeded
+    const needed = grantPending?.confirmations ?? MINT_CONFIRMATIONS
+    const seen = grantPending?.seen ?? 0
     upsertToast({
       id: "grant",
       kind: "progress",
       title: text.toastGrant,
-      text: txHash
-        ? grantWaitStatus({ seen: grantSeen, needed }, lang, market.config.chainKey)
-        : grantWaitStatus(undefined, lang, market.config.chainKey),
+      text: grantWaitStatus({ seen, needed }, lang, market.config.chainKey),
       txHash,
       txUrl: txHash ? grantTxUrl(market.config.chainId, txHash, market.config.chainKey) : null,
-      meter: txHash ? { seen: grantSeen, needed } : null,
+      meter: { seen, needed },
     })
   }, [
     grantPending,
     testnet,
     funding,
     grantTx,
-    grantSeen,
-    grantNeeded,
     lang,
     text.toastGrant,
     market.config.chainId,
@@ -832,7 +804,6 @@ export function App({
             setFundOpen(false)
             if (!funding) {
               setGrantTx(null)
-              setGrantSeen(0)
               setFundError(null)
             }
           }}
@@ -847,14 +818,11 @@ export function App({
             setFundOpen(false)
             setFundError(null)
             setGrantTx(null)
-            setGrantSeen(0)
-            setGrantNeeded(MINT_CONFIRMATIONS)
             const grantTxUrlFor = (txHash: string | null) =>
               txHash ? grantTxUrl(market.config.chainId, txHash, market.config.chainKey) : null
             void (async () => {
               const result = await market.claimGrant()
               if (result.txHash) setGrantTx(result.txHash)
-              if (result.ok) setGrantNeeded(result.confirmations)
               const follow = async () => {
                 const landed = await market.waitForGrant(before)
                 setFunding(false)
@@ -1044,11 +1012,26 @@ export function App({
         </div>
         <LanguageSelect />
       </footer>
-      <button type="button" className="agents-box" onClick={() => setAgentsOpen(true)}>
-        <strong>{text.agentsLabel}</strong>
-        <span>{text.agentsLine}</span>
+      <button
+        type="button"
+        className="agents-box"
+        disabled={!session.token}
+        aria-disabled={!session.token}
+        onClick={() => {
+          if (session.token) setAgentsOpen(true)
+        }}
+      >
+        <span className="agents-head">
+          <span className="agents-logos" aria-hidden="true">
+            <GrokLogo />
+            <ClaudeLogo />
+            <OpenAiLogo />
+          </span>
+          <strong>{text.agentsLabel}</strong>
+        </span>
+        <span>{session.token ? text.agentsLine : text.agentsSignIn}</span>
       </button>
-      {agentsOpen && <AgentsOverlay chainKey={market.config.chainKey} onClose={() => setAgentsOpen(false)} />}
+      {agentsOpen && session.token && <AgentsOverlay chainKey={market.config.chainKey} onClose={() => setAgentsOpen(false)} />}
     </div>
   )
 }
