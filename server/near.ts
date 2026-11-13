@@ -14,6 +14,7 @@ import {
   type Holding,
   type TreasuryReport,
 } from "../shared/near"
+import { MINT_CONFIRMATIONS, MINT_RECEIPT_TIMEOUT_MS } from "../shared/mint"
 import { accountFromSecret, parseNearPublicKey, publicKeyBytes } from "../shared/nearKey"
 import { encodeFunctionCall, jsonArgs, signTransaction } from "./nearTx"
 
@@ -86,9 +87,19 @@ const PRIMARY_QUIET_MS = 60_000
 
 let primaryQuietUntil = 0
 
+/** A timed-out or rate-limited NEAR call can be retried on the fallback. An execution failure cannot. */
 export function nearRpcBusy(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : ""
-  return message === "Server error" || message.startsWith("NEAR RPC returned")
+  if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) return true
+  const text = nearErrorText(error)
+  if (text === "Server error" || text.startsWith("NEAR RPC returned")) return true
+  const lower = text.toLowerCase()
+  return lower.includes("timeout_error") || lower.includes("timed out") || lower.includes("timeout")
+}
+
+function nearErrorText(error: unknown): string {
+  if (error instanceof Error) return error.message
+  if (error && typeof error === "object") return rpcErrorText(error as { message?: string; data?: unknown })
+  return ""
 }
 
 /** Skip a cooling public endpoint and use the documented fallback. A custom RPC stays put. */
@@ -97,11 +108,16 @@ export function nearRpcUrlFor(primary: string, now: number, quietUntil: number):
   return primary
 }
 
-async function rpcOnce(url: string, method: string, params: unknown): Promise<unknown> {
+/** A status read should return immediately. send_tx may wait to be included. */
+const STATUS_FETCH_MS = 8_000
+const SEND_FETCH_MS = 20_000
+
+async function rpcOnce(url: string, method: string, params: unknown, timeoutMs: number): Promise<unknown> {
   const response = await fetch(url, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ jsonrpc: "2.0", id: "quick-market", method, params }),
+    signal: AbortSignal.timeout(timeoutMs),
   })
   if (!response.ok) throw new Error(`NEAR RPC returned ${response.status}`)
   const body = (await response.json()) as { result?: unknown; error?: { message?: string; data?: unknown } }
@@ -109,22 +125,27 @@ async function rpcOnce(url: string, method: string, params: unknown): Promise<un
   return body.result
 }
 
-async function rpc(method: string, params: unknown): Promise<unknown> {
+async function rpc(
+  method: string,
+  params: unknown,
+  options?: { attempts?: number; timeoutMs?: number },
+): Promise<unknown> {
+  const timeoutMs = options?.timeoutMs ?? (method === "send_tx" ? SEND_FETCH_MS : STATUS_FETCH_MS)
   let last = "NEAR RPC failed"
-  const attempts = method === "send_tx" ? 1 : 4
+  const attempts = options?.attempts ?? (method === "send_tx" ? 1 : 4)
   for (let attempt = 0; attempt < attempts; attempt++) {
     const primary = nearRpcUrl()
     const url = nearRpcUrlFor(primary, Date.now(), primaryQuietUntil)
     try {
-      return await rpcOnce(url, method, params)
+      return await rpcOnce(url, method, params, timeoutMs)
     } catch (error) {
-      last = error instanceof Error ? error.message : "NEAR RPC failed"
+      last = rpcFailureText(error)
       if (nearRpcBusy(new Error(last)) && url === NEAR_PUBLIC_RPC) {
         primaryQuietUntil = Date.now() + PRIMARY_QUIET_MS
         try {
-          return await rpcOnce(NEAR_FALLBACK_RPC, method, params)
+          return await rpcOnce(NEAR_FALLBACK_RPC, method, params, timeoutMs)
         } catch (fallbackError) {
-          last = fallbackError instanceof Error ? fallbackError.message : last
+          last = rpcFailureText(fallbackError)
         }
       }
       if (!nearRpcBusy(new Error(last)) || attempt + 1 === attempts) break
@@ -132,6 +153,12 @@ async function rpc(method: string, params: unknown): Promise<unknown> {
     }
   }
   throw new Error(last)
+}
+
+function rpcFailureText(error: unknown): string {
+  if (error instanceof Error && error.message.trim()) return error.message
+  if (error instanceof Error && error.name) return error.name
+  return "NEAR RPC failed"
 }
 
 function missingAccount(error: unknown): boolean {
@@ -203,12 +230,21 @@ async function nextNonce(account: string, secretKey: string): Promise<{ nonce: b
   return { nonce: BigInt(result.nonce ?? 0) + 1n, blockHash: bs58.decode(result.block_hash), publicKey }
 }
 
+/** Included and not-yet-executed replies use a string status. Only an object can be a Failure. */
+export function nearExecutionFailed(status: unknown): { failed: true; reason: string } | { failed: false } {
+  if (!status || typeof status !== "object" || !("Failure" in status)) return { failed: false }
+  return { failed: true, reason: JSON.stringify(status.Failure) }
+}
+
 async function submit(input: {
   signerId: string
   secretKey: string
   receiverId: string
   actions: number[][]
-  waitUntil?: "INCLUDED" | "EXECUTED" | "FINAL"
+  waitUntil?: "NONE" | "INCLUDED" | "EXECUTED" | "FINAL"
+  /** A lost response can still be polled. The hash is known before the RPC answers. */
+  recoverHash?: boolean
+  onSigned?: (hash: string) => void
 }): Promise<string> {
   const viewed = await nextNonce(input.signerId, input.secretKey)
   const signed = await signTransaction({
@@ -219,41 +255,125 @@ async function submit(input: {
     blockHash: viewed.blockHash,
     actions: input.actions,
   })
-  const result = (await rpc("send_tx", {
-    signed_tx_base64: Buffer.from(signed.signed).toString("base64"),
-    wait_until: input.waitUntil ?? "EXECUTED",
-  })) as { status?: { Failure?: unknown }; transaction?: { hash?: string } }
-  if (result.status && "Failure" in result.status) throw new Error(JSON.stringify(result.status.Failure))
-  return result.transaction?.hash ?? signed.hash
+  input.onSigned?.(signed.hash)
+  try {
+    const result = (await rpc("send_tx", {
+      signed_tx_base64: Buffer.from(signed.signed).toString("base64"),
+      wait_until: input.waitUntil ?? "EXECUTED",
+    })) as { status?: unknown; transaction?: { hash?: string } }
+    const execution = nearExecutionFailed(result?.status)
+    if (execution.failed) throw new Error(execution.reason)
+    return result?.transaction?.hash ?? signed.hash
+  } catch (error) {
+    if (input.recoverHash && nearSubmitLost(error)) return signed.hash
+    throw error
+  }
 }
 
-type NearTxStatus = { status?: { Failure?: unknown; SuccessValue?: unknown } }
-
-function nearTxFailed(result: NearTxStatus): boolean {
-  return Boolean(result.status && "Failure" in result.status)
+/** A rejected transaction stays a failure. A timeout or a dropped socket can still land. */
+function nearSubmitLost(error: unknown): boolean {
+  const message = error instanceof Error ? error.message.toLowerCase() : ""
+  if (message.includes("invalidtx") || message.includes("actionerror") || message.includes("functioncallerror")) return false
+  if (nearRpcBusy(error)) return true
+  return (
+    message.includes("aborted") ||
+    message.includes("socket") ||
+    message.includes("fetch failed") ||
+    message.includes("econnreset") ||
+    message.includes("connection reset") ||
+    message.includes("connection closed") ||
+    message.includes("unable to connect")
+  )
 }
 
-/** Included is step 1, executed is step 2, final is step 3. Does not send another transaction. */
+export type NearGrantStatus = {
+  status?: { Failure?: unknown; SuccessValue?: unknown; SuccessReceiptId?: unknown }
+  final_execution_status?: unknown
+}
+
+function nearTxFailed(result: NearGrantStatus): boolean {
+  return nearExecutionFailed(result.status).failed
+}
+
+/**
+ * Step 1 is a known hash. Execution is step 2. Final is step 3.
+ * A success value with no finality field is already executed.
+ */
+export function nearGrantSeen(result: NearGrantStatus | null): { failed: boolean; seen: number } {
+  if (!result) return { failed: false, seen: 1 }
+  if (nearTxFailed(result)) return { failed: true, seen: 1 }
+  const level = typeof result.final_execution_status === "string" ? result.final_execution_status : ""
+  if (level === "FINAL") return { failed: false, seen: MINT_CONFIRMATIONS }
+  if (level === "EXECUTED" || level === "EXECUTED_OPTIMISTIC") return { failed: false, seen: MINT_CONFIRMATIONS - 1 }
+  const status = result.status
+  if (status && typeof status === "object" && ("SuccessValue" in status || "SuccessReceiptId" in status)) {
+    return { failed: false, seen: MINT_CONFIRMATIONS - 1 }
+  }
+  return { failed: false, seen: 1 }
+}
+
+/**
+ * One poll of a grant. Execution is enough once the receipt wait is over.
+ * Refund finality is the last meter tick, not a reason to drop the credit.
+ */
+export function nextNearGrantWatch(input: {
+  elapsedMs: number
+  deadlineMs: number
+  seen: number
+  status: NearGrantStatus | null
+}): { seen: number; done: boolean; failed: boolean } {
+  const step = nearGrantSeen(input.status)
+  if (step.failed) return { seen: input.seen, done: false, failed: true }
+  const seen = Math.max(input.seen, step.seen)
+  if (seen >= MINT_CONFIRMATIONS) return { seen: MINT_CONFIRMATIONS, done: true, failed: false }
+  if (input.elapsedMs >= input.deadlineMs) {
+    if (seen >= MINT_CONFIRMATIONS - 1) return { seen: MINT_CONFIRMATIONS, done: true, failed: false }
+    return { seen, done: false, failed: true }
+  }
+  return { seen, done: false, failed: false }
+}
+
+const NEAR_GRANT_POLL_MS = 1_000
+
+async function readNearGrantStatus(signerId: string, hash: string): Promise<NearGrantStatus | null> {
+  try {
+    return (await rpc(
+      "EXPERIMENTAL_tx_status",
+      { tx_hash: hash, sender_account_id: signerId, wait_until: "NONE" },
+      { attempts: 1, timeoutMs: STATUS_FETCH_MS },
+    )) as NearGrantStatus
+  } catch {
+    return null
+  }
+}
+
+/** Poll the saved hash. A blocking FINAL wait holds the slot when the public RPC is slow. Does not send another transaction. */
 export async function watchNearGrant(
   signerId: string,
   hash: string,
   report: (progress: { txHash?: string; seen: number }) => void,
 ): Promise<void> {
   report({ txHash: hash, seen: 1 })
-  const executed = (await rpc("EXPERIMENTAL_tx_status", {
-    tx_hash: hash,
-    sender_account_id: signerId,
-    wait_until: "EXECUTED",
-  })) as NearTxStatus
-  if (nearTxFailed(executed)) throw new Error(JSON.stringify(executed.status?.Failure))
-  report({ seen: 2 })
-  const final = (await rpc("EXPERIMENTAL_tx_status", {
-    tx_hash: hash,
-    sender_account_id: signerId,
-    wait_until: "FINAL",
-  })) as NearTxStatus
-  if (nearTxFailed(final)) throw new Error(JSON.stringify(final.status?.Failure))
-  report({ seen: 3 })
+  const started = Date.now()
+  let seen = 1
+  while (seen < MINT_CONFIRMATIONS) {
+    const elapsed = Date.now() - started
+    const status = elapsed < MINT_RECEIPT_TIMEOUT_MS ? await readNearGrantStatus(signerId, hash) : null
+    const next = nextNearGrantWatch({
+      elapsedMs: Date.now() - started,
+      deadlineMs: MINT_RECEIPT_TIMEOUT_MS,
+      seen,
+      status,
+    })
+    if (next.seen > seen) report({ seen: next.seen })
+    seen = next.seen
+    if (next.failed) {
+      if (status && nearTxFailed(status)) throw new Error(JSON.stringify(status.status?.Failure))
+      throw new Error(`Mint timed out ${hash}`)
+    }
+    if (next.done) return
+    await new Promise((resolve) => setTimeout(resolve, NEAR_GRANT_POLL_MS))
+  }
 }
 
 export function ledgerSumMicros(): bigint {
@@ -403,7 +523,9 @@ export async function mintNearToTreasury(
       secretKey: signingKey(),
       receiverId: env.tokenAccount.trim(),
       actions: [encodeFunctionCall("mint", jsonArgs({ account_id: treasury, amount: String(amountMicros) }), GAS, 0n)],
-      waitUntil: "INCLUDED",
+      waitUntil: "NONE",
+      recoverHash: true,
+      onSigned: (hash) => report?.({ txHash: hash, seen: 1 }),
     }),
   )
   await watchNearGrant(treasury, hash, (progress) => report?.(progress))
@@ -602,7 +724,7 @@ async function pollNearDeposits(treasury: string) {
         const payload = await rpc("EXPERIMENTAL_tx_status", {
           tx_hash: transaction.hash,
           sender_account_id: transaction.signer_id,
-          wait_until: "EXECUTED",
+          wait_until: "NONE",
         })
         for (const row of parseNearDeposits(payload, treasury, token, timestamp)) {
           if (applyNearDeposit(row)) console.log(`deposit ${row.from} ${row.amountMicros} ${row.txHash}`)
