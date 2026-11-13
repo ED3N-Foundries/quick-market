@@ -2,7 +2,7 @@ import { dirname, join } from "node:path"
 import type { ChainKey } from "../shared/chain"
 import { loadMarket, requireExplicitChain, TICK_MS, type PublicConfig } from "../shared/market"
 import { feeBps, marketMs, MIN_STAKE_MICROS, priceSource, viewMs, windowMs, type PriceSource } from "./config"
-import { nextMarketAt, planWake, runWake, type MarketTiming } from "./clock"
+import { nextMarketAt, planWake, rollMarketAt, runWake, type MarketTiming } from "./clock"
 import { takeTick } from "./tick"
 import { enabledMarketKeys, loadEnv } from "./env"
 import { activeChainKey, withChain } from "./activeChain"
@@ -203,13 +203,14 @@ function publishRound(now = Date.now()) {
 
 function arm(now = Date.now()) {
   if (runtime.quickMarketTimer) clearTimeout(runtime.quickMarketTimer)
-  if (strikeKick) {
+  const next = nextMarketAt(now, timing())
+  const due = marketAt > 0 && now >= marketAt
+  marketAt = rollMarketAt(now, marketAt, next)
+  if (strikeKick || due) {
     runtime.quickMarketTimer = setTimeout(wake, 0)
     runtime.quickMarketTimer.unref?.()
     return
   }
-  const next = nextMarketAt(now, timing())
-  if (!(marketAt > now) || next < marketAt) marketAt = next
   let at = marketAt
   if (pending) {
     const tickAt = lastTickAt > 0 ? lastTickAt + TICK_MS : now

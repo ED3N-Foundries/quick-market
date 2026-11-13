@@ -28,6 +28,17 @@ export function nextMarketAt(now: number, timing: MarketTiming): number {
   return at
 }
 
+/**
+ * The instant the scheduler should keep.
+ * A print can reschedule the timer after a boundary is due and before its wake runs.
+ * Moving that instant forward skips settlement until the next window.
+ */
+export function rollMarketAt(now: number, marketAt: number, next: number): number {
+  if (marketAt > 0 && now >= marketAt) return marketAt
+  if (!(marketAt > now) || next < marketAt) return next
+  return marketAt
+}
+
 export type WakeInput = {
   now: number
   /** Market instant this wake was armed for. */

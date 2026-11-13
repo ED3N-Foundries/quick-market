@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { nextMarketAt, planWake, runWake } from "./clock"
+import { nextMarketAt, planWake, rollMarketAt, runWake } from "./clock"
 import { advance, notePrint, resetRuntime, type Print } from "./rounds"
 import { useDatabase } from "./db"
 import { marketPreferences } from "../shared/market"
@@ -19,6 +19,17 @@ test("a shorter ride settles between window boundaries", () => {
 test("a handoff resume wakes before the next window", () => {
   expect(nextMarketAt(15_000, { ...timing, handoffResumeAt: 15_500 })).toBe(15_500)
   expect(nextMarketAt(15_000, { ...timing, handoffResumeAt: 25_000 })).toBe(20_000)
+})
+
+test("a due market instant is not moved to the next window", () => {
+  expect(rollMarketAt(10_100, 10_000, 20_000)).toBe(10_000)
+  expect(rollMarketAt(20_000, 20_000, 30_000)).toBe(20_000)
+})
+
+test("a future market instant stays, and a sooner handoff replaces it", () => {
+  expect(rollMarketAt(15_000, 20_000, 20_000)).toBe(20_000)
+  expect(rollMarketAt(15_000, 20_000, 15_500)).toBe(15_500)
+  expect(rollMarketAt(15_000, 0, 20_000)).toBe(20_000)
 })
 
 test("a round due at T advances when the clock wakes at T", () => {

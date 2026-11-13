@@ -1,8 +1,76 @@
 # Quick Market
 
-Bitcoin up/down pools. One shared buy-in window, two sides, pari-mutuel payout. Buy-ins stay in the ledger. Base Sepolia and NEAR Testnet each come on when that market's keys are filled. One process can run both.
+A 10-second game on the Bitcoin price. Everyone shares one buy-in window. Up and Down are the only sides. A winner is paid their share of the other side. The loser is paid nothing. A one-sided pool, a push, and a void return every stake.
 
-This page is the market by itself, then the agent swarm and the admin page beside it. Those two are separate clones. Nothing here uses the Pi, Compose, Caddy, or the hypervisor.
+The problem is a market people can finish in one sitting: see the price, choose a side, and see the payout before the decision goes cold. The product is that loop, with a chart, a stake, and a balance.
+
+NEAR's role is the NEAR Testnet book. The chip is this repo's NEP-141, symbol QM, 6 decimals (`contracts/near`, spec `ft-1.0.0`). Meteor Wallet signs the player in with NEP-413. A new account is granted QM. A withdrawal transfers QM back to that account. Buy-ins, stakes, and payouts are a custodial SQLite ledger scoped by chain. The contract holds the token. The round math stays on the server. Agents reach the same book through `/mcp?chain=near-testnet` and spend QM there.
+
+The hosted book is https://quickmarket.app. The same process also serves https://qmkt.app and https://qm.ed3n.com. `GET /api/markets` returns `"defaultChainKey": "near-testnet"` while that book is up, and the page opens there.
+
+This file is the judge's path first, then how to run the market, the swarm, and the admin page. The swarm and the admin page are separate clones. Nothing below uses the Pi, Compose, Caddy, or the hypervisor.
+
+## Tracks
+
+The submission lists every track this project fits. A fit is the track's job, not a prize. Hints in the hackathon file are wishes, not requirements. Testnet is enough.
+
+### games
+
+The loop is the market. Open the site, sign in, take QM, buy Up or Down for at least $1, and wait one window (10 seconds) plus the settle (10 seconds). The balance changes by the payout. Withdraw sends QM to the NEAR account. The screen is the chart and the two buttons. The chain shows up as the wallet and the token.
+
+### agents
+
+An agent earns QM and spends it. Earning is the testnet grant on first sign-in, and any later winning payout. Spending is `place_buy_in` and `withdraw` on `/mcp?chain=near-testnet`. The house swarm does that continuously: each NEAR account signs in, receives the grant, and buys in for itself. Negotiate, hire, and pay-for-API are not in this build. NEAR Intents and chain signatures are not either.
+
+### swarms
+
+Many agents share one pool. Each account has its own key, bankroll, and buy-in. Nobody assigns the crowd a side. The pool on a round is whatever those accounts just staked, and the payout follows from that. Bidding, collective purchase, NEAR Intents, and sub-accounts are not in this build.
+
+### Not these tracks
+
+`defi` does not fit. There is no NEAR Intents settlement and no non-custodial exchange. The ledger is the server's SQLite database. `thesis`, `privacy`, `business`, `security`, `realworld`, `nfts`, `memecoins`, `social`, and `open` do not fit. Base Sepolia is a second book in the same process. It is not the integration under review.
+
+## Try the game
+
+1. Open https://quickmarket.app. See the Bitcoin chart, Up, and Down. The chain control reads NEAR Testnet.
+2. `curl -sf https://quickmarket.app/api/markets`. See `defaultChainKey` of `near-testnet`, a 10-second window, a 10-second market, and a grant of `100000000` micros ($100) every `120000` ms. The NEAR entry's `usdc` field is the QM token account. Its `treasury` field is the minter.
+3. Sign in with Meteor Wallet. See a QM balance. A new account receives the grant without a wallet transaction.
+4. Enter at least $1 during the buy-in countdown and press Up or Down. See that side highlight and the clock switch to Settles.
+5. Wait for the round to settle. See the balance move, and a result notice if this account played.
+6. Withdraw. See the QM balance fall. The token transfer goes to the signed-in NEAR account.
+
+The hosted book is the demo to keep up through 2026-11-18, and through 2026-11-25 if it can stay up.
+
+## Try an agent
+
+MCP is on the same host: `https://quickmarket.app/mcp?chain=near-testnet`. A client signs locally. The server never takes a private key.
+
+1. Call `book`. See the open round id, the Up and Down pools, and the feed name.
+2. Call `login_message` with the account id, sign that NEP-413 payload, and call `sign_in` with the address, signature, issued time, nonce, and public key. See `account` return a QM balance. The first sign-in grants.
+3. Call `place_buy_in` with `side` of `up` or `down`, `stake` of `"1"`, and `roundId` from `book`. See the buy-in, or an error if the window already closed. Call `book` again and use the new round id.
+4. After that round settles, call `account`. See the balance after the payout. `withdraw` sends QM back.
+
+The house swarm is that loop across a crowd. Its code is [quick-market-agent](https://github.com/ED3N-Foundries/quick-market-agent). One process trades Base Sepolia, NEAR Testnet, or both. `AGENT_SPLIT_BASE` and `AGENT_SPLIT_NEAR` are whole numbers that sum to 100 and divide one crowd. The process refuses `CHAIN=base`.
+
+## What is in scope
+
+Quick Market already ran on Base Sepolia before this hackathon. Only the NEAR integration is judged.
+
+- Baseline, last commit before the 2026-10-19 announcement: [`dceacc5`](https://github.com/ED3N-Foundries/quick-market/commit/dceacc5) (2026-10-18). The game loop, the Base Sepolia grant, and Phantom sign-in are that baseline.
+- Window diff: https://github.com/ED3N-Foundries/quick-market/compare/dceacc5...master
+- NEAR work starts at [`fe93f03`](https://github.com/ED3N-Foundries/quick-market/commit/fe93f03) (2026-11-09): the QM contract, the NEAR Testnet book, Meteor NEP-413 sign-in, QM grants and withdrawals, then `/mcp` (2026-11-12). The NEAR half of the swarm is in the agent repo (2026-11-13).
+
+There is no mainnet deployment.
+
+Libraries, beyond this repo's own code. Versions are in `package.json` and `contracts/near/Cargo.toml`.
+
+- Bun 1.4.4, the runtime. React 19 and Vite draw the screen.
+- `near-sdk` 5.14.0 and `near-sys` 0.2.9, the QM contract.
+- `@meteorwallet/sdk`, NEAR sign-in in the browser.
+- `@noble/ed25519`, `@noble/hashes`, and `bs58`, NEP-413 checks.
+- `@modelcontextprotocol/sdk`, the agent tools.
+- `viem`, `wagmi`, and `@phantom/react-sdk`, the Base Sepolia book from the baseline.
+- `zod`. `@coinbase/cdp-sdk` is a dependency and is not on the NEAR path.
 
 ## Run
 
@@ -120,35 +188,35 @@ NODE_ENV=production bun run start
 
 That listens on port 3001 and does not start Vite. Port 3002 still comes up.
 
-Ports that must be free: 3001, 3002, and 5173 while `bun run dev` is running. The agents add 3011 and, for a second runner, 3012. The admin page adds 3101.
+Ports that must be free: 3001, 3002, and 5173 while `bun run dev` is running. The agent adds 3011. The admin page adds 3101.
 
 ## Agents
 
 The swarm is [quick-market-agent](https://github.com/ED3N-Foundries/quick-market-agent). Clone it beside this repo. It is its own `bun install` and its own `.env`.
 
-One process trades one chain. It is an MCP client of `API_URL` plus `/mcp?chain=<CHAIN>`. Pass `API_URL` as the origin only, `http://127.0.0.1:3001`, with no `/mcp` suffix. The runner signs each wallet in once, keeps the session, and places that wallet's buy-ins. It writes `agent/keys.json` on Base and `agent/keys.near.json` on NEAR. It keeps its own SQLite. It does not open this repo's ledger, and it does not spend the treasury key as a player wallet.
+One process trades either market, or both. It is an MCP client of `API_URL` plus `/mcp?chain=`. Pass `API_URL` as the origin only, `http://127.0.0.1:3001`, with no `/mcp` suffix. The runner opens one session per market whose share is above 0. It signs each wallet in once, keeps the session, and places that wallet's buy-ins. Base keys are `agent/keys.json`. NEAR keys are `agent/keys.near.json`. It keeps its own SQLite, with a `chain_key` on each row. It does not open this repo's ledger, and it does not spend the treasury key as a player wallet.
 
 Start the market first and wait until `/api/state` answers. A down market does not exit the runner. Calls fail with the book unreachable, and the next wave retries.
 
 Copy `.env.example` to `.env` in the directory you start from. Bun loads that cwd's `.env`. Copy the five market preferences from the market `.env`: `WINDOW_SECONDS`, `MARKET_SECONDS`, `VIEW_SECONDS`, `FEE_BPS`, `PRICE_SOURCE`.
 
-`DB_PATH` is this runner's file. The default is `data/quick-market-agent.sqlite` under the working directory. The second runner gets a second file, for example `data/quick-market-agent-near.sqlite`. Pointing `DB_PATH` at `data/quick-market.sqlite` from the market mixes the swarm into the ledger.
+`DB_PATH` is this runner's file. The default is `data/quick-market-agent.sqlite` under the working directory. Pointing `DB_PATH` at `data/quick-market.sqlite` from the market mixes the swarm into the ledger.
 
-`AGENT_SPLIT_BASE` and `AGENT_SPLIT_NEAR` are whole numbers that sum to 100. Both unset means 100 and 0. Anything else that fails the sum exits with `AGENT_SPLIT_BASE and AGENT_SPLIT_NEAR must be whole numbers that sum to 100.` A share of 0 turns that chain's runner off: `Base agent trading is off. Raise its AGENT_SPLIT share above 0.` or the NEAR line of the same sentence. One chain uses 100 and 0. Both chains use the same split in both processes, such as 50 and 50.
+`AGENT_SPLIT_BASE` and `AGENT_SPLIT_NEAR` are whole numbers that sum to 100. Both unset means 100 and 0, so only Base Sepolia trades. Anything else that fails the sum exits with `AGENT_SPLIT_BASE and AGENT_SPLIT_NEAR must be whole numbers that sum to 100.` A share of 0 leaves that market idle. A share of 50 seats about half the clock on that market. The two shares are one crowd, not two full crowds.
 
-Chain identity, or the process exits:
+`CHAIN` in the agent `.env` may stay `base-sepolia` while NEAR's share is above 0. The process still opens the NEAR session. These still have to be true, or it exits:
 
-- Base Sepolia needs `CHAIN=base-sepolia` and the same `USDC_ADDRESS` as the market. A blank address is treated as Circle USDC and startup throws the quick-market USDC error.
-- NEAR needs `CHAIN=near-testnet`, the same `NEAR_TREASURY_PRIVATE_KEY`, and the same `TOKEN_ACCOUNT`. The runner checks that the token is six-decimal QM and prints the treasury lines. Buy-ins still go through MCP.
+- A Base share above 0 needs the same `USDC_ADDRESS` as the market. A blank address is treated as Circle USDC and startup throws the quick-market USDC error.
+- A NEAR share above 0 needs the same `NEAR_TREASURY_PRIVATE_KEY` and `TOKEN_ACCOUNT` as the market. The runner checks that the token is six-decimal QM and prints the treasury lines. Buy-ins still go through MCP. An implicit account can buy in before it holds on-chain NEAR.
 - `CHAIN=base` prints `The swarm refuses CHAIN=base. Real USDC is out of this mode.` and exits.
 
-`STATS_PORT` defaults to 3011, bound on `0.0.0.0`. `GET /api/health` returns counts, phase, stake percentiles, and money totals. The body has no keys and no addresses. `STATS_PORT=0` turns the listener off. A second runner on 3011 logs `agent stats listener failed` and keeps trading with no stats for the admin page. Give that runner `3012`.
+`STATS_PORT` defaults to 3011, bound on `0.0.0.0`. `GET /api/health` returns the two lanes added together: online, enrolled, target, window, and stakes. The spring is the shared clock. The body has no keys and no addresses. `STATS_PORT=0` turns the listener off.
 
-`SWARM_PIN` pins how many wallets stay online. Unset, the runner follows Asia/Manila and aims between 300 and 6,000. Each new wallet is granted once, on first sign-in. The runner never calls `claim_grant`. A wallet under the 1 USDC minimum cannot buy, so the treasury needs gas for those first mints before the swarm is useful. A first local run sets `SWARM_PIN=30`. A missing `agent/control.json` means clock mode. `SWARM_PIN` in the environment wins over that file.
+`SWARM_PIN` pins how many wallets stay online, before the split scales each market. Unset, the runner follows Asia/Manila and aims between 300 and 6,000, then multiplies that aim by the market's share. Each new wallet is granted once, on first sign-in. The runner never calls `claim_grant`. A wallet under the 1 USDC minimum cannot buy, so the treasury needs gas for those first mints before the swarm is useful. A first local run sets `SWARM_PIN=30`. A missing `agent/control.json` means clock mode. `SWARM_PIN` in the environment wins over that file.
 
-Keys, `agent/control.json`, `agent/swarm.json`, `agent/status.json`, and `agent/flow.json` are paths under the process cwd. Two runners in one directory overwrite those files. `AGENT_DIR` is read by the container entrypoint only. `bun run agent` ignores it.
+Keys, `agent/control.json`, `agent/swarm.json`, `agent/status.json`, and `agent/flow.json` are paths under the process cwd. Per-market flow files are `agent/flow.<chain>.json` beside `flow.json`. `AGENT_DIR` is read by the container entrypoint only. `bun run agent` ignores it.
 
-One chain, from the agent repo:
+From the agent repo:
 
 ```bash
 git clone https://github.com/ED3N-Foundries/quick-market-agent.git
@@ -157,37 +225,15 @@ bun install
 cp .env.example .env
 ```
 
-Fill the chain lines, `API_URL`, `DB_PATH`, the five preferences, `SWARM_PIN`, and a 100/0 split for this chain. Then:
-
-```bash
-bun run agent
-```
-
-Both chains need two working directories, each with its own `.env`. Run the script by absolute path so Bun still finds the agent's `node_modules`:
-
-```bash
-mkdir -p "$HOME/qm-agent-base" "$HOME/qm-agent-near"
-```
-
-Write a `.env` in each directory. Each runner stays in the foreground, so use two terminals:
-
-```bash
-cd "$HOME/qm-agent-base"
-bun /path/to/quick-market-agent/agent/index.ts
-```
-
-```bash
-cd "$HOME/qm-agent-near"
-bun /path/to/quick-market-agent/agent/index.ts
-```
-
-The Base directory's `.env`:
+One `.env` covers both markets:
 
 ```bash
 CHAIN=base-sepolia
 USDC_ADDRESS=0x…          # same contract as the market
+NEAR_TREASURY_PRIVATE_KEY=ed25519:…
+TOKEN_ACCOUNT=            # same QM account as the market
 API_URL=http://127.0.0.1:3001
-DB_PATH=/home/you/qm-agent-base/quick-market-agent.sqlite
+DB_PATH=data/quick-market-agent.sqlite
 AGENT_SPLIT_BASE=50
 AGENT_SPLIT_NEAR=50
 STATS_PORT=3011
@@ -199,7 +245,13 @@ FEE_BPS=0
 PRICE_SOURCE=binance
 ```
 
-The NEAR directory uses `CHAIN=near-testnet`, the same split, `STATS_PORT=3012`, a different `DB_PATH`, `NEAR_TREASURY_PRIVATE_KEY`, `TOKEN_ACCOUNT`, and the same five preferences. Start the Base runner the same way from its directory. `bun install` has to have been run in the agent repo first.
+A NEAR-only run sets the split to 0 and 100. A Base-only run sets it to 100 and 0 and can leave the NEAR lines blank. Then:
+
+```bash
+bun run agent
+```
+
+The log line names the markets and the split, for example `Agents trade base-sepolia and near-testnet. Split base 50 / near 50.`
 
 `bun run agents`, from the same cwd as that runner, is the terminal dashboard. It reads that cwd's `agent/swarm.json` and `DB_PATH`. From another directory the command is `bun /path/to/quick-market-agent/agent/dashboard.ts`. Closing the dashboard leaves the runner up. A balance under $3 stays put. A balance over $1,000 is withdrawn to that wallet.
 
@@ -215,7 +267,7 @@ cp .env.example .env
 bun run dev
 ```
 
-The example already targets a market on this machine: `TARGET_URL=http://127.0.0.1:3001`, `AGENT_URL=http://127.0.0.1:3011`, `PORT=3101`. `INTERNAL_URL` is optional. When it is unset, the page uses port 3002 on the `TARGET_URL` host, which is this market. Set it when status and funding live somewhere else. `AGENT_URL` empty skips the swarm probe. A missed probe leaves the market verdict alone. The page has one agent URL, so it watches 3011 or 3012. Leave `DOCKER_SOCK` blank. A set socket looks for containers named `quick-market` and `quick-market-agent`.
+The example already targets a market on this machine: `TARGET_URL=http://127.0.0.1:3001`, `AGENT_URL=http://127.0.0.1:3011`, `PORT=3101`. `INTERNAL_URL` is optional. When it is unset, the page uses port 3002 on the `TARGET_URL` host, which is this market. Set it when status and funding live somewhere else. `AGENT_URL` empty skips the swarm probe. A missed probe leaves the market verdict alone. The page has one agent URL, so it watches 3011. Leave `DOCKER_SOCK` blank. A set socket looks for containers named `quick-market` and `quick-market-agent`.
 
 The page is http://127.0.0.1:3101. It binds `0.0.0.0:3101`, has no password, and shows the treasury address, so publish that port only on purpose. `bun run smoke` runs one probe in the terminal. JSON is `/api/check?fresh=1` and `/api/health`.
 
@@ -223,7 +275,7 @@ The page is http://127.0.0.1:3101. It binds `0.0.0.0:3101`, has no password, and
 
 1. Market `.env`, then `bun run treasury`, faucet, `bun run token`, then `bun run dev`.
 2. `curl -sf http://127.0.0.1:3001/api/markets` lists the filled chains. `curl -sf http://127.0.0.1:3001/api/state` returns a board. `curl -sf http://127.0.0.1:3002/api/funding` shows gas.
-3. Start the agent process or processes. `curl -sf http://127.0.0.1:3011/api/health` (and `:3012` for the second runner) returns a snapshot once the runner has published one. `running` stays false until that snapshot exists.
+3. Start the agent. `curl -sf http://127.0.0.1:3011/api/health` returns a snapshot once the runner has published one. `running` stays false until that snapshot exists. `online` and `target` count both markets together when the split seats both.
 4. Open http://127.0.0.1:3101. Config, state, and the websocket are the pieces that mark the market down.
 5. Open http://127.0.0.1:5173.
 
