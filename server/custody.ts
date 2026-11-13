@@ -280,7 +280,7 @@ async function requestWithdrawLocked(
     })
     tx()
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Withdraw failed"
+    const message = error instanceof Error ? error.message : "Withdrawal failed"
     if (message === "Insufficient balance" || message === "Unknown wallet" || message === "Amount is invalid") {
       return { ok: false, error: message }
     }
@@ -308,17 +308,17 @@ async function finishWithdraw(
   walletClient: ChainWallet,
 ): Promise<{ ok: true; you: You; txHash: string } | { ok: false; error: string; you?: You }> {
   const row = withdrawRow(id)
-  if (!row) return { ok: false, error: "Withdraw failed" }
+  if (!row) return { ok: false, error: "Withdrawal failed" }
   const you = () => youFor(row.address) ?? undefined
   if (row.status === "sent" && row.tx_hash) return { ok: true, you: you()!, txHash: row.tx_hash }
-  if (row.status !== "pending" || !row.raw_tx || !row.tx_hash) return { ok: false, error: "Withdraw failed", you: you() }
+  if (row.status !== "pending" || !row.raw_tx || !row.tx_hash) return { ok: false, error: "Withdrawal failed", you: you() }
   const hash = row.tx_hash as Hash
   try {
     await broadcast(publicClient, walletClient, row.raw_tx as Hex, hash)
     const receipt = await publicClient.waitForTransactionReceipt({ hash, timeout: 30_000 })
     if (receipt.status === "reverted") {
       refundRow(row)
-      return { ok: false, error: "Withdraw reverted", you: youFor(row.address) ?? undefined }
+      return { ok: false, error: "Withdrawal reverted", you: youFor(row.address) ?? undefined }
     }
     getDb()
       .query("UPDATE withdrawals SET status = 'sent' WHERE chain_key = ? AND id = ? AND status = 'pending'")
@@ -326,7 +326,7 @@ async function finishWithdraw(
     return { ok: true, you: you()!, txHash: hash }
   } catch (error) {
     console.error(error)
-    return { ok: false, error: "Withdraw is pending", you: you() }
+    return { ok: false, error: "Withdrawal is pending", you: you() }
   }
 }
 

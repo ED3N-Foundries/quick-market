@@ -125,21 +125,32 @@ body {
   font-size: 26px;
   line-height: 1;
 }
-.pair-badge {
+.pair-badge,
+.feed-badge,
+.token-badge,
+.net-badge,
+.app button.feed-badge,
+.app button.token-badge,
+.app button.net-badge {
   display: inline-flex;
   align-items: center;
+  box-sizing: border-box;
   height: 22px;
-  padding: 0 10px;
-  border-radius: 999px;
+  max-width: 100%;
   border: 1px solid var(--line);
+  border-radius: 999px;
   background: #0c0d11;
   color: var(--text);
   font-size: 11px;
   font-weight: 650;
-  letter-spacing: 0.06em;
   line-height: 1;
-  text-transform: uppercase;
   white-space: nowrap;
+  vertical-align: middle;
+}
+.pair-badge {
+  padding: 0 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 .pair-row {
   display: inline-flex;
@@ -147,22 +158,13 @@ body {
   gap: 6px;
   min-width: 0;
 }
-.feed-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  height: 22px;
-  padding: 0 8px 0 5px;
-  border-radius: 999px;
-  border: 1px solid var(--line);
-  background: #0c0d11;
-  color: var(--text);
-  font-size: 11px;
-  font-weight: 650;
+.feed-badge,
+.app button.feed-badge {
+  gap: 5px;
+  padding: 0 10px 0 4px;
   letter-spacing: 0.01em;
-  line-height: 1;
   text-transform: none;
-  white-space: nowrap;
+  cursor: pointer;
 }
 .feed-empty { color: var(--muted); }
 .venue-icon {
@@ -405,8 +407,8 @@ body {
   flex: none;
 }
 .chain-mark {
-  width: 12px;
-  height: 12px;
+  width: 16px;
+  height: 16px;
   display: block;
   flex: none;
 }
@@ -518,22 +520,65 @@ body {
   padding-top: 6px;
   border-top: 1px solid var(--line);
 }
-.net-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 2px 7px;
-  border-radius: 999px;
-  font-size: 10px;
-  font-weight: 600;
+.net-badge,
+.app button.net-badge {
+  gap: 5px;
+  padding: 0 10px;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  background: rgba(243, 240, 232, 0.08);
   color: var(--muted);
 }
-.net-badge[data-testnet="1"] {
+.net-badge:has(.chain-mark),
+.app button.net-badge:has(.chain-mark) {
+  padding-left: 4px;
+}
+.net-badge[data-testnet="1"],
+.app button.net-badge[data-testnet="1"] {
   background: rgba(226, 179, 64, 0.16);
+  border-color: rgba(226, 179, 64, 0.4);
   color: var(--warn);
+}
+.app button.feed-badge:hover,
+.app button.token-badge:hover,
+.app button.net-badge:hover,
+.tip-anchor[data-open="1"] > button {
+  border-color: rgba(243, 240, 232, 0.32);
+}
+.app button.net-badge[data-testnet="1"]:hover,
+.tip-anchor[data-open="1"] > button.net-badge[data-testnet="1"] {
+  border-color: rgba(226, 179, 64, 0.75);
+}
+.app button.feed-badge:focus-visible,
+.app button.token-badge:focus-visible,
+.app button.net-badge:focus-visible {
+  outline: 1px solid rgba(243, 240, 232, 0.45);
+  outline-offset: 2px;
+}
+.tip-anchor {
+  display: inline-flex;
+  flex: none;
+  max-width: 100%;
+  vertical-align: middle;
+}
+.badge-tip {
+  position: fixed;
+  z-index: 80;
+  visibility: hidden;
+  width: max-content;
+  max-width: min(280px, calc(100vw - 16px));
+  padding: 8px 10px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: #0c0d11;
+  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.55);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 450;
+  line-height: 1.45;
+  letter-spacing: 0;
+  text-transform: none;
+  text-align: left;
+  white-space: normal;
 }
 .net-action {
   color: var(--warn);
@@ -1066,26 +1111,13 @@ body {
 }
 .balance-label { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
 .balance-label .who { flex-wrap: nowrap; }
-.token-badge {
-  display: inline-flex;
-  align-items: center;
-  align-self: flex-start;
-  gap: 6px;
-  flex: none;
-  width: max-content;
-  max-width: 100%;
-  height: 22px;
-  padding: 0 12px 0 4px;
-  border-radius: 999px;
-  border: 1px solid var(--line);
-  background: #0c0d11;
-  color: var(--text);
-  font-size: 11px;
-  font-weight: 650;
+.token-badge,
+.app button.token-badge {
+  gap: 5px;
+  padding: 0 10px 0 4px;
   letter-spacing: 0.02em;
-  line-height: 1;
   text-transform: uppercase;
-  white-space: nowrap;
+  cursor: pointer;
 }
 .token-mark { width: 16px; height: 16px; display: block; flex: none; }
 .grant-status {
@@ -1360,10 +1392,32 @@ button.grant-status:disabled {
   position: relative;
   display: flex;
   align-items: center;
+  gap: 2px;
+  border: 1px solid var(--line);
+  background: #0c0d11;
+  border-radius: 10px;
+  padding-left: 11px;
 }
-.input-with-max input {
+.input-with-max:focus-within {
+  outline: 1px solid rgba(243, 240, 232, 0.4);
+  outline-offset: 2px;
+}
+.amount-prefix {
+  flex: none;
+  color: var(--text);
+  font-size: 16px;
+  line-height: 1;
+}
+.fund-custom .input-with-max input {
   width: 100%;
-  padding-right: 48px;
+  border: 0;
+  background: transparent;
+  border-radius: 0;
+  padding: 9px 48px 9px 2px;
+}
+.fund-custom .input-with-max input:focus,
+.fund-custom .input-with-max input:focus-visible {
+  outline: none;
 }
 .app button.max-btn {
   position: absolute;

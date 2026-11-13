@@ -39,11 +39,12 @@ import { copy, localize } from "./copy"
 import { LanguageSelect, useI18n } from "./i18n"
 import { chartCovered, formatLag, lagButtonName, type LinkStatus } from "./lag"
 import { useMarket } from "./useMarket"
+import { ChainBadge, TipBadge } from "./badges"
 import { FeedBadge } from "./venues"
 import { prefersReducedMotion } from "./sideFigures"
 import { useSideBook } from "./useSideBook"
 import { grantWaitStatus, loginStatus, shortWalletFault, SIGN_PROMPT } from "./phantomConnect"
-import { ChainLogo, ClaudeLogo, GrokLogo, NearLogo, OpenAiLogo, PhantomLogo } from "./logos"
+import { ClaudeLogo, GrokLogo, NearLogo, OpenAiLogo, PhantomLogo } from "./logos"
 import { ToastStack, useToasts } from "./toasts"
 import { useSession } from "./wallet"
 import { History } from "./history"
@@ -674,10 +675,12 @@ export function App({
                       {session.address}
                     </p>
                     <div className="wallet-menu-net">
-                      <span className="net-badge" data-testnet={isTestnetChain(market.config.chainId, market.config.chainKey) ? "1" : "0"}>
-                        <ChainLogo chainKey={market.config.chainKey} className="chain-mark" />
-                        {session.signing ? text.pleaseWait : chainMenuLabel(market.config.chainId, market.config.chainName, lang, market.config.chainKey)}
-                      </span>
+                      <ChainBadge
+                        chainId={market.config.chainId}
+                        chainKey={market.config.chainKey}
+                        chainName={market.config.chainName}
+                        label={session.signing ? text.pleaseWait : chainMenuLabel(market.config.chainId, market.config.chainName, lang, market.config.chainKey)}
+                      />
                       {wrongChain && market.config.chainKey !== "near-testnet" && (
                         <button type="button" className="plain net-action" onClick={session.switchChain}>
                           {text.switchNetwork}
@@ -1440,10 +1443,10 @@ export function TokenBadge({ kind, chainKey }: { kind: "circle" | "qm"; chainKey
   const title = kind === "circle" ? text.circleTitle : near ? text.nearTitle : text.qmTitle
   const label = kind === "circle" ? "USDC" : near ? text.nearBadge : "QM USDC"
   return (
-    <span className="token-badge" data-kind={kind} title={title}>
+    <TipBadge className="token-badge" tip={title} data-kind={kind}>
       {kind === "circle" ? <CircleMark /> : <QmMark />}
       <span>{label}</span>
-    </span>
+    </TipBadge>
   )
 }
 

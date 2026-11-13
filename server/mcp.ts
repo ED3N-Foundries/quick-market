@@ -457,7 +457,7 @@ function registerTools(server: McpServer, accounts: Map<string, Bound>, deps: Mc
       const amount = args.amountMicros !== undefined ? (Number.isSafeInteger(args.amountMicros) && args.amountMicros > 0 ? args.amountMicros : null) : parseMicros(args.amount)
       if (amount === null) return fail("Amount is invalid")
       const result = await deps.withdraw(picked.bound.address, amount)
-      if (!result.ok) return fail(result.error ?? "Withdraw failed")
+      if (!result.ok) return fail(result.error ?? "Withdrawal failed")
       const you = youFor(picked.bound.address)
       return textResult({
         address: picked.bound.address,

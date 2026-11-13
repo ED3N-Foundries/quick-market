@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react"
 import {
-  chainBadgeText,
   chainNetworkLabel,
   formatGrantDollars,
   formatMoney,
@@ -14,8 +13,9 @@ import {
 import { localize } from "./copy"
 import { useI18n } from "./i18n"
 import { agentConnectors } from "./agentsUrl"
-import { ClaudeLogo, ChainLogo, GrokLogo, OpenAiLogo } from "./logos"
+import { ClaudeLogo, GrokLogo, OpenAiLogo } from "./logos"
 import { TokenBadge } from "./App"
+import { ChainBadge } from "./badges"
 import { useSession } from "./wallet"
 
 export function AddressWithHover({ address, label }: { address: string; label?: string | null }) {
@@ -83,10 +83,7 @@ export function FundOverlay({
           <div>
             <h2>{text.deposit}</h2>
             <TokenBadge kind="circle" />
-            <span className="net-badge" data-testnet="0">
-              <ChainLogo chainKey="base" className="chain-mark" />
-              {chainBadgeText(chainId, chainName, lang)}
-            </span>
+            <ChainBadge chainId={chainId} chainKey="base" chainName={chainName} />
           </div>
           <button type="button" className="overlay-close" aria-label={text.close} onClick={onClose}>
             {"×"}
@@ -193,10 +190,7 @@ export function GrantOverlay({
           <div>
             <h2>{text.grant}</h2>
             <TokenBadge kind="qm" chainKey={chainKey} />
-            <span className="net-badge" data-testnet="1">
-              <ChainLogo chainKey={chainKey} className="chain-mark" />
-              {chainBadgeText(chainId, chainName, lang, chainKey as "base" | "base-sepolia" | "near-testnet")}
-            </span>
+            <ChainBadge chainId={chainId} chainKey={chainKey} chainName={chainName} />
           </div>
           <button type="button" className="overlay-close" aria-label={text.close} onClick={onClose}>
             {"×"}
@@ -285,10 +279,7 @@ export function WithdrawOverlay({
           <div>
             <h2>{text.withdraw}</h2>
             <TokenBadge kind={testnet ? "qm" : "circle"} chainKey={chainKey} />
-            <span className="net-badge" data-testnet={testnet ? "1" : "0"}>
-              <ChainLogo chainKey={chainKey} className="chain-mark" />
-              {chainBadgeText(chainId, chainName, lang, chainKey as "base" | "base-sepolia" | "near-testnet")}
-            </span>
+            <ChainBadge chainId={chainId} chainKey={chainKey} chainName={chainName} />
           </div>
           <button type="button" className="overlay-close" aria-label={text.close} onClick={onClose}>
             {"×"}
@@ -306,6 +297,7 @@ export function WithdrawOverlay({
         </dl>
         <div className="fund-custom">
           <div className="input-with-max">
+            <span className="amount-prefix" aria-hidden="true">$</span>
             <input
               aria-label={text.withdrawAmount}
               inputMode="decimal"

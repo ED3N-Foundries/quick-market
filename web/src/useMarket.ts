@@ -904,7 +904,7 @@ export function useMarket(token: string | null, seed: You | null = null, initial
         setUnauthorized(true)
         return { ok: false, message: "Connect a wallet first" }
       }
-      if (!response.ok) return { ok: false, message: body.error ?? "Withdraw failed" }
+      if (!response.ok) return { ok: false, message: body.error ?? "Withdrawal failed" }
       return { ok: true, txHash }
     } catch {
       return { ok: false, message: "Can't reach the market server" }

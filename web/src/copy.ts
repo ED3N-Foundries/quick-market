@@ -44,6 +44,9 @@ export type Copy = {
   qmTitle: string
   nearTitle: string
   nearBadge: string
+  testnetTipBase: string
+  testnetTipNear: string
+  feedTip: (name: string) => string
   close: string
   network: string
   fromTo: string
@@ -230,6 +233,9 @@ const en: Copy = {
   qmTitle: "Quick Market USDC on Base Sepolia. Play money, not Circle USDC.",
   nearTitle: "Quick Market on NEAR Testnet. Play money, not NEAR and not USDC.",
   nearBadge: "QM",
+  testnetTipBase: "This is the Base Sepolia test network. Balances here are play money.",
+  testnetTipNear: "This is the NEAR test network. Balances here are play money.",
+  feedTip: (name) => `${name} is the exchange supplying our price feed.`,
   close: "Close",
   network: "Network",
   fromTo: "From → To",
@@ -251,7 +257,7 @@ const en: Copy = {
   withdrawUsdc: "Withdraw USDC",
   toWallet: "To wallet",
   spendable: "Spendable",
-  withdrawAmount: "Withdraw amount",
+  withdrawAmount: "Withdrawal amount",
   max: "Max",
   withdrawing: "Withdrawing…",
   paysQm: "Pays QM USDC to your wallet on Base Sepolia.",
@@ -373,8 +379,8 @@ const en: Copy = {
   connectPhantom: "Connect Phantom",
   connectNear: "Connect Meteor",
   grantedToast: "Grant credited",
-  withdrawFailed: "Withdraw failed",
-  withdrawnToast: "Withdraw sent",
+  withdrawFailed: "Withdrawal failed",
+  withdrawnToast: "Withdrawal sent",
   phantomNotFound: "Phantom Wallet not found",
   phantomConnectFailed: "Phantom connection failed",
   errorDetails: "Error details",
@@ -423,6 +429,9 @@ const zhTW: Copy = {
   qmTitle: "Quick Market USDC（Base Sepolia）。這是遊戲代幣，不是 Circle USDC。",
   nearTitle: "Quick Market（NEAR 測試網）。這是遊戲代幣，不是 NEAR，也不是 USDC。",
   nearBadge: "QM",
+  testnetTipBase: "這是 Base Sepolia 測試網。這裡的餘額是遊戲代幣。",
+  testnetTipNear: "這是 NEAR 測試網。這裡的餘額是遊戲代幣。",
+  feedTip: (name) => `${name} 是提供我們報價的交易所。`,
   close: "關閉",
   network: "網路",
   fromTo: "從 → 到",
@@ -600,6 +609,11 @@ const zhFixed: Record<string, string> = {
   "Connect a wallet first": "請先連接錢包",
   "Can't reach the market server": "連不到市場伺服器",
   "Withdraw failed": "提領失敗",
+  "Withdrawal failed": "提領失敗",
+  "Withdraw reverted": "提領已退回",
+  "Withdrawal reverted": "提領已退回",
+  "Withdraw is pending": "提領處理中",
+  "Withdrawal is pending": "提領處理中",
   "Sign in to receive a grant.": "登入後才能領取撥款。",
   [en.grantMissed]: zhTW.grantMissed,
   [en.depositSent]: zhTW.depositSent,

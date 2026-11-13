@@ -611,7 +611,7 @@ export async function requestNearWithdraw(
     try {
       id = debitWithdraw(who, amountMicros, raw, hash)
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Withdraw failed"
+      const message = error instanceof Error ? error.message : "Withdrawal failed"
       return { ok: false, error: message, you: youFor(who) ?? undefined }
     }
     try {
@@ -627,7 +627,7 @@ export async function requestNearWithdraw(
         return { ok: false, error: nearFaultMessage(error), you: youFor(who) ?? undefined }
       }
       console.error(error)
-      return { ok: false, error: "Withdraw is pending", you: youFor(who) ?? undefined }
+      return { ok: false, error: "Withdrawal is pending", you: youFor(who) ?? undefined }
     }
   })
 }

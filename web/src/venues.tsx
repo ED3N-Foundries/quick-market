@@ -1,4 +1,5 @@
-import { sourceLabel, sourceName } from "../../shared/source"
+import { sourceName } from "../../shared/source"
+import { TipBadge } from "./badges"
 import { useI18n } from "./i18n"
 
 /** Brand marks, cropped to the symbol. Colors are the ones that read on #090a0c. */
@@ -45,14 +46,15 @@ export function VenueIcon({ source }: { source: string }) {
   )
 }
 
-/** Icon plus the venue's short name. An unknown feed is a dash. */
+/** Icon plus the venue's short name. An unknown feed is a dash. A known feed explains itself. */
 export function FeedBadge({ source }: { source: string | null | undefined }) {
-  const { lang } = useI18n()
+  const { lang, text } = useI18n()
   if (!source || !MARKS[source]) return <span className="feed-empty">—</span>
+  const name = sourceName(source, lang)
   return (
-    <span className="feed-badge" title={sourceLabel(source, lang)}>
+    <TipBadge className="feed-badge" tip={text.feedTip(name)}>
       <VenueIcon source={source} />
-      <span>{sourceName(source, lang)}</span>
-    </span>
+      <span>{name}</span>
+    </TipBadge>
   )
 }
