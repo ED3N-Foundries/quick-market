@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { chartMarket, clockFace, focusPool, followWindow, heldMarket, heldStrike, listedRoundIds } from "./focus"
+import { chartMarket, clockFace, focusPool, followWindow, heldMarket, heldStrike, listedRoundIds, lockGuide } from "./focus"
 import type { Band, Board, PoolCard } from "./types"
 
 function band(id: number, buyInOpen: number, strike: string | null = null): Band {
@@ -220,5 +220,23 @@ test("a stale feed does not count a buy-in, and a running position still counts 
   })
   const held = heldMarket(riding, [{ roundId: 2, side: "up", stakeMicros: 1_000_000 }], 16_000)
   expect(clockFace(riding, 16_000, held, null, "stale").kind).toBe("settles")
+})
+
+test("the lock mark follows an open buy-in whose chart ends at the window", () => {
+  expect(lockGuide({ endsAt: 15_000, viewEnd: 15_000, now: 12_000, headPrice: 101.5 })).toEqual({
+    leftMs: 3_000,
+    price: 101.5,
+  })
+  expect(lockGuide({ endsAt: 15_000, viewEnd: 15_040, now: 12_000, headPrice: 100 })?.leftMs).toBe(3_000)
+})
+
+test("a scrubbed chart, a missing end, a finished window, and a missing price hide the lock mark", () => {
+  expect(lockGuide({ endsAt: 15_000, viewEnd: 12_000, now: 11_000, headPrice: 100 })).toBeNull()
+  expect(lockGuide({ endsAt: 15_000, viewEnd: 15_051, now: 12_000, headPrice: 100 })).toBeNull()
+  expect(lockGuide({ endsAt: null, viewEnd: 15_000, now: 12_000, headPrice: 100 })).toBeNull()
+  expect(lockGuide({ endsAt: 15_000, viewEnd: 15_000, now: 15_000, headPrice: 100 })).toBeNull()
+  expect(lockGuide({ endsAt: 15_000, viewEnd: 15_000, now: 15_100, headPrice: 100 })).toBeNull()
+  expect(lockGuide({ endsAt: 15_000, viewEnd: 15_000, now: 12_000, headPrice: null })).toBeNull()
+  expect(lockGuide({ endsAt: 15_000, viewEnd: 15_000, now: 12_000, headPrice: Number.NaN })).toBeNull()
 })
 

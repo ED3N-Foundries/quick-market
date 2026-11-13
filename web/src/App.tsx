@@ -3,7 +3,7 @@ import type { Lang } from "../../shared/lang"
 import { RENDER_MS } from "../../shared/market"
 import { MINT_CONFIRMATIONS } from "../../shared/mint"
 import { mountChart, priceY, type ChartScale, type TapeChart, type TapeSample } from "./chart"
-import { chartMarket, clockFace, focusPool, followWindow, heldMarket, heldStrike } from "./focus"
+import { buyInWindow, chartMarket, clockFace, focusPool, followWindow, heldMarket, heldStrike, lockGuide } from "./focus"
 import { clockReadout } from "./clock"
 import {
   chainMenuLabel,
@@ -547,6 +547,7 @@ export function App({
             feeBps={market.config.feeBps}
             hover={scrub.hover}
             offsetRef={market.offsetRef}
+            lockEndsAt={face?.kind === "buy-in" ? face.endsAt : null}
           />
         )}
         {covered && (
@@ -1153,6 +1154,7 @@ export function ChartOverlay({
   feeBps,
   hover,
   offsetRef,
+  lockEndsAt = null,
 }: {
   chart: TapeChart
   board: Board | null
@@ -1160,6 +1162,8 @@ export function ChartOverlay({
   feeBps: number
   hover: { t: number } | null
   offsetRef?: RefObject<number>
+  /** Buy-in end while the header clock is counting the buy-in. Null on a ride, a handoff, a stale feed, and replay. */
+  lockEndsAt?: number | null
 }) {
   const current = useSyncExternalStore(chart.subscribe, chart.getScale, chart.getScale)
   if (!current || !board) return null
@@ -1169,6 +1173,13 @@ export function ChartOverlay({
   const riding = chartMarket(board, openBuyIns, now)
   const peg = heldStrike(riding)
   const gutter = current.width - current.plotLeft - current.plotWidth
+  const betting = buyInWindow(board, now)
+  const guide = lockGuide({
+    endsAt: lockEndsAt,
+    viewEnd: current.viewEnd,
+    now,
+    headPrice: current.head?.price ?? null,
+  })
 
   return (
     <div className="chart-overlay">
@@ -1200,6 +1211,13 @@ export function ChartOverlay({
           {tick.label}
         </span>
       ))}
+      {guide && current.head && (
+        <LockAt
+          leftMs={guide.leftMs}
+          spanMs={Math.max(1, betting.end - betting.start)}
+          top={lockTop(current, current.head.y)}
+        />
+      )}
       {hover && <Scrub scale={current} xAt={xAt} hover={hover} sample={chart.sample(hover.t)} bands={board.bands} />}
     </div>
   )
@@ -1251,6 +1269,20 @@ function Scrub({
 function pegTop(scale: ChartScale, price: number): number {
   const y = priceY(price, scale)
   return Math.min(scale.plotTop + scale.plotHeight - 4, Math.max(scale.plotTop + 4, y))
+}
+
+function lockTop(scale: ChartScale, y: number): number {
+  const inset = 14
+  return Math.min(scale.plotTop + scale.plotHeight - inset, Math.max(scale.plotTop + inset, y))
+}
+
+function LockAt({ leftMs, spanMs, top }: { leftMs: number; spanMs: number; top: number }) {
+  const { text } = useI18n()
+  return (
+    <p className="lock-at" data-urgent={leftMs < 1_500 ? "1" : "0"} style={{ top, right: 8 }}>
+      {text.locksIn(clockReadout(leftMs, spanMs))}
+    </p>
+  )
 }
 
 function PegPrice({ text, top, right }: { text: string; top: number; right: number }) {

@@ -68,6 +68,24 @@ export function buyInWindow(board: Board, now: number): { start: number; end: nu
   return session
 }
 
+/** Right-edge lock mark. The chart's right edge has to be this buy-in end,
+ *  the head has to be a real price, and the window has to still be open.
+ *  A scrubbed view, a replay, and a finished window return null.
+ */
+export function lockGuide(input: {
+  endsAt: number | null
+  viewEnd: number
+  now: number
+  headPrice: number | null
+}): { leftMs: number; price: number } | null {
+  const { endsAt, viewEnd, now, headPrice } = input
+  if (endsAt == null || headPrice == null || !Number.isFinite(headPrice)) return null
+  if (!Number.isFinite(viewEnd) || !Number.isFinite(now) || Math.abs(viewEnd - endsAt) > 50) return null
+  const leftMs = endsAt - now
+  if (!(leftMs > 0)) return null
+  return { leftMs, price: headPrice }
+}
+
 /** Locked strike for the chart horizon. A market that has not struck yet has none. */
 export function heldStrike(market: { strike: string | null } | null): { price: number; text: string } | null {
   if (!market?.strike) return null

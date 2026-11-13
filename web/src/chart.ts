@@ -104,6 +104,8 @@ export type ChartScale = {
   yMin: number
   yMax: number
   ticks: { price: number; y: number; label: string }[]
+  /** Live head, when the series has one. Null until a print is on screen. */
+  head: { price: number; y: number } | null
 }
 
 export type TapeSample = { price: number; at: number; previous: number | null }
@@ -141,6 +143,19 @@ export function priceTone(price: number, baseline: number): "up" | "down" | "pus
 /** True when `price` is strictly on `side` of the strike. A push is not in the money. */
 export function inTheMoney(side: "up" | "down", price: number, strike: number): boolean {
   return priceTone(price, strike) === side
+}
+
+/** Dashed level from the live head to the buy-in edge. A pegged ride, a paused
+ *  feed, a scrub, and the last quarter-second before the edge do not get one.
+ */
+export function showLockLevel(input: {
+  follow: boolean
+  live: boolean
+  pegged: boolean
+  headTime: number
+  viewEnd: number
+}): boolean {
+  return input.follow && input.live && !input.pegged && input.viewEnd - input.headTime > 250
 }
 const PAD = { l: 12, r: 68, t: 16, b: 22 }
 const TAPE_MS = 15 * 60 * 1000
@@ -266,6 +281,7 @@ export function mountChart(
       yMin: min,
       yMax: max,
       ticks,
+      head: head ? { price: head.price, y: yAt(head.price) } : null,
     })
 
     ctx.strokeStyle = "rgba(243,240,232,0.08)"
@@ -331,6 +347,32 @@ export function mountChart(
       ctx.beginPath()
       ctx.moveTo(xAt(now), PAD.t)
       ctx.lineTo(xAt(now), PAD.t + plotH)
+      ctx.stroke()
+    }
+
+    if (
+      head &&
+      showLockLevel({
+        follow: view.follow,
+        live,
+        pegged: !!strike?.peg,
+        headTime: head.t,
+        viewEnd,
+      })
+    ) {
+      const y = yAt(head.price)
+      const x = xAt(head.t)
+      ctx.strokeStyle = "rgba(243,240,232,0.45)"
+      ctx.lineWidth = 1
+      ctx.setLineDash([2, 3])
+      ctx.beginPath()
+      ctx.moveTo(x, y)
+      ctx.lineTo(plotRight, y)
+      ctx.stroke()
+      ctx.setLineDash([])
+      ctx.beginPath()
+      ctx.moveTo(plotRight - 1, y - 5)
+      ctx.lineTo(plotRight - 1, y + 5)
       ctx.stroke()
     }
 

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { crossTime, glideHead, glideSeries, inTheMoney, pieceBaseline, priceInUse, priceY, ridePoints, scaleFrame, strikeCaption, tapeInView, type TapePoint } from "./chart"
+import { crossTime, glideHead, glideSeries, inTheMoney, pieceBaseline, priceInUse, priceY, ridePoints, scaleFrame, showLockLevel, strikeCaption, tapeInView, type TapePoint } from "./chart"
 import { contentHalf } from "./scale"
 
 const points: TapePoint[] = [
@@ -194,4 +194,13 @@ test("a higher price sits above a lower one", () => {
 test("a panned view does not invent a hold out to its right edge", () => {
   const series = tapeInView(points, 10_000, 15_000, 18_000, true, false)
   expect(series[series.length - 1]).toEqual({ t: 12_000, price: 101 })
+})
+
+test("the lock level is the open follow window, not a ride, a scrub, or the last instant", () => {
+  expect(showLockLevel({ follow: true, live: true, pegged: false, headTime: 12_000, viewEnd: 15_000 })).toBe(true)
+  expect(showLockLevel({ follow: true, live: true, pegged: false, headTime: 14_700, viewEnd: 15_000 })).toBe(true)
+  expect(showLockLevel({ follow: false, live: true, pegged: false, headTime: 12_000, viewEnd: 15_000 })).toBe(false)
+  expect(showLockLevel({ follow: true, live: false, pegged: false, headTime: 12_000, viewEnd: 15_000 })).toBe(false)
+  expect(showLockLevel({ follow: true, live: true, pegged: true, headTime: 12_000, viewEnd: 15_000 })).toBe(false)
+  expect(showLockLevel({ follow: true, live: true, pegged: false, headTime: 14_750, viewEnd: 15_000 })).toBe(false)
 })

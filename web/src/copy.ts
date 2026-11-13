@@ -38,6 +38,7 @@ export type Copy = {
   locked: string
   priceLocked: string
   priceLocking: string
+  locksIn: (readout: string) => string
   fromLast: string
   pushMark: string
   circleTitle: string
@@ -227,6 +228,7 @@ const en: Copy = {
   locked: "Locked",
   priceLocked: "Price locked",
   priceLocking: "Price locking",
+  locksIn: (readout) => `Locks in ${readout}s`,
   fromLast: "from last",
   pushMark: "= Push",
   circleTitle: "Circle USDC on Base",
@@ -423,6 +425,7 @@ const zhTW: Copy = {
   locked: "已鎖定",
   priceLocked: "價格已鎖定",
   priceLocking: "價格鎖定中",
+  locksIn: (readout) => `${readout} 秒後鎖定`,
   fromLast: "較上一筆",
   pushMark: "＝ 平手",
   circleTitle: "Circle USDC（Base）",
