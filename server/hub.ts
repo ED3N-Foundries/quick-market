@@ -115,8 +115,11 @@ export const hub = {
   broadcast(message: unknown, recover: (peer: MarketSocket) => void, filter?: (peer: MarketSocket) => boolean) {
     return publishTo(sockets, JSON.stringify(message), { recover, filter })
   },
-  send(ws: MarketSocket, message: unknown) {
-    return publishTo(new Set([ws]), JSON.stringify(message))
+  send(ws: MarketSocket, message: unknown, priority = false) {
+    return publishTo(new Set([ws]), JSON.stringify(message), priority ? { priority: true } : {})
+  },
+  sockets() {
+    return [...sockets]
   },
   sendTo(address: string, message: unknown, recover: (peer: MarketSocket) => void, chain?: ChainKey, priority = false) {
     return publishTo(sockets, JSON.stringify(message), {

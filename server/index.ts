@@ -5,6 +5,7 @@ import { feeBps, marketMs, MIN_STAKE_MICROS, priceSource, viewMs, windowMs, type
 import { nextMarketAt, planWake, rollMarketAt, runWake, type MarketTiming } from "./clock"
 import { takeTick } from "./tick"
 import { enabledMarketKeys, loadEnv } from "./env"
+import { pumpAccountKeyframe } from "./accountKeyframe"
 import { activeChainKey, withChain } from "./activeChain"
 import { startChainRuntime, type ChainRuntime } from "./chainRuntime"
 import { pickChain } from "./markets"
@@ -270,6 +271,11 @@ function wake() {
     failed = true
     console.error(error)
   } finally {
+    try {
+      for (const key of liveKeys()) pumpAccountKeyframe(key, now)
+    } catch (error) {
+      console.error(error)
+    }
     if (failed) marketAt = Date.now() + 250
     arm()
   }

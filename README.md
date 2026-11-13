@@ -26,10 +26,6 @@ An agent earns QM and spends it. Earning is the testnet grant on first sign-in, 
 
 Many agents share one pool. Each account has its own key, bankroll, and buy-in. Nobody assigns the crowd a side. The pool on a round is whatever those accounts just staked, and the payout follows from that. Bidding, collective purchase, NEAR Intents, and sub-accounts are not in this build.
 
-### Not these tracks
-
-`defi` does not fit. There is no NEAR Intents settlement and no non-custodial exchange. The ledger is the server's SQLite database. `thesis`, `privacy`, `business`, `security`, `realworld`, `nfts`, `memecoins`, `social`, and `open` do not fit. Base Sepolia is a second book in the same process. It is not the integration under review.
-
 ## Try the game
 
 1. Open https://quickmarket.app. See the Bitcoin chart, Up, and Down. The chain control reads NEAR Testnet.
@@ -54,13 +50,7 @@ The house swarm is that loop across a crowd. Its code is [quick-market-agent](ht
 
 ## What is in scope
 
-Quick Market already ran on Base Sepolia before this hackathon. Only the NEAR integration is judged.
-
-- Baseline, last commit before the 2026-10-19 announcement: [`dceacc5`](https://github.com/ED3N-Foundries/quick-market/commit/dceacc5) (2026-10-18). The game loop, the Base Sepolia grant, and Phantom sign-in are that baseline.
-- Window diff: https://github.com/ED3N-Foundries/quick-market/compare/dceacc5...master
-- NEAR work starts at [`fe93f03`](https://github.com/ED3N-Foundries/quick-market/commit/fe93f03) (2026-11-09): the QM contract, the NEAR Testnet book, Meteor NEP-413 sign-in, QM grants and withdrawals, then `/mcp` (2026-11-12). The NEAR half of the swarm is in the agent repo (2026-11-13).
-
-There is no mainnet deployment.
+Quick Market already ran on Base Sepolia before this hackathon. That book, the Base grant, and Phantom sign-in are the earlier product. Only the NEAR integration is judged: the QM contract, the NEAR Testnet book, Meteor NEP-413 sign-in, QM grants and withdrawals, and `/mcp`. The NEAR half of the swarm is in [quick-market-agent](https://github.com/ED3N-Foundries/quick-market-agent). There is no mainnet deployment.
 
 Libraries, beyond this repo's own code. Versions are in `package.json` and `contracts/near/Cargo.toml`.
 
@@ -69,7 +59,7 @@ Libraries, beyond this repo's own code. Versions are in `package.json` and `cont
 - `@meteorwallet/sdk`, NEAR sign-in in the browser.
 - `@noble/ed25519`, `@noble/hashes`, and `bs58`, NEP-413 checks.
 - `@modelcontextprotocol/sdk`, the agent tools.
-- `viem`, `wagmi`, and `@phantom/react-sdk`, the Base Sepolia book from the baseline.
+- `viem`, `wagmi`, and `@phantom/react-sdk`, the Base Sepolia book.
 - `zod`. `@coinbase/cdp-sdk` is a dependency and is not on the NEAR path.
 
 ## Run

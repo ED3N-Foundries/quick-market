@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { LATE_BUY_IN_CODE } from "../../shared/buyIn"
 import { GRANT_FOLLOW_MS, MINT_CONFIRMATIONS } from "../../shared/mint"
 import { writeCachedBalance } from "./balanceCache"
+import { mergeAccountYou } from "./accountFrame"
 import { applyBuyIn } from "./buyInIntent"
 import type { TapeChart, TapePoint } from "./chart"
 import { createClock, easeClock, noteClock } from "./clock"
@@ -75,6 +76,7 @@ export function useMarket(token: string | null, seed: You | null = null, initial
   const [pulse, setPulse] = useState(0)
   const [unauthorized, setUnauthorized] = useState(false)
   const [confirmed, setConfirmed] = useState(false)
+  const [socketUp, setSocketUp] = useState(false)
 
   const offsetRef = useRef(0)
   const clockRef = useRef(createClock())
@@ -416,12 +418,13 @@ export function useMarket(token: string | null, seed: You | null = null, initial
 
   const grantPendingAt = you?.grantPending?.startedAt ?? null
   useEffect(() => {
-    if (!token || grantPendingAt == null) return
+    // The open socket gets grant progress on the account keyframe. Poll only while it is down.
+    if (!token || grantPendingAt == null || socketUp) return
     const id = window.setInterval(() => {
       void reload().catch(() => {})
     }, 1_000)
     return () => window.clearInterval(id)
-  }, [token, grantPendingAt, reload])
+  }, [token, grantPendingAt, reload, socketUp])
 
   useEffect(() => {
     setUnauthorized(false)
@@ -553,6 +556,7 @@ export function useMarket(token: string | null, seed: You | null = null, initial
       retryPendingRef.current = false
       generation += 1
       const gen = generation
+      setSocketUp(false)
       if (socket) detach(socket)
       socket = null
       socketRef.current = null
@@ -576,6 +580,7 @@ export function useMarket(token: string | null, seed: You | null = null, initial
         failures = 0
         openedAtRef.current = Date.now()
         connectingSinceRef.current = null
+        setSocketUp(true)
         current.send(JSON.stringify({ type: "hello", ...(tokenRef.current ? { token: tokenRef.current } : {}) }))
         sendPending(current)
         sendProbe(current, false)
@@ -626,6 +631,13 @@ export function useMarket(token: string | null, seed: You | null = null, initial
           return
         }
         if (message.type === "account") {
+          const bet = pendingBetRef.current
+          const stakeMicros = bet ? parseAmountMicros(bet.stake) : null
+          if (betLock.current && bet?.windowOpen && stakeMicros !== null && message.you && !message.result && !message.results?.length) {
+            acceptYou(mergeAccountYou(bet.snapshot, message.you, { roundId: bet.roundId, side: bet.side, stakeMicros }))
+            markConfirmed(true)
+            return
+          }
           acceptAccount(message)
           return
         }
@@ -711,6 +723,7 @@ export function useMarket(token: string | null, seed: You | null = null, initial
           socketRef.current = null
           openedAtRef.current = null
           connectingSinceRef.current = null
+          setSocketUp(false)
         }
         scheduleRetry()
       }

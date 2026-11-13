@@ -1,6 +1,7 @@
 import { LATE_BUY_IN_CODE, LATE_BUY_IN_ERROR } from "../shared/buyIn"
 import { GRANT_FOLLOW_MS, MINT_CONFIRMATIONS } from "../shared/mint"
 import { handoffBanner, tickerFor, type Handoff, type Ticker } from "../shared/source"
+import { markAccountDirty } from "./accountDirty"
 import { activeChainKey } from "./activeChain"
 import { clockAt, feeBps, LIVE_MS, marketBounds, MIN_STAKE_MICROS, priceSource, TAPE_MS, windowAccepts, type PriceSource } from "./config"
 import { getDb } from "./db"
@@ -402,9 +403,10 @@ function releaseStaleGrant(address: string, now = Date.now()) {
   if (now - pendingAt <= GRANT_FOLLOW_MS) return
   const key = normalizeAddress(address) ?? address
   if (grantWaiting(key)) return
-  getDb()
+  const wrote = getDb()
     .query("UPDATE users SET grant_pending_at = NULL, grant_tx = NULL, grant_seen = 0 WHERE chain_key = ? AND address = ? AND grant_pending_at = ?")
     .run(activeChainKey(), address, pendingAt)
+  if (wrote.changes > 0) markAccountDirty(activeChainKey(), address)
 }
 
 export function youFor(address: string): You | null {
@@ -445,6 +447,7 @@ export function credit(
       .run(amountMicros, activeChainKey(), address)
   })
   tx()
+  markAccountDirty(activeChainKey(), address)
   return { ok: true, you: youFor(address)! }
 }
 
@@ -467,6 +470,7 @@ export function withdraw(
     if (error instanceof BuyInError) return { ok: false, error: error.message }
     throw error
   }
+  markAccountDirty(activeChainKey(), address)
   return { ok: true, you: youFor(address)! }
 }
 
@@ -574,7 +578,9 @@ export function placeBuyIn(input: {
       }
       return you
     })
-    return { ok: true, you: tx() }
+    const you = tx()
+    markAccountDirty(activeChainKey(), input.address)
+    return { ok: true, you }
   } catch (error) {
     if (error instanceof BuyInError) {
       return error.code ? { ok: false, error: error.message, code: error.code } : { ok: false, error: error.message }
@@ -996,7 +1002,12 @@ export function placeBuyIns(input: {
     }
     return { results, accepted: accepted.length - missed.size }
   })
-  return { ok: true, ...run() }
+  const done = run()
+  const chain = activeChainKey()
+  for (const row of done.results) {
+    if (row.ok) markAccountDirty(chain, row.address)
+  }
+  return { ok: true, ...done }
 }
 
 export function tapeTail(now: number, tailMs: number): { t: number; price: string }[] {

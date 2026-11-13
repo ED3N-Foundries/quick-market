@@ -7,7 +7,9 @@ import { LOGIN_SKEW_MS, loginMessage, nearLoginMessage } from "../shared/login"
 import type { ChainKey } from "../shared/chain"
 import { NEP413_RECIPIENT } from "../shared/nearKey"
 import type { PublicConfig } from "../shared/market"
+import type { You } from "../shared/stream"
 import { activeChainKey, withChain } from "./activeChain"
+import { addPushSession } from "./accountPush"
 import { chainConfig } from "./env"
 import { grantDue, grantOnSignIn, grantSettings, startGrant } from "./grant"
 import { normalizeAccount, parseMicros } from "./money"
@@ -41,6 +43,26 @@ type LiveSession = {
   transport: WebStandardStreamableHTTPServerTransport
   accounts: Map<string, Bound>
   chain: ChainKey
+  closePush: () => void
+}
+
+/** The standalone GET stream is the only place a server notification can land. */
+function accountStreamOpen(transport: WebStandardStreamableHTTPServerTransport): boolean {
+  const raw = transport as unknown as {
+    _streamMapping?: Map<string, unknown>
+    _standaloneSseStreamId?: string
+  }
+  const id = raw._standaloneSseStreamId
+  if (!id || !raw._streamMapping) return false
+  return raw._streamMapping.get(id) !== undefined
+}
+
+function notifyAccount(transport: WebStandardStreamableHTTPServerTransport, body: { serverNow: number; yous: You[] }): boolean {
+  if (!accountStreamOpen(transport)) return false
+  void transport
+    .send({ jsonrpc: "2.0", method: "notifications/quick-market/account", params: body } as never)
+    .catch(() => undefined)
+  return true
 }
 
 const sessions = new Map<string, LiveSession>()
@@ -530,6 +552,7 @@ export async function handleMcp(req: Request, deps: McpDeps): Promise<Response> 
   }
   if (!isInitializeRequest(body)) return rpcError(400, "Bad Request: Server not initialized")
   const accounts = new Map<string, Bound>()
+  const fingerprints = new Map<string, string>()
   const chain = activeChainKey()
   const token = new URL(req.url).searchParams.get("token")
   if (token !== null) {
@@ -541,9 +564,23 @@ export async function handleMcp(req: Request, deps: McpDeps): Promise<Response> 
   const transport = new WebStandardStreamableHTTPServerTransport({
     sessionIdGenerator: () => crypto.randomUUID(),
     onsessioninitialized: (id) => {
-      sessions.set(id, { transport, accounts, chain })
+      const closePush = addPushSession({
+        id,
+        chain,
+        addresses() {
+          refresh(accounts)
+          return [...accounts.keys()]
+        },
+        fingerprint: (address) => fingerprints.get(address),
+        remember: (address, fingerprint) => {
+          fingerprints.set(address, fingerprint)
+        },
+        notify: (body) => notifyAccount(transport, body),
+      })
+      sessions.set(id, { transport, accounts, chain, closePush })
     },
     onsessionclosed: (id) => {
+      sessions.get(id)?.closePush()
       sessions.delete(id)
     },
   })

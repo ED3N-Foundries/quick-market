@@ -2,6 +2,7 @@ import type { ChainKey } from "../shared/chain"
 import { MINT_CONFIRMATIONS } from "../shared/mint"
 import { marketPreferences } from "../shared/market"
 import { activeChainKey } from "./activeChain"
+import { markAccountDirty } from "./accountDirty"
 import { getDb } from "./db"
 import { trackGrant } from "./grantWait"
 import { normalizeAccount } from "./money"
@@ -42,6 +43,7 @@ export function startGrant(input: {
   const address = normalizeAccount(input.address, input.chainKey)
   if (!address) return { claimed: false, done: Promise.resolve(false) }
   if (!claimSlot(address, input.now, input.intervalMs, input.chainKey)) return { claimed: false, done: Promise.resolve(false) }
+  markAccountDirty(input.chainKey, address)
   const done = trackGrant(address, () => finishGrant(address, input.now, input.amount, input.mint, input.chainKey))
   return { claimed: true, done }
 }
@@ -68,23 +70,27 @@ export function noteGrantTx(address: string, hash: string, chainKey: ChainKey = 
 export function noteGrantProgress(address: string, chainKey: ChainKey, progress: GrantProgress): void {
   const normalized = normalizeAccount(address, chainKey)
   if (!normalized) return
+  let changed = false
   const hash = progress.txHash
   if (hash && hash.length > 0) {
-    getDb()
+    const wrote = getDb()
       .query(
         "UPDATE users SET grant_tx = ? WHERE chain_key = ? AND address = ? AND grant_pending_at IS NOT NULL AND grant_tx IS NULL",
       )
       .run(hash, chainKey, normalized)
+    if (wrote.changes > 0) changed = true
   }
   if (typeof progress.seen === "number" && Number.isFinite(progress.seen)) {
     const seen = Math.max(0, Math.min(MINT_CONFIRMATIONS, Math.floor(progress.seen)))
-    getDb()
+    const wrote = getDb()
       .query(
         `UPDATE users SET grant_seen = CASE WHEN COALESCE(grant_seen, 0) > ? THEN grant_seen ELSE ? END
          WHERE chain_key = ? AND address = ? AND grant_pending_at IS NOT NULL`,
       )
       .run(seen, seen, chainKey, normalized)
+    if (wrote.changes > 0) changed = true
   }
+  if (changed) markAccountDirty(chainKey, normalized)
 }
 
 /** The hash can arrive while the mint is still waiting on blocks. */
@@ -156,13 +162,16 @@ function creditGrant(address: string, now: number, amount: number, chainKey: Cha
       .run(amount, now, chainKey, address)
     return result.changes === 1
   })
-  return tx()
+  const credited = tx()
+  if (credited) markAccountDirty(chainKey, address)
+  return credited
 }
 
 function clearPending(address: string, chainKey: ChainKey) {
-  getDb()
+  const wrote = getDb()
     .query("UPDATE users SET grant_pending_at = NULL, grant_tx = NULL, grant_seen = 0 WHERE chain_key = ? AND address = ?")
     .run(chainKey, address)
+  if (wrote.changes > 0) markAccountDirty(chainKey, address)
 }
 
 type PendingGrantRow = { address: string; grant_pending_at: number; grant_tx: string | null }
