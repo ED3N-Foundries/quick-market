@@ -93,7 +93,7 @@ The hex pair starts Base Sepolia. These keys do not start a Base mainnet book.
 | port `3002` | bound on `0.0.0.0` | No env name. `/api/status`, `/api/funding`, and the richer `/api/health`. The admin page reads this. Keep it off the public internet. |
 | `DB_PATH` | `data/quick-market.sqlite` | Ledger. Created on start. Each agent uses its own file. |
 | `API_URL` | `http://127.0.0.1:3001` | Origin this process advertises. |
-| `RPC_URL` | empty | Empty uses `https://sepolia.base.org` or `https://rpc.testnet.near.org`. A set URL applies only to the matching family. A NEAR url is ignored on Base, and the reverse. |
+| `RPC_URL` | empty | Empty uses `https://sepolia.base.org` for Base. NEAR uses `NEAR_RPC_1` through `NEAR_RPC_4`. A set URL applies only to the matching family. A NEAR url is the only NEAR endpoint when those lines are unset. |
 | `WINDOW_SECONDS` | `10` | Buy-in window. Integer 1–120. |
 | `MARKET_SECONDS` | `10` | Open to settle. Integer 1–120. |
 | `VIEW_SECONDS` | `5` | Width of a struck bet's chart, and how long a quiet socket waits before the tape reloads. Integer 1–120. |
@@ -102,6 +102,9 @@ The hex pair starts Base Sepolia. These keys do not start a Base mainnet book.
 | `GRANT_MICROS` | `100000000` | Testnet grant. 100 USDC. One USDC is one million micros. |
 | `GRANT_INTERVAL_MS` | `120000` | Gap before the same address can take another grant. |
 | `TOKEN_PRIVATE_KEY` | written by `bun run token` | NEAR contract account key. The server can serve without it. Keep it to redeploy. |
+| `NEAR_RPC_1` … `NEAR_RPC_4` | dRPC, FastNear, ZAN, Intear | NEAR testnet only. Each value is `url timeout_ms send_timeout_ms backoff_ms`. |
+
+NEAR testnet tries the list in order. A read uses its `timeout_ms`. `send_tx` uses its `send_timeout_ms`. A rate limit, a timeout, or a dead socket parks that endpoint for `backoff_ms` and the same call tries the next. An execution failure stays a failure. A send that waits to be included (`INCLUDED`, `EXECUTED`, or `FINAL`) starts on an endpoint whose send timeout is at least 8 seconds, and the hops share one budget equal to the longest send timeout. A broadcast (`NONE`) keeps the list order, so a short endpoint can accept it. Unset, the list is dRPC `https://near-testnet.drpc.org` at 1800 / 1800 / 1000 (its free tier cuts a call off at 2 seconds), FastNear `https://test.rpc.fastnear.com` at 4000 / 20000 / 1500, ZAN `https://api.zan.top/near-testnet` at 4000 / 8000 / 1500, then Intear `https://testnet-rpc.intea.rs` at 4000 / 8000 / 2000. The official `https://rpc.testnet.near.org` node allows about 30 calls a minute, so it is left out. A block that every endpoint has dropped, with the deposit cursor more than 120 blocks behind, moves the cursor to the block before the head. The pruned gap is not scanned.
 
 `HOST=0.0.0.0` publishes the API on port 3001. `bun run dev` still proxies `/api` and `/ws` to `http://127.0.0.1:3001`, so the UI on this machine expects the API there.
 

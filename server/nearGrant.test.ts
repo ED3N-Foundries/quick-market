@@ -79,6 +79,8 @@ test("a NEAR timeout is busy and an execution failure is not", () => {
   expect(nearRpcBusy(new Error("The operation timed out."))).toBe(true)
   expect(nearRpcBusy(new Error("Server error"))).toBe(true)
   expect(nearRpcBusy(new Error("NEAR RPC returned 429"))).toBe(true)
+  expect(nearRpcBusy(new Error("fetch failed"))).toBe(true)
+  expect(nearRpcBusy(new Error("TIMEOUT_ERROR"))).toBe(true)
   expect(nearRpcBusy({ message: "Server error", data: { TxExecutionError: { InvalidTxError: "Expired" } } })).toBe(false)
   expect(nearRpcBusy(new Error(JSON.stringify({ ActionError: "mint failed" })))).toBe(false)
 })

@@ -1,6 +1,6 @@
 import bs58 from "bs58"
 import { activeChainKey, withChain } from "./activeChain"
-import { loadEnv, nearTreasurySecret, rpcFor } from "./env"
+import { loadEnv, nearTreasurySecret } from "./env"
 import { getDb } from "./db"
 import { normalizeAccount } from "./money"
 import { credit, withdraw, youFor, type You } from "./rounds"
@@ -67,7 +67,7 @@ export function currentTreasuryReport(): TreasuryReport | null {
 }
 
 export function nearRpcUrl(): string {
-  return rpcFor("near-testnet")
+  return nearRpcEndpoints()[0]?.url ?? NEAR_FALLBACK_RPC
 }
 
 function signingKey(): string {
@@ -87,65 +87,224 @@ export function nearFaultMessage(error: unknown): string {
   return "Treasury could not prepare the withdraw"
 }
 
-function rpcErrorText(error: { message?: string; data?: unknown }): string {
+function rpcErrorText(error: { message?: string; data?: unknown; name?: string; cause?: unknown }): string {
   if (typeof error.data === "string" && error.data) return error.data
   if (error.data !== undefined && error.data !== null) {
     const encoded = JSON.stringify(error.data)
     if (encoded && encoded !== "{}" && encoded !== "null") return encoded
   }
+  const name = typeof error.name === "string" ? error.name : ""
+  if (error.cause !== undefined && error.cause !== null) {
+    const encoded = JSON.stringify(error.cause)
+    if (encoded && encoded !== "{}" && encoded !== "null") return name ? `${name} ${encoded}` : encoded
+  }
+  if (name) return error.message ? `${name} ${error.message}` : name
   return error.message || "NEAR RPC failed"
 }
 
-/** Public testnet endpoint. NEAR documents it as severely rate limited. */
+/** Official public testnet node. About 30 calls a minute, so it is not a default hop. */
 export const NEAR_PUBLIC_RPC = "https://rpc.testnet.near.org"
-/** Documented public alternative when the NEAR endpoint answers 429. */
+/** Free FastNear testnet node. Patient enough for a send that waits to be included. */
 export const NEAR_FALLBACK_RPC = "https://test.rpc.fastnear.com"
-const PRIMARY_QUIET_MS = 60_000
+/** dRPC's free tier cuts a call off at 2 seconds. Stay under that. */
+export const NEAR_DRPC = "https://near-testnet.drpc.org"
 
-let primaryQuietUntil = 0
+export const NEAR_RPC_SLOTS = 4
 
-/** A timed-out or rate-limited NEAR call can be retried on the fallback. An execution failure cannot. */
-export function nearRpcBusy(error: unknown): boolean {
-  if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) return true
-  const text = nearErrorText(error)
-  if (text === "Server error" || text.startsWith("NEAR RPC returned")) return true
-  const lower = text.toLowerCase()
-  return lower.includes("timeout_error") || lower.includes("timed out") || lower.includes("timeout")
+export type NearRpcEndpoint = {
+  url: string
+  /** Ceiling for a read. A caller can ask for less. */
+  timeoutMs: number
+  /** Ceiling for send_tx. A node that cuts the socket early stays short. */
+  sendTimeoutMs: number
+  /** How long a busy endpoint stays out of the next call. */
+  backoffMs: number
 }
 
-function nearErrorText(error: unknown): string {
-  if (error instanceof Error) return error.message
-  if (error && typeof error === "object") return rpcErrorText(error as { message?: string; data?: unknown })
-  return ""
-}
+/** Preference order when NEAR_RPC_1..4 are unset. The official node is omitted on purpose. */
+export const DEFAULT_NEAR_RPCS: readonly NearRpcEndpoint[] = [
+  { url: NEAR_DRPC, timeoutMs: 1_800, sendTimeoutMs: 1_800, backoffMs: 1_000 },
+  { url: NEAR_FALLBACK_RPC, timeoutMs: 4_000, sendTimeoutMs: 20_000, backoffMs: 1_500 },
+  { url: "https://api.zan.top/near-testnet", timeoutMs: 4_000, sendTimeoutMs: 8_000, backoffMs: 1_500 },
+  { url: "https://testnet-rpc.intea.rs", timeoutMs: 4_000, sendTimeoutMs: 8_000, backoffMs: 2_000 },
+]
 
-/** Skip a cooling public endpoint and use the documented fallback. A custom RPC stays put. */
-export function nearRpcUrlFor(primary: string, now: number, quietUntil: number): string {
-  if (primary === NEAR_PUBLIC_RPC && now < quietUntil) return NEAR_FALLBACK_RPC
-  return primary
-}
+/** A send that waits for inclusion starts on an endpoint at least this patient. */
+const PATIENT_SEND_MS = 8_000
 
-/** A status read should return immediately. send_tx may wait to be included. */
+/** A status read should return quickly. send_tx may wait to be included, on a patient endpoint. */
 const STATUS_FETCH_MS = 8_000
 const SEND_FETCH_MS = 20_000
-/** Signing only needs a recent block hash. One short try, then the fallback inside rpc. */
+/** Signing only needs a recent block hash. */
 const SIGN_FETCH_MS = 2_000
 /** A NEAR block hash stays valid for about a minute. Refresh well inside that. */
 export const NONCE_TTL_MS = 30_000
 const STATUS_POLL_MS = 1_500
 const NEAR_GRANT_POLL_MS = 300
+/** dRPC answers 403 to an empty user agent. */
+const NEAR_RPC_USER_AGENT = "quick-market"
+
+const NEAR_RPC_LINE = /^(https?:\/\/\S+)\s+(\d+)\s+(\d+)\s+(\d+)$/
+
+const quietUntil = new Map<string, number>()
+
+export function resetNearRpcQuiet(): void {
+  quietUntil.clear()
+}
+
+function blankEnv(value: string | undefined): string | undefined {
+  const trimmed = value?.trim()
+  return trimmed ? trimmed : undefined
+}
+
+/** `url timeout_ms send_timeout_ms backoff_ms`. Timeouts are capped so one hop cannot stall the book. */
+export function parseNearRpcLine(line: string): NearRpcEndpoint {
+  const match = line.trim().match(NEAR_RPC_LINE)
+  if (!match) throw new Error("NEAR_RPC must be a url, a timeout in ms, a send timeout in ms, and a backoff in ms")
+  const timeoutMs = Number(match[2])
+  const sendTimeoutMs = Number(match[3])
+  const backoffMs = Number(match[4])
+  if (!Number.isInteger(timeoutMs) || timeoutMs < 200 || timeoutMs > 30_000) {
+    throw new Error("NEAR_RPC timeout must be between 200 and 30000 ms")
+  }
+  if (!Number.isInteger(sendTimeoutMs) || sendTimeoutMs < 200 || sendTimeoutMs > 30_000) {
+    throw new Error("NEAR_RPC send timeout must be between 200 and 30000 ms")
+  }
+  if (!Number.isInteger(backoffMs) || backoffMs < 0 || backoffMs > 120_000) {
+    throw new Error("NEAR_RPC backoff must be between 0 and 120000 ms")
+  }
+  return { url: match[1].replace(/\/$/, ""), timeoutMs, sendTimeoutMs, backoffMs }
+}
+
+/** NEAR_RPC_1..4 replace the default list. A legacy NEAR RPC_URL is one endpoint. Base URLs are ignored. */
+export function nearRpcEndpoints(env: Record<string, string | undefined> = process.env): NearRpcEndpoint[] {
+  for (const key of Object.keys(env)) {
+    const slot = /^NEAR_RPC_(\d+)$/.exec(key)
+    if (slot && Number(slot[1]) > NEAR_RPC_SLOTS && blankEnv(env[key])) throw new Error("NEAR RPC list holds 4 endpoints")
+  }
+  const lines = [1, 2, 3, 4]
+    .map((slot) => blankEnv(env[`NEAR_RPC_${slot}`]))
+    .filter((line): line is string => line !== undefined)
+  if (lines.length > 0) return lines.map(parseNearRpcLine)
+  const custom = blankEnv(env.RPC_URL)
+  if (custom && custom.includes("near")) {
+    return [{ url: custom.replace(/\/$/, ""), timeoutMs: STATUS_FETCH_MS, sendTimeoutMs: SEND_FETCH_MS, backoffMs: 1_000 }]
+  }
+  return DEFAULT_NEAR_RPCS.map((endpoint) => ({ ...endpoint }))
+}
+
+/** Skip endpoints that are still in backoff. If every one is cooling, try the one that returns first. */
+export function nearRpcOrder(
+  endpoints: readonly NearRpcEndpoint[],
+  now: number,
+  quiet: ReadonlyMap<string, number>,
+): NearRpcEndpoint[] {
+  const ready = endpoints.filter((endpoint) => (quiet.get(endpoint.url) ?? 0) <= now)
+  if (ready.length > 0) return [...ready]
+  if (endpoints.length === 0) return []
+  let soonest = endpoints[0]
+  let soonestAt = quiet.get(soonest.url) ?? 0
+  for (const endpoint of endpoints) {
+    const at = quiet.get(endpoint.url) ?? 0
+    if (at < soonestAt) {
+      soonest = endpoint
+      soonestAt = at
+    }
+  }
+  return [soonest]
+}
+
+/** A waiting send starts on a patient endpoint. A broadcast (NONE) keeps preference order, so dRPC can accept it. */
+export function nearSendOrder(endpoints: readonly NearRpcEndpoint[], waitUntil: string | undefined): NearRpcEndpoint[] {
+  if (!waitUntil || waitUntil === "NONE") return [...endpoints]
+  const patient = endpoints.filter((endpoint) => endpoint.sendTimeoutMs >= PATIENT_SEND_MS)
+  const quick = endpoints.filter((endpoint) => endpoint.sendTimeoutMs < PATIENT_SEND_MS)
+  return patient.length > 0 ? [...patient, ...quick] : [...endpoints]
+}
+
+function waitUntilOf(params: unknown): string | undefined {
+  if (!params || typeof params !== "object" || !("wait_until" in params)) return undefined
+  const value = (params as { wait_until?: unknown }).wait_until
+  return typeof value === "string" ? value : undefined
+}
+
+/** A timed-out, refused, or unreachable call can move to the next endpoint. An execution failure cannot. */
+export function nearRpcBusy(error: unknown): boolean {
+  if (
+    error instanceof Error &&
+    (error.name === "TimeoutError" || error.name === "AbortError" || error.name === "SyntaxError")
+  ) {
+    return true
+  }
+  const text = nearErrorText(error)
+  if (text === "Server error" || text.startsWith("NEAR RPC returned")) return true
+  const lower = text.toLowerCase()
+  if (lower.includes("timeout_error") || lower.includes("timed out") || lower.includes("timeout")) return true
+  if (historyMissingText(lower)) return true
+  return (
+    lower.includes("fetch failed") ||
+    lower.includes("econnreset") ||
+    lower.includes("econnrefused") ||
+    lower.includes("enotfound") ||
+    lower.includes("unable to connect") ||
+    lower.includes("socket")
+  )
+}
+
+function nearErrorText(error: unknown): string {
+  if (error instanceof Error) return error.message
+  if (error && typeof error === "object") return rpcErrorText(error as { message?: string; data?: unknown; name?: string; cause?: unknown })
+  return ""
+}
 
 async function rpcOnce(url: string, method: string, params: unknown, timeoutMs: number): Promise<unknown> {
   const response = await fetch(url, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", "user-agent": NEAR_RPC_USER_AGENT },
     body: JSON.stringify({ jsonrpc: "2.0", id: "quick-market", method, params }),
     signal: AbortSignal.timeout(timeoutMs),
   })
-  if (!response.ok) throw new Error(`NEAR RPC returned ${response.status}`)
-  const body = (await response.json()) as { result?: unknown; error?: { message?: string; data?: unknown } }
-  if (body.error) throw new Error(rpcErrorText(body.error))
+  // A pruned block comes back as HTTP 422 from dRPC and FastNear, with the reason in the JSON body.
+  const body = (await response.json().catch(() => null)) as {
+    result?: unknown
+    error?: { message?: string; data?: unknown; name?: string; cause?: unknown }
+  } | null
+  if (body?.error) throw new Error(rpcErrorText(body.error))
+  if (!response.ok || !body) throw new Error(`NEAR RPC returned ${response.status}`)
   return body.result
+}
+
+/**
+ * Walk the list once. A busy hop is parked for its backoff and the call tries the next.
+ * send_tx hops share one budget, the longest send timeout, so a 2-second node cannot stack into a minute.
+ */
+export async function callNearRpc(
+  endpoints: readonly NearRpcEndpoint[],
+  method: string,
+  params: unknown,
+  options?: { timeoutMs?: number },
+): Promise<unknown> {
+  const send = method === "send_tx"
+  let ordered = nearRpcOrder(endpoints, Date.now(), quietUntil)
+  if (send) ordered = nearSendOrder(ordered, waitUntilOf(params))
+  const budget = send ? Math.max(0, ...endpoints.map((endpoint) => endpoint.sendTimeoutMs)) : 0
+  const started = Date.now()
+  let last = "NEAR RPC failed"
+  for (const endpoint of ordered) {
+    const remaining = budget - (Date.now() - started)
+    if (send && remaining < 200) break
+    const timeoutMs = send
+      ? Math.min(endpoint.sendTimeoutMs, remaining)
+      : Math.min(endpoint.timeoutMs, options?.timeoutMs ?? endpoint.timeoutMs)
+    try {
+      return await rpcOnce(endpoint.url, method, params, timeoutMs)
+    } catch (error) {
+      last = rpcFailureText(error)
+      if (!nearRpcBusy(error) && !nearRpcBusy(new Error(last))) break
+      quietUntil.set(endpoint.url, Date.now() + endpoint.backoffMs)
+    }
+  }
+  throw new Error(last)
 }
 
 async function rpc(
@@ -153,29 +312,7 @@ async function rpc(
   params: unknown,
   options?: { attempts?: number; timeoutMs?: number },
 ): Promise<unknown> {
-  const timeoutMs = options?.timeoutMs ?? (method === "send_tx" ? SEND_FETCH_MS : STATUS_FETCH_MS)
-  let last = "NEAR RPC failed"
-  const attempts = options?.attempts ?? (method === "send_tx" ? 1 : 4)
-  for (let attempt = 0; attempt < attempts; attempt++) {
-    const primary = nearRpcUrl()
-    const url = nearRpcUrlFor(primary, Date.now(), primaryQuietUntil)
-    try {
-      return await rpcOnce(url, method, params, timeoutMs)
-    } catch (error) {
-      last = rpcFailureText(error)
-      if (nearRpcBusy(new Error(last)) && url === NEAR_PUBLIC_RPC) {
-        primaryQuietUntil = Date.now() + PRIMARY_QUIET_MS
-        try {
-          return await rpcOnce(NEAR_FALLBACK_RPC, method, params, timeoutMs)
-        } catch (fallbackError) {
-          last = rpcFailureText(fallbackError)
-        }
-      }
-      if (!nearRpcBusy(new Error(last)) || attempt + 1 === attempts) break
-      await new Promise((resolve) => setTimeout(resolve, 1000 * (attempt + 1)))
-    }
-  }
-  throw new Error(last)
+  return callNearRpc(nearRpcEndpoints(), method, params, options)
 }
 
 function rpcFailureText(error: unknown): string {
@@ -814,6 +951,38 @@ async function nearBlock(height?: number): Promise<NearBlock> {
   return (await rpc("block", height === undefined ? { finality: "final" } : { block_id: height })) as NearBlock
 }
 
+/** Blocks older than this are gone from the free non-archival nodes. A shorter gap may still be propagating. */
+export const PRUNED_DEPOSIT_GAP = 120
+
+/** When every endpoint has dropped this history, resume just before the head so new deposits still land. */
+export function prunedDepositResume(cursor: number, head: number): number | null {
+  if (!Number.isSafeInteger(cursor) || !Number.isSafeInteger(head)) return null
+  if (head - cursor <= PRUNED_DEPOSIT_GAP) return null
+  const resume = head - 1
+  return resume > cursor ? resume : null
+}
+
+function historyMissingText(text: string): boolean {
+  const lower = text.toLowerCase()
+  return (
+    lower.includes("db not found") ||
+    lower.includes("unknown block") ||
+    lower.includes("unknown_block") ||
+    lower.includes("unknown chunk") ||
+    lower.includes("unknown_chunk")
+  )
+}
+
+export function nearHistoryMissing(error: unknown): boolean {
+  return historyMissingText(error instanceof Error ? error.message : "")
+}
+
+function saveDepositCursor(cursorKey: string, height: number) {
+  getDb()
+    .query("INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+    .run(cursorKey, String(height))
+}
+
 async function pollNearDeposits(treasury: string) {
   const token = loadEnv().tokenAccount.trim()
   const cursorKey = `${activeChainKey()}:near_deposit_height`
@@ -827,7 +996,16 @@ async function pollNearDeposits(treasury: string) {
   if (!Number.isSafeInteger(cursor)) throw new Error("NEAR deposit cursor is invalid")
   const end = Math.min(latest.header.height, cursor + 32)
   for (let height = cursor + 1; height <= end; height += 1) {
-    const block = await nearBlock(height)
+    let block: NearBlock
+    try {
+      block = await nearBlock(height)
+    } catch (error) {
+      const resume = nearHistoryMissing(error) ? prunedDepositResume(cursor, latest.header.height) : null
+      if (resume === null) throw error
+      console.error(`near deposits skipped ${height}..${resume}, pruned`)
+      saveDepositCursor(cursorKey, resume)
+      return
+    }
     const timestamp = BigInt(block.header.timestamp_nanosec ?? "0")
     for (const header of block.chunks) {
       if (header.gas_used === "0") continue
@@ -847,9 +1025,7 @@ async function pollNearDeposits(treasury: string) {
         }
       }
     }
-    getDb()
-      .query("INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
-      .run(cursorKey, String(height))
+    saveDepositCursor(cursorKey, height)
   }
 }
 
@@ -875,6 +1051,7 @@ async function resumeNearWithdrawals() {
 
 export function startNearCustody(treasury: string) {
   const chainKey = activeChainKey()
+  console.log(`near rpc ${nearRpcEndpoints().map((endpoint) => endpoint.url).join(" ")}`)
   const runtime = globalThis as unknown as { quickMarketNearCustody?: ReturnType<typeof setInterval> }
   if (runtime.quickMarketNearCustody) clearInterval(runtime.quickMarketNearCustody)
   const tick = () => {

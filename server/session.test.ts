@@ -9,7 +9,7 @@ import { NEP413_RECIPIENT, bs58, generateNearSecret, nep413Bytes, seedFromSecret
 import * as ed from "@noble/ed25519"
 import { useDatabase } from "./db"
 import { NEAR_BUSY, openSession, readSessionToken } from "./session"
-import { NEAR_FALLBACK_RPC, NEAR_PUBLIC_RPC, nearRpcUrlFor } from "./near"
+
 
 beforeEach(() => {
   marketPreferences.chain = "base-sepolia"
@@ -222,12 +222,6 @@ test("a NEAR account key that is not on the account says so", async () => {
     if (previousRpc === undefined) delete process.env.RPC_URL
     else process.env.RPC_URL = previousRpc
   }
-})
-
-test("the public NEAR endpoint cools down onto the documented fallback", () => {
-  expect(nearRpcUrlFor(NEAR_PUBLIC_RPC, 1_000, 2_000)).toBe(NEAR_FALLBACK_RPC)
-  expect(nearRpcUrlFor(NEAR_PUBLIC_RPC, 2_000, 2_000)).toBe(NEAR_PUBLIC_RPC)
-  expect(nearRpcUrlFor("https://example.test/near", 1_000, 9_000)).toBe("https://example.test/near")
 })
 
 test("a refused NEAR access-key check is a busy sign-in", async () => {
