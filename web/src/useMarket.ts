@@ -32,6 +32,7 @@ import type { Handoff, Ticker } from "../../shared/source"
 import { tickerFor } from "../../shared/source"
 import { dismissRound, dueBuyIns, emptyNotices, settleNotice, tickNotices } from "./resultNotice"
 import { applyBookPatch } from "./boardStream"
+import { acceptStateBoard, missingCardWindow, patchNeedsSnapshot } from "./boardRepair"
 import { tapeLead } from "./tapeLead"
 import type { AccountMessage, Board, Config, ServerStreamMessage, Side, SnapshotMessage, You } from "./types"
 import { withChainQuery } from "./runtimeConfig"
@@ -114,6 +115,9 @@ export function useMarket(token: string | null, seed: You | null = null, initial
   const epochRef = useRef<string | null>(null)
   const seqRef = useRef(0)
   const needsSnapshotRef = useRef(false)
+  const boardAtRef = useRef<number | null>(null)
+  const repairWindowRef = useRef<number | null>(null)
+  const requestSnapshotRef = useRef<() => void>(() => {})
   const tapeRequestsRef = useRef(new Set<string>())
   const confirmedRef = useRef(false)
   const youEpoch = useRef(0)
@@ -178,13 +182,28 @@ export function useMarket(token: string | null, seed: You | null = null, initial
     [acceptYou, markConfirmed],
   )
 
+  const commitBoard = useCallback((next: Board, serverNow: number) => {
+    boardAtRef.current = serverNow
+    boardRef.current = next
+    setBoard(next)
+  }, [])
+
+  const takeStateBoard = useCallback(
+    (serverNow: unknown, next: Board | null): boolean => {
+      if (typeof serverNow !== "number" || !next) return false
+      if (!acceptStateBoard(boardAtRef.current, serverNow)) return false
+      commitBoard(next, serverNow)
+      return true
+    },
+    [commitBoard],
+  )
+
   const acceptSnapshot = useCallback(
     (message: SnapshotMessage) => {
       epochRef.current = message.epoch
       seqRef.current = message.seq
       needsSnapshotRef.current = false
-      boardRef.current = message.board
-      setBoard(message.board)
+      commitBoard(message.board, message.serverNow)
       setFeed(message.feed)
       setTicker(message.ticker)
       setHandoff(message.handoff)
@@ -201,7 +220,7 @@ export function useMarket(token: string | null, seed: You | null = null, initial
         acceptAccount({ you: message.you ?? null, results: message.results })
       }
     },
-    [acceptAccount, applySeed],
+    [acceptAccount, applySeed, commitBoard],
   )
 
   const noteServerNow = useCallback((serverNow: number) => {
@@ -228,15 +247,15 @@ export function useMarket(token: string | null, seed: You | null = null, initial
       return null
     }
     const body = await response.json()
-    setBoard(body.board)
+    const fresh = takeStateBoard(body.serverNow, body.board)
     setConfig(body.config)
     setFeed(body.feed)
     if (body.ticker) setTicker(body.ticker)
     setHandoff(body.handoff ?? null)
     noteServerNow(body.serverNow)
     const holdYou = Boolean(opts?.tape) && betLock.current
-    if (!holdYou) acceptYou(body.you ?? null)
-    if (opts?.tape && !holdYou) {
+    if (!holdYou && fresh) acceptYou(body.you ?? null)
+    if (opts?.tape && !holdYou && fresh) {
       const points = readTape(body.tape)
       if (points) {
         seedRef.current = points
@@ -244,8 +263,9 @@ export function useMarket(token: string | null, seed: You | null = null, initial
       }
     }
     if (!holdYou) markConfirmed(true)
+    if (!fresh) return youRef.current
     return body.you ?? null
-  }, [acceptYou, applySeed, markConfirmed, noteServerNow])
+  }, [acceptYou, applySeed, markConfirmed, noteServerNow, takeStateBoard])
   reloadRef.current = reload
 
   // Drop a buy whose result will never arrive. The server account from this
@@ -383,15 +403,15 @@ export function useMarket(token: string | null, seed: You | null = null, initial
       })
       .then((body) => {
         if (cancel || !body) return
-        setBoard(body.board)
+        const fresh = takeStateBoard(body.serverNow, body.board)
         setConfig(body.config)
         setFeed(body.feed)
         if (body.ticker) setTicker(body.ticker)
         setHandoff(body.handoff ?? null)
         noteServerNow(body.serverNow)
-        if (youEpoch.current === seen) acceptYou(body.you ?? null)
+        if (fresh && youEpoch.current === seen) acceptYou(body.you ?? null)
         if (token) markConfirmed(true)
-        if (!seededRef.current) {
+        if (fresh && !seededRef.current) {
           seedRef.current = (body.tape as { t: number; price: string }[]).map((point) => ({
             t: point.t,
             price: Number(point.price),
@@ -406,7 +426,7 @@ export function useMarket(token: string | null, seed: You | null = null, initial
     return () => {
       cancel = true
     }
-  }, [token, acceptYou, applySeed, markConfirmed, noteServerNow])
+  }, [token, acceptYou, applySeed, markConfirmed, noteServerNow, takeStateBoard])
 
   useEffect(() => {
     let stopped = false
@@ -465,6 +485,14 @@ export function useMarket(token: string | null, seed: You | null = null, initial
       const current = socketRef.current
       if (current?.readyState === WebSocket.OPEN) current.send(JSON.stringify({ type: "resync" }))
       else connect()
+    }
+    requestSnapshotRef.current = () => {
+      const current = socketRef.current
+      if (!current || current.readyState !== WebSocket.OPEN) {
+        needsSnapshotRef.current = true
+        return
+      }
+      requestSnapshot()
     }
 
     function sendProbe(current: WebSocket, wakeProbe: boolean) {
@@ -611,8 +639,22 @@ export function useMarket(token: string | null, seed: You | null = null, initial
             return
           }
           const next = applyBookPatch(currentBoard, message.board)
-          boardRef.current = next
-          setBoard(next)
+          if (
+            patchNeedsSnapshot({
+              board: next,
+              openBuyIns: youRef.current?.openBuyIns ?? [],
+              now: message.serverNow,
+              feed: message.feed,
+              handoff: message.handoff,
+            })
+          ) {
+            if (repairWindowRef.current !== next.windowEndsAt) {
+              repairWindowRef.current = next.windowEndsAt
+              requestSnapshot()
+            }
+            return
+          }
+          commitBoard(next, message.serverNow)
           return
         }
         if (needsSnapshotRef.current) return
@@ -700,6 +742,7 @@ export function useMarket(token: string | null, seed: You | null = null, initial
       retryPendingRef.current = false
       sendBetRef.current = () => {}
       replaceRef.current = () => {}
+      requestSnapshotRef.current = () => {}
       document.removeEventListener("visibilitychange", onVisibility)
       window.removeEventListener("pageshow", onPageShow)
       window.removeEventListener("online", onOnline)
@@ -709,6 +752,20 @@ export function useMarket(token: string | null, seed: You | null = null, initial
       connectingSinceRef.current = null
     }
   }, [pushTick, noteServerNow, token, acceptAccount, acceptSnapshot, acceptYou, markConfirmed])
+
+  useEffect(() => {
+    const windowEndsAt = missingCardWindow({
+      board,
+      openBuyIns: you?.openBuyIns ?? [],
+      now: Date.now() + offsetRef.current,
+      feed,
+      handoff,
+      requestedWindow: repairWindowRef.current,
+    })
+    if (windowEndsAt == null) return
+    repairWindowRef.current = windowEndsAt
+    requestSnapshotRef.current()
+  }, [board, you, feed, handoff])
 
   useEffect(() => {
     if (!pending) return

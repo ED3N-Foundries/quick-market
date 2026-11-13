@@ -33,7 +33,8 @@ export type StreamMetricSnapshot = {
 
 export class MarketStream {
   readonly epoch = crypto.randomUUID()
-  private seq = 0
+  /** Book, tick, and settlement frames for one chain share a counter. A NEAR frame must not open a gap on a Base socket. */
+  private seqs = new Map<ChainKey, number>()
   private previousBoards = new Map<ChainKey, Board | null>()
   private messages = new Map<string, MessageMetric>()
   private peers = { sent: 0, coalesced: 0, recovered: 0, closed: 0 }
@@ -51,7 +52,7 @@ export class MarketStream {
     const message: ServerStreamMessage = {
       type: "snapshot",
       epoch: this.epoch,
-      seq: this.seq,
+      seq: this.currentSeq(activeChainKey()),
       serverNow: Date.now(),
       feed: this.deps.feed(),
       ticker: this.deps.ticker(),
@@ -80,7 +81,7 @@ export class MarketStream {
   }
 
   tick(price: string, exchangeTs: number, serverNow: number, feed: FeedState) {
-    this.broadcast({ type: "tick", price, exchangeTs, serverNow, feed }, null)
+    this.broadcast({ type: "tick", price, exchangeTs, serverNow, feed }, activeChainKey())
   }
 
   book(serverNow: number, feed: FeedState) {
@@ -140,15 +141,22 @@ export class MarketStream {
     return board
   }
 
+  private currentSeq(chain: ChainKey): number {
+    return this.seqs.get(chain) ?? 0
+  }
+
+  private bumpSeq(chain: ChainKey): number {
+    const next = this.currentSeq(chain) + 1
+    this.seqs.set(chain, next)
+    return next
+  }
+
   private broadcast<T extends { type: string; serverNow: number }>(message: T, chain: ChainKey | null) {
-    const framed = { ...message, epoch: this.epoch, seq: ++this.seq }
+    const key = chain ?? activeChainKey()
+    const framed = { ...message, epoch: this.epoch, seq: this.bumpSeq(key) }
     this.note(
       message.type,
-      hub.broadcast(
-        framed,
-        (peer) => this.snapshot(peer),
-        chain ? (peer) => peer.data.chain == null || peer.data.chain === chain : undefined,
-      ),
+      hub.broadcast(framed, (peer) => this.snapshot(peer), (peer) => peer.data.chain == null || peer.data.chain === key),
     )
   }
 

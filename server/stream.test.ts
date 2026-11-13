@@ -1,6 +1,8 @@
 import { expect, test } from "bun:test"
+import type { ChainKey } from "../shared/chain"
 import { tickerFor } from "../shared/source"
 import type { AccountResult, Board, ServerStreamMessage, SettlementEvent, You } from "../shared/stream"
+import { withChain } from "./activeChain"
 import { hub, type MarketSocket } from "./hub"
 import { MarketStream } from "./stream"
 
@@ -22,9 +24,9 @@ const you: You = {
   openBuyIns: [{ roundId: 1, side: "up", stakeMicros: 1_000_000 }],
 }
 
-function socket(address: string | null, sent: ServerStreamMessage[]): MarketSocket {
+function socket(address: string | null, sent: ServerStreamMessage[], chain?: ChainKey): MarketSocket {
   const peer = {
-    data: { address },
+    data: { address, chain },
     send(raw: string) {
       sent.push(JSON.parse(raw) as ServerStreamMessage)
       return 1
@@ -63,6 +65,44 @@ test("snapshots establish sequence and books publish compact deltas", () => {
   expect(first?.type === "book" && "bands" in first.board).toBe(true)
   expect(second?.type === "book" && "bands" in second.board).toBe(false)
   expect(market.metrics().messages.book?.bytes).toBeGreaterThan(0)
+  hub.remove(peer)
+})
+
+test("a book on one chain does not gap the other", () => {
+  const baseSent: ServerStreamMessage[] = []
+  const nearSent: ServerStreamMessage[] = []
+  const base = socket(null, baseSent, "base-sepolia")
+  const near = socket(null, nearSent, "near-testnet")
+  const market = stream()
+  try {
+    market.snapshot(base)
+    market.snapshot(near)
+    withChain("base-sepolia", () => {
+      market.tick("100", 1, 2, "live")
+      market.book(3, "live")
+    })
+    withChain("near-testnet", () => {
+      market.book(4, "live")
+    })
+    withChain("base-sepolia", () => {
+      market.tick("101", 5, 6, "live")
+    })
+    withChain("near-testnet", () => {
+      market.tick("101", 5, 7, "live")
+      market.book(8, "live")
+    })
+    const frames = (sent: ServerStreamMessage[]) =>
+      sent.filter((message) => message.type === "tick" || message.type === "book").map((message) => message.seq)
+    expect(frames(baseSent)).toEqual([1, 2, 3])
+    expect(frames(nearSent)).toEqual([1, 2, 3])
+    expect(baseSent.map((message) => message.type)).toEqual(["snapshot", "tick", "book", "tick"])
+    expect(nearSent.map((message) => message.type)).toEqual(["snapshot", "book", "tick", "book"])
+    expect(baseSent[0]).toMatchObject({ type: "snapshot", seq: 0 })
+    expect(nearSent[0]).toMatchObject({ type: "snapshot", seq: 0 })
+  } finally {
+    hub.remove(base)
+    hub.remove(near)
+  }
 })
 
 test("settlement broadcasts no payouts and sends account results privately", () => {

@@ -532,6 +532,56 @@ test("insufficient balance does not open a bet", () => {
 })
 
 
+test("both chains broadcast on a cycle change and on handoff resume", () => {
+  const previousMarket = marketPreferences.marketSeconds
+  marketPreferences.marketSeconds = 30
+  try {
+    const wake = (now: number) => ({
+      base: withChain("base-sepolia", () => advance(now)),
+      near: withChain("near-testnet", () => advance(now)),
+    })
+    const opened = wake(T + 10)
+    expect(opened.base.settled).toEqual([])
+    expect(opened.near.settled).toEqual([])
+    expect(opened.base.broadcastRound).toBe(true)
+    expect(opened.near.broadcastRound).toBe(true)
+
+    const quiet = wake(T + 20)
+    expect(quiet.base.broadcastRound).toBe(false)
+    expect(quiet.near.broadcastRound).toBe(false)
+    expect(quiet.base.settled).toEqual([])
+    expect(quiet.near.settled).toEqual([])
+
+    const rolled = wake(T + WINDOW + 10)
+    expect(rolled.base.settled).toEqual([])
+    expect(rolled.near.settled).toEqual([])
+    expect(rolled.base.broadcastRound).toBe(true)
+    expect(rolled.near.broadcastRound).toBe(true)
+    expect(getDb().query("SELECT COUNT(*) AS n FROM rounds WHERE strike IS NOT NULL").get()).toEqual({ n: 0 })
+
+    const held = wake(T + WINDOW + 20)
+    expect(held.base.broadcastRound).toBe(false)
+    expect(held.near.broadcastRound).toBe(false)
+
+    const at = T + WINDOW + 2_000
+    withChain("base-sepolia", () => {
+      failFeed("binance", "bybit", at)
+    })
+    withChain("near-testnet", () => {
+      failFeed("binance", "bybit", at)
+    })
+    const resume = resumeAtFor(at)
+    const resumed = wake(resume)
+    expect(resumed.base.settled).toEqual([])
+    expect(resumed.near.settled).toEqual([])
+    expect(resumed.base.broadcastRound).toBe(true)
+    expect(resumed.near.broadcastRound).toBe(true)
+    expect(handoffNow()).toBeNull()
+  } finally {
+    marketPreferences.marketSeconds = previousMarket
+  }
+})
+
 test("settling a Near round does not pay the Base round with the same id", () => {
   const baseWho = address(81)
   const nearWho = "cd".repeat(32)

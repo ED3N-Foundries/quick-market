@@ -256,7 +256,13 @@ function wake() {
         if (!due.send) return
         pending = null
         lastTickAt = due.lastSentAt
-        stream.tick(due.send.price, due.send.exchangeTs, now, feedStatus(now))
+        const price = due.send.price
+        const exchangeTs = due.send.exchangeTs
+        for (const key of liveKeys()) {
+          withChain(key, () => {
+            stream.tick(price, exchangeTs, now, feedStatus(now))
+          })
+        }
       },
     })
   } catch (error) {

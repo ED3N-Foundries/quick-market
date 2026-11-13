@@ -8,6 +8,7 @@ import { grantWaiting } from "./grantWait"
 import { normalizeAccount, normalizeAddress } from "./money"
 import { settleRound, type Resolution } from "./settle"
 
+import type { ChainKey } from "../shared/chain"
 import type {
   AccountResult,
   Band,
@@ -67,16 +68,21 @@ class BuyInError extends Error {
 const prints: Print[] = []
 let lastReceivedAt = 0
 let secondBucket: { sec: number; price: string; source: string; exchangeTs: number } | null = null
-let cachedKey = ""
+const cycleByChain = new Map<ChainKey, string>()
 let handoff: Handoff | null = null
+/** Bumped once when a handoff resumes. Each chain publishes that generation on its own. */
+let handoffEpoch = 0
+const handoffSeen = new Map<ChainKey, number>()
 let ticker: Ticker = tickerFor(priceSource())
 
 export function resetRuntime() {
   prints.length = 0
   lastReceivedAt = 0
   secondBucket = null
-  cachedKey = ""
+  cycleByChain.clear()
   handoff = null
+  handoffEpoch = 0
+  handoffSeen.clear()
   ticker = tickerFor(priceSource())
 }
 
@@ -673,15 +679,25 @@ function closeRound(round: RoundRow, forceVoid = false): SettledEvent {
   }
 }
 
+/** The shared handoff clears on the first chain. Later chains in the same wake still publish that generation. */
+function claimHandoffResume(now: number): boolean {
+  const chain = activeChainKey()
+  if (handoff?.resumeAt != null && now >= handoff.resumeAt) {
+    handoff = null
+    handoffEpoch += 1
+  }
+  const seen = handoffSeen.get(chain) ?? 0
+  if (handoffEpoch <= seen) return false
+  handoffSeen.set(chain, handoffEpoch)
+  return true
+}
+
 export function advance(now: number): { settled: SettledEvent[]; broadcastRound: boolean; awaitingPrice: boolean } {
   const clock = clockAt(now)
   const settled: SettledEvent[] = []
   let broadcastRound = false
 
-  if (handoff?.resumeAt != null && now >= handoff.resumeAt) {
-    handoff = null
-    broadcastRound = true
-  }
+  if (claimHandoffResume(now)) broadcastRound = true
   if (feedHeld(now)) {
     const voided = voidOpenRounds()
     return { settled: voided, broadcastRound: broadcastRound || voided.length > 0, awaitingPrice: false }
@@ -714,9 +730,10 @@ export function advance(now: number): { settled: SettledEvent[]; broadcastRound:
     if (result.changes > 0) broadcastRound = true
   }
 
+  const chain = activeChainKey()
   const key = `${clock.cycle}`
-  if (key !== cachedKey) {
-    cachedKey = key
+  if (cycleByChain.get(chain) !== key) {
+    cycleByChain.set(chain, key)
     broadcastRound = true
   }
   return { settled, broadcastRound, awaitingPrice }
