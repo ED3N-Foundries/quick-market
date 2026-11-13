@@ -48,7 +48,7 @@ import { ClaudeLogo, GrokLogo, NearLogo, OpenAiLogo, PhantomLogo } from "./logos
 import { ToastStack, useToasts } from "./toasts"
 import { useSession } from "./wallet"
 import { History } from "./history"
-import { AgentsOverlay, briefTx, FundOverlay, GrantOverlay, WithdrawOverlay } from "./overlays"
+import { AgentsPanel, briefTx, FundOverlay, GrantOverlay, WithdrawOverlay } from "./overlays"
 
 export function App({
   initialConfig,
@@ -95,7 +95,6 @@ export function App({
   const [withdrawing, setWithdrawing] = useState(false)
   const [following, setFollowing] = useState(true)
   const [briefOpen, setBriefOpen] = useState(false)
-  const [agentsOpen, setAgentsOpen] = useState(false)
   const briefChecked = useRef(false)
   const scrub = useScrub(chart)
   const { toasts, upsert: upsertToast, dismiss: dismissToast } = useToasts()
@@ -1043,15 +1042,7 @@ export function App({
         </div>
         <LanguageSelect />
       </footer>
-      <button
-        type="button"
-        className="agents-box"
-        disabled={!session.token}
-        aria-disabled={!session.token}
-        onClick={() => {
-          if (session.token) setAgentsOpen(true)
-        }}
-      >
+      <section className="agents-box" aria-label={text.agentsLabel}>
         <span className="agents-head">
           <span className="agents-logos" aria-hidden="true">
             <GrokLogo />
@@ -1060,9 +1051,8 @@ export function App({
           </span>
           <strong>{text.agentsLabel}</strong>
         </span>
-        <span>{session.token ? text.agentsLine : text.agentsSignIn}</span>
-      </button>
-      {agentsOpen && session.token && <AgentsOverlay chainKey={market.config.chainKey} onClose={() => setAgentsOpen(false)} />}
+        {session.token ? <AgentsPanel chainKey={market.config.chainKey} /> : <span>{text.agentsSignIn}</span>}
+      </section>
     </div>
   )
 }

@@ -57,6 +57,21 @@ export function connectorSessionToken(url: string): string | null {
   return token && token.length > 0 ? token : null
 }
 
+/**
+ * One paste for the agent: the setup ask, then each signed-in session URL.
+ * Markets with no URL are left out, so a single sign-in stays a single link.
+ */
+export function agentSetupText(ask: string, markets: { label: string; url: string }[]): string {
+  const parts = [ask.trim()]
+  for (const market of markets) {
+    const label = market.label.trim()
+    const url = market.url.trim()
+    if (!url) continue
+    parts.push(label ? `${label}\n${url}` : url)
+  }
+  return parts.filter((part) => part.length > 0).join("\n\n")
+}
+
 /** One signed-in connector per market. Markets with no stored session are left out. */
 export function agentConnectors(
   origin: string,

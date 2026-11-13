@@ -12,7 +12,7 @@ import {
 } from "./format"
 import { localize } from "./copy"
 import { useI18n } from "./i18n"
-import { agentConnectors, connectorLinkLabel, connectorSessionToken } from "./agentsUrl"
+import { agentConnectors, agentSetupText, connectorLinkLabel, connectorSessionToken } from "./agentsUrl"
 import { ClaudeLogo, GrokLogo, OpenAiLogo } from "./logos"
 import { TokenBadge } from "./App"
 import { ChainBadge } from "./badges"
@@ -334,6 +334,11 @@ const agentClients = [
 
 function selectContents(node: HTMLElement | null) {
   if (!node) return
+  if (node instanceof HTMLTextAreaElement || node instanceof HTMLInputElement) {
+    node.focus()
+    node.select()
+    return
+  }
   const range = document.createRange()
   range.selectNodeContents(node)
   const selection = window.getSelection()
@@ -342,7 +347,7 @@ function selectContents(node: HTMLElement | null) {
   selection.addRange(range)
 }
 
-export function AgentsOverlay({ chainKey, onClose }: { chainKey: string; onClose: () => void }) {
+export function AgentsPanel({ chainKey }: { chainKey: string }) {
   const { text } = useI18n()
   const session = useSession()
   const pageToken = session.pageChain?.key === chainKey ? session.token : null
@@ -350,16 +355,6 @@ export function AgentsOverlay({ chainKey, onClose }: { chainKey: string; onClose
   const [copied, setCopied] = useState<string | null>(null)
   const [failed, setFailed] = useState<string | null>(null)
   const fields = useRef(new Map<string, HTMLElement>())
-  useEffect(() => {
-    if (!session.token) onClose()
-  }, [session.token, onClose])
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose()
-    }
-    window.addEventListener("keydown", onKey)
-    return () => window.removeEventListener("keydown", onKey)
-  }, [onClose])
   const copy = (value: string, which: string) => {
     const done = () => {
       setCopied(which)
@@ -377,94 +372,112 @@ export function AgentsOverlay({ chainKey, onClose }: { chainKey: string; onClose
     void navigator.clipboard.writeText(value).then(done, missed)
   }
   const labelFor = (key: string) => (key === "near-testnet" ? text.chainNearNetwork : text.chainTestnetNetwork)
+  const paste = agentSetupText(
+    text.agentsSetupAsk,
+    markets.map(({ chainKey: key, url }) => ({ label: labelFor(key), url })),
+  )
   return (
-    <div className="fund-back" onClick={onClose}>
-      <div
-        className="fund-overlay agents-overlay"
-        role="dialog"
-        aria-modal="true"
-        aria-label={text.agentsLabel}
-        onClick={(event) => event.stopPropagation()}
-      >
-        <header className="overlay-head">
-          <h2>{text.agentsLabel}</h2>
-          <button type="button" className="overlay-close" aria-label={text.close} onClick={onClose}>
-            {"×"}
+    <div className="agents-panel">
+      <p className="agents-paste-lead">{text.agentsPasteLead}</p>
+      <div className="agents-card agents-paste-card">
+        <div className="agents-card-head">
+          <span className="agents-url-label">{text.agentsPasteLabel}</span>
+          <button type="button" className="primary" onClick={() => copy(paste, "paste")}>
+            {copied === "paste" ? text.agentsCopied : text.agentsCopy}
           </button>
-        </header>
-        <p>{text.agentsIntro}</p>
-        {markets.map(({ chainKey: key, url }) => {
-          const token = connectorSessionToken(url)
-          return (
-            <div key={key} className="agents-card">
-              <div className="agents-card-head">
-                <span className="agents-url-label">{labelFor(key)}</span>
-                <button type="button" onClick={() => copy(url, key)}>
-                  {copied === key ? text.agentsCopied : text.agentsCopy}
-                </button>
-              </div>
-              <code className="agents-link" title={url}>
-                {connectorLinkLabel(url)}
-              </code>
-              {token ? (
-                <div className="agents-token">
-                  <span className="agents-url-label">{text.agentsToken}</span>
-                  <code
-                    className="agents-token-value"
-                    tabIndex={0}
-                    ref={(node) => {
-                      if (node) fields.current.set(key, node)
-                      else fields.current.delete(key)
-                    }}
-                    onClick={(event) => selectContents(event.currentTarget)}
-                    onFocus={(event) => selectContents(event.currentTarget)}
-                  >
-                    {token}
-                  </code>
-                </div>
-              ) : null}
-              {failed === key ? <p className="note bad">{text.agentsCopyFailed}</p> : null}
-            </div>
-          )
-        })}
-        <div className="agents-card">
-          <div className="agents-card-head">
-            <span className="agents-url-label">{text.agentsPromptLabel}</span>
-            <button type="button" onClick={() => copy(text.agentsPrompt, "prompt")}>
-              {copied === "prompt" ? text.agentsCopied : text.agentsCopy}
-            </button>
-          </div>
-          <p
-            className="agents-prompt-text"
-            ref={(node) => {
-              if (node) fields.current.set("prompt", node)
-              else fields.current.delete("prompt")
-            }}
-          >
-            {text.agentsPrompt}
-          </p>
-          {failed === "prompt" ? <p className="note bad">{text.agentsCopyFailed}</p> : null}
         </div>
-        <div className="agents-steps">
-          {agentClients.map((client) => (
-            <div key={client.name} className="agents-client">
-              <client.Logo />
-              <p>
-                <strong>{client.name}. </strong>
-                {client.href && client.label ? (
-                  <>
-                    <a href={client.href} target="_blank" rel="noreferrer">
-                      {client.label}
-                    </a>
-                    {". "}
-                  </>
-                ) : null}
-                {text[client.text]}
-              </p>
-            </div>
-          ))}
-        </div>
+        <textarea
+          className="agents-paste"
+          readOnly
+          spellCheck={false}
+          rows={Math.min(18, Math.max(8, paste.split("\n").length + 3))}
+          aria-label={text.agentsPasteLabel}
+          value={paste}
+          ref={(node) => {
+            if (node) fields.current.set("paste", node)
+            else fields.current.delete("paste")
+          }}
+        />
+        {failed === "paste" ? <p className="note bad">{text.agentsCopyFailed}</p> : null}
       </div>
+      <details className="agents-manual">
+        <summary>{text.agentsManual}</summary>
+        <div className="agents-manual-body">
+          <p>{text.agentsIntro}</p>
+          {markets.map(({ chainKey: key, url }) => {
+            const token = connectorSessionToken(url)
+            return (
+              <div key={key} className="agents-card">
+                <div className="agents-card-head">
+                  <span className="agents-url-label">{labelFor(key)}</span>
+                  <button type="button" onClick={() => copy(url, key)}>
+                    {copied === key ? text.agentsCopied : text.agentsCopy}
+                  </button>
+                </div>
+                <code className="agents-link" title={url}>
+                  {connectorLinkLabel(url)}
+                </code>
+                {token ? (
+                  <div className="agents-token">
+                    <span className="agents-url-label">{text.agentsToken}</span>
+                    <code
+                      className="agents-token-value"
+                      tabIndex={0}
+                      ref={(node) => {
+                        if (node) fields.current.set(key, node)
+                        else fields.current.delete(key)
+                      }}
+                      onClick={(event) => selectContents(event.currentTarget)}
+                      onFocus={(event) => selectContents(event.currentTarget)}
+                    >
+                      {token}
+                    </code>
+                  </div>
+                ) : null}
+                {failed === key ? <p className="note bad">{text.agentsCopyFailed}</p> : null}
+              </div>
+            )
+          })}
+          <div className="agents-card">
+            <div className="agents-card-head">
+              <span className="agents-url-label">{text.agentsPromptLabel}</span>
+              <button type="button" onClick={() => copy(text.agentsPrompt, "prompt")}>
+                {copied === "prompt" ? text.agentsCopied : text.agentsCopy}
+              </button>
+            </div>
+            <p
+              className="agents-prompt-text"
+              ref={(node) => {
+                if (node) fields.current.set("prompt", node)
+                else fields.current.delete("prompt")
+              }}
+            >
+              {text.agentsPrompt}
+            </p>
+            {failed === "prompt" ? <p className="note bad">{text.agentsCopyFailed}</p> : null}
+          </div>
+          <div className="agents-steps">
+            <span className="agents-url-label">{text.agentsGetStarted}</span>
+            {agentClients.map((client) => (
+              <div key={client.name} className="agents-client">
+                <client.Logo />
+                <p>
+                  <strong>{client.name}. </strong>
+                  {client.href && client.label ? (
+                    <>
+                      <a href={client.href} target="_blank" rel="noreferrer">
+                        {client.label}
+                      </a>
+                      {". "}
+                    </>
+                  ) : null}
+                  {text[client.text]}
+                </p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </details>
     </div>
   )
 }

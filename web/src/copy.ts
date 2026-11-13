@@ -170,8 +170,12 @@ export type Copy = {
   approveNear: string
   waitingNear: string
   agentsLabel: string
-  agentsLine: string
   agentsSignIn: string
+  agentsPasteLead: string
+  agentsPasteLabel: string
+  agentsSetupAsk: string
+  agentsManual: string
+  agentsGetStarted: string
   agentsIntro: string
   agentsCopy: string
   agentsCopied: string
@@ -367,8 +371,13 @@ const en: Copy = {
   approveNear: "Approve the sign-in in Meteor",
   waitingNear: "Waiting for Meteor",
   agentsLabel: "Agents",
-  agentsLine: "Grok, Claude, or ChatGPT.",
   agentsSignIn: "Sign in first.",
+  agentsPasteLead: "Copy this into Grok, Claude, or ChatGPT.",
+  agentsPasteLabel: "Copy and paste",
+  agentsSetupAsk:
+    "Set this up if you can. Add each URL below as a Quick Market MCP connector. The URL is already signed in. Leave authentication empty. If you cannot add a connector, say so.",
+  agentsManual: "Set up manually",
+  agentsGetStarted: "Get started",
   agentsIntro: "Paste a link. It is already signed in on that market.",
   agentsCopy: "Copy",
   agentsCopied: "Copied",
@@ -570,8 +579,13 @@ const zhTW: Copy = {
   approveNear: "請在 Meteor 核准登入",
   waitingNear: "正在等待 Meteor",
   agentsLabel: "代理",
-  agentsLine: "Grok、Claude 或 ChatGPT。",
   agentsSignIn: "請先登入。",
+  agentsPasteLead: "把這段貼到 Grok、Claude 或 ChatGPT。",
+  agentsPasteLabel: "複製貼上",
+  agentsSetupAsk:
+    "如果可以，請自行設定。把下面每個網址加成 Quick Market 的 MCP 連接器。網址已經登入。驗證留空。如果加不了，請直接說。",
+  agentsManual: "手動設定",
+  agentsGetStarted: "開始使用",
   agentsIntro: "貼上連結。這個連結已經登入那個市場。",
   agentsCopy: "複製",
   agentsCopied: "已複製",
