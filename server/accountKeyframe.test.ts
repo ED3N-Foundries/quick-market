@@ -5,7 +5,7 @@ import { tickerFor } from "../shared/source"
 import type { ServerStreamMessage } from "../shared/stream"
 import { withChain } from "./activeChain"
 import { accountIsDirty, markAccountDirty } from "./accountDirty"
-import { pumpAccountKeyframe, resetAccountKeyframe } from "./accountKeyframe"
+import { pumpAccountKeyframe, pushAccountNow, resetAccountKeyframe } from "./accountKeyframe"
 import { addPushSession, type AccountNotice, type PushSession } from "./accountPush"
 import { useDatabase } from "./db"
 import { startGrant } from "./grant"
@@ -139,6 +139,24 @@ test("the same fingerprint produces no second frame", () => {
     pumpAccountKeyframe(chain, 3_000)
     expect(sent).toHaveLength(2)
     expect(accountIsDirty(chain, who)).toBe(false)
+  } finally {
+    hub.remove(peer)
+  }
+})
+
+test("a grant hash is pushed without waiting for the keyframe", () => {
+  const who = address(7)
+  const sent: ServerStreamMessage[] = []
+  const peer = socket(who, sent)
+  try {
+    credit(who, USDC)
+    markAccountDirty(chain, who)
+    pushAccountNow(chain, who, 1_000)
+    expect(sent).toHaveLength(1)
+    expect(sent[0]).toMatchObject({ type: "account", you: { address: who, balanceMicros: USDC } })
+    expect(accountIsDirty(chain, who)).toBe(false)
+    pumpAccountKeyframe(chain, 1_100)
+    expect(sent).toHaveLength(1)
   } finally {
     hub.remove(peer)
   }

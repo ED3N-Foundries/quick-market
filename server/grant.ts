@@ -9,6 +9,23 @@ import { normalizeAccount } from "./money"
 
 export type GrantProgress = { txHash?: string; seen?: number }
 
+type GrantNote = (address: string, chainKey: ChainKey) => void
+let grantNoted: GrantNote | null = null
+
+/** Immediate account push. The one-second keyframe remains the fallback. */
+export function onGrantNoted(listener: GrantNote | null): void {
+  grantNoted = listener
+}
+
+function touchGrant(chainKey: ChainKey, address: string) {
+  markAccountDirty(chainKey, address)
+  try {
+    grantNoted?.(address, chainKey)
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : error)
+  }
+}
+
 export function grantSettings(): { amount: number; intervalMs: number } {
   return { amount: marketPreferences.grantMicros, intervalMs: marketPreferences.grantIntervalMs }
 }
@@ -43,7 +60,7 @@ export function startGrant(input: {
   const address = normalizeAccount(input.address, input.chainKey)
   if (!address) return { claimed: false, done: Promise.resolve(false) }
   if (!claimSlot(address, input.now, input.intervalMs, input.chainKey)) return { claimed: false, done: Promise.resolve(false) }
-  markAccountDirty(input.chainKey, address)
+  touchGrant(input.chainKey, address)
   const done = trackGrant(address, () => finishGrant(address, input.now, input.amount, input.mint, input.chainKey))
   return { claimed: true, done }
 }
@@ -75,9 +92,9 @@ export function noteGrantProgress(address: string, chainKey: ChainKey, progress:
   if (hash && hash.length > 0) {
     const wrote = getDb()
       .query(
-        "UPDATE users SET grant_tx = ? WHERE chain_key = ? AND address = ? AND grant_pending_at IS NOT NULL AND grant_tx IS NULL",
+        "UPDATE users SET grant_tx = ? WHERE chain_key = ? AND address = ? AND grant_pending_at IS NOT NULL AND IFNULL(grant_tx, '') != ?",
       )
-      .run(hash, chainKey, normalized)
+      .run(hash, chainKey, normalized, hash)
     if (wrote.changes > 0) changed = true
   }
   if (typeof progress.seen === "number" && Number.isFinite(progress.seen)) {
@@ -90,7 +107,7 @@ export function noteGrantProgress(address: string, chainKey: ChainKey, progress:
       .run(seen, seen, chainKey, normalized)
     if (wrote.changes > 0) changed = true
   }
-  if (changed) markAccountDirty(chainKey, normalized)
+  if (changed) touchGrant(chainKey, normalized)
 }
 
 /** The hash can arrive while the mint is still waiting on blocks. */
@@ -163,7 +180,7 @@ function creditGrant(address: string, now: number, amount: number, chainKey: Cha
     return result.changes === 1
   })
   const credited = tx()
-  if (credited) markAccountDirty(chainKey, address)
+  if (credited) touchGrant(chainKey, address)
   return credited
 }
 
@@ -171,7 +188,7 @@ function clearPending(address: string, chainKey: ChainKey) {
   const wrote = getDb()
     .query("UPDATE users SET grant_pending_at = NULL, grant_tx = NULL, grant_seen = 0 WHERE chain_key = ? AND address = ?")
     .run(chainKey, address)
-  if (wrote.changes > 0) markAccountDirty(chainKey, address)
+  if (wrote.changes > 0) touchGrant(chainKey, address)
 }
 
 type PendingGrantRow = { address: string; grant_pending_at: number; grant_tx: string | null }

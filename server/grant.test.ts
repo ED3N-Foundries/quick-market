@@ -2,7 +2,7 @@ import { beforeEach, expect, test } from "bun:test"
 import { getDb, useDatabase } from "./db"
 import { GRANT_FOLLOW_MS, MINT_CONFIRMATIONS } from "../shared/mint"
 import { loadMarket, marketPreferences } from "../shared/market"
-import { applyGrant, cutoverAmount, grantDue, grantOnSignIn, grantSettings, noteGrantTx, resumePendingGrants, settleGrantRequest } from "./grant"
+import { applyGrant, cutoverAmount, grantDue, grantOnSignIn, grantSettings, noteGrantTx, onGrantNoted, resumePendingGrants, settleGrantRequest } from "./grant"
 import { youFor } from "./rounds"
 
 const who = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -231,6 +231,38 @@ test("grant progress moves from zero to the hash and then up to three", async ()
   expect(await done).toBe(true)
   expect(youFor(who)?.grantPending).toBeNull()
   expect(youFor(who)?.balanceMicros).toBe(100_000_000)
+})
+
+test("a rejected broadcast can replace the stored hash", async () => {
+  const first = `0x${"11".repeat(32)}`
+  const second = `0x${"22".repeat(32)}`
+  const notes: string[] = []
+  onGrantNoted((address) => notes.push(address))
+  let release: () => void = () => {}
+  const gate = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  try {
+    const done = applyGrant({
+      address: who,
+      now: 0,
+      chainKey: "base-sepolia",
+      amount: 100_000_000,
+      intervalMs: hour,
+      mint: async (_amount, progress) => {
+        progress({ txHash: first, seen: 1 })
+        progress({ txHash: second, seen: 1 })
+        await gate
+      },
+    })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(youFor(who)?.grantPending?.txHash).toBe(second)
+    expect(notes).toContain(who)
+    release()
+    expect(await done).toBe(true)
+  } finally {
+    onGrantNoted(null)
+  }
 })
 
 test("a resumed hash is watched and credited without minting again", async () => {

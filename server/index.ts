@@ -5,12 +5,12 @@ import { feeBps, marketMs, MIN_STAKE_MICROS, priceSource, viewMs, windowMs, type
 import { nextMarketAt, planWake, rollMarketAt, runWake, type MarketTiming } from "./clock"
 import { takeTick } from "./tick"
 import { enabledMarketKeys, loadEnv } from "./env"
-import { pumpAccountKeyframe } from "./accountKeyframe"
+import { pumpAccountKeyframe, pushAccountNow } from "./accountKeyframe"
 import { activeChainKey, withChain } from "./activeChain"
 import { startChainRuntime, type ChainRuntime } from "./chainRuntime"
 import { pickChain } from "./markets"
 import { readSessionToken, sessionChainForToken } from "./session"
-import { grantSettings } from "./grant"
+import { grantSettings, onGrantNoted } from "./grant"
 import { hub } from "./hub"
 import { bindHttp, handleInternal, handleSafe, json } from "./http"
 import { collectFunding } from "./funding"
@@ -127,6 +127,10 @@ let lastFeed: "live" | "stale" | null = null
 let marketAt = 0
 let awaitingStrike = false
 let strikeKick = false
+
+onGrantNoted((address, chainKey) => {
+  pushAccountNow(chainKey, address)
+})
 
 const stream = new MarketStream({
   board: () => board(),

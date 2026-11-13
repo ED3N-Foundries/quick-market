@@ -13,6 +13,13 @@ export function markAccountDirty(chain: ChainKey, address: string): void {
   set.add(address)
 }
 
+export function dropAccountDirty(chain: ChainKey, address: string): void {
+  const set = dirty.get(chain)
+  if (!set) return
+  set.delete(address)
+  if (set.size === 0) dirty.delete(chain)
+}
+
 export function accountIsDirty(chain: ChainKey, address: string): boolean {
   return dirty.get(chain)?.has(address) ?? false
 }

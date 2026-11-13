@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import { MINT_CONFIRMATIONS, MINT_RECEIPT_TIMEOUT_MS } from "../shared/mint"
-import { nearExecutionFailed, nearGrantSeen, nearRpcBusy, nextNearGrantWatch } from "./near"
+import { nearExecutionFailed, nearGrantSeen, nearNonceRejected, nearRpcBusy, nextNearGrantWatch, nonceCacheFresh, signingKeyQuery } from "./near"
 
 const deadline = MINT_RECEIPT_TIMEOUT_MS
 const executed = MINT_CONFIRMATIONS - 1
@@ -31,13 +31,16 @@ test("an included NEAR reply is not an execution failure", () => {
   })
 })
 
-test("a grant finishes on final, credits execution at the deadline, and times out before execution", () => {
+test("a grant finishes when the mint has executed and times out before that", () => {
   expect(
     nextNearGrantWatch({ elapsedMs: 0, deadlineMs: deadline, seen: 1, status: { final_execution_status: "FINAL" } }),
   ).toEqual({ seen: MINT_CONFIRMATIONS, done: true, failed: false })
   expect(
     nextNearGrantWatch({ elapsedMs: 1_000, deadlineMs: deadline, seen: 1, status: { final_execution_status: "EXECUTED" } }),
-  ).toEqual({ seen: executed, done: false, failed: false })
+  ).toEqual({ seen: MINT_CONFIRMATIONS, done: true, failed: false })
+  expect(
+    nextNearGrantWatch({ elapsedMs: 0, deadlineMs: deadline, seen: 1, status: { final_execution_status: "EXECUTED_OPTIMISTIC" } }),
+  ).toEqual({ seen: MINT_CONFIRMATIONS, done: true, failed: false })
   expect(nextNearGrantWatch({ elapsedMs: deadline, deadlineMs: deadline, seen: executed, status: null })).toEqual({
     seen: MINT_CONFIRMATIONS,
     done: true,
@@ -56,6 +59,19 @@ test("a grant finishes on final, credits execution at the deadline, and times ou
       status: { status: { Failure: { ActionError: "mint failed" } } },
     }),
   ).toEqual({ seen: 1, done: false, failed: true })
+})
+
+test("a rejected nonce or an expired block hash can be signed again", () => {
+  expect(nearNonceRejected(new Error('{"InvalidTxError":{"InvalidNonce":{"tx_nonce":1,"ak_nonce":2}}}'))).toBe(true)
+  expect(nearNonceRejected(new Error('{"InvalidTxError":"Expired"}'))).toBe(true)
+  expect(nearNonceRejected(new Error(JSON.stringify({ ActionError: "mint failed" })))).toBe(false)
+  expect(nearNonceRejected(new Error("The operation timed out."))).toBe(false)
+})
+
+test("the signing nonce is reused for thirty seconds", () => {
+  expect(nonceCacheFresh(1_000, 31_000)).toBe(true)
+  expect(nonceCacheFresh(1_000, 31_001)).toBe(false)
+  expect(signingKeyQuery("treasury.testnet", "ed25519:abc").finality).toBe("optimistic")
 })
 
 test("a NEAR timeout is busy and an execution failure is not", () => {

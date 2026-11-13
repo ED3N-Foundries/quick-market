@@ -64,9 +64,12 @@ export function loginStepState(index: number, phase: LoginPhase): "done" | "now"
 
 export function grantWaitStatus(progress?: { seen: number; needed: number }, lang: Lang = "en", chainKey?: string): string {
   const text = copy(lang)
-  if (!progress) return chainKey === "near-testnet" ? text.mintingGrantNear : text.mintingGrant
+  const minting = chainKey === "near-testnet" ? text.mintingGrantNear : text.mintingGrant
+  if (!progress) return minting
   const needed = Math.max(0, Math.floor(progress.needed))
   const seen = Math.min(needed, Math.max(0, Math.floor(progress.seen)))
+  // No hash yet. Confirmation copy would say the chain is behind a transaction that was never signed.
+  if (seen <= 0) return minting
   const left = needed - seen
   if (left === 0) return text.confirmationsIn
   return left === 1 ? text.waitingOne : text.waitingMany(left)

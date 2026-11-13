@@ -97,7 +97,7 @@ async function signedTransfer(to: Address, amount: bigint): Promise<Hex> {
   return account.signTransaction(prepared as Parameters<PrivateKeyAccount["signTransaction"]>[0])
 }
 
-const GRANT_POLL_MS = 1_000
+const GRANT_POLL_MS = 500
 
 type GrantReport = (progress: { txHash?: string; seen: number }) => void
 
@@ -154,7 +154,7 @@ export async function mintToTreasury(amountMicros: number, report?: GrantReport)
       pendingMintWaiters = []
       if (total <= 0 || waiters.length === 0) return
       enqueue(() => withChain(mintChain, async () => {
-        const { chain, account, publicClient, walletClient } = clients()
+        const { chain, account, walletClient } = clients()
         const hash = await walletClient.writeContract({
           address: chain.usdc,
           abi: mintAbi,
@@ -169,16 +169,21 @@ export async function mintToTreasury(amountMicros: number, report?: GrantReport)
             console.error(error instanceof Error ? error.message : error)
           }
         }
-        await pollGrantConfirmations(publicClient, hash, (seen) => {
-          for (const waiter of waiters) {
-            try {
-              waiter.report?.({ seen })
-            } catch (error) {
-              console.error(error instanceof Error ? error.message : error)
+        return hash
+      }))
+        .then((hash) => withChain(mintChain, async () => {
+          const { publicClient } = clients()
+          await pollGrantConfirmations(publicClient, hash, (seen) => {
+            for (const waiter of waiters) {
+              try {
+                waiter.report?.({ seen })
+              } catch (error) {
+                console.error(error instanceof Error ? error.message : error)
+              }
             }
-          }
-        })
-      })).then(
+          })
+        }))
+        .then(
         () => {
           for (const waiter of waiters) waiter.resolve()
         },

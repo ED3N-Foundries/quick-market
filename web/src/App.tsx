@@ -355,14 +355,15 @@ export function App({
     const txHash = grantPending?.txHash || grantTx
     const needed = grantPending?.confirmations ?? MINT_CONFIRMATIONS
     const seen = grantPending?.seen ?? 0
+    const confirming = Boolean(txHash) && seen > 0
     upsertToast({
       id: "grant",
       kind: "progress",
       title: text.toastGrant,
-      text: grantWaitStatus({ seen, needed }, lang, market.config.chainKey),
-      txHash,
-      txUrl: txHash ? grantTxUrl(market.config.chainId, txHash, market.config.chainKey) : null,
-      meter: { seen, needed },
+      text: grantWaitStatus(confirming ? { seen, needed } : undefined, lang, market.config.chainKey),
+      txHash: confirming ? txHash : null,
+      txUrl: confirming && txHash ? grantTxUrl(market.config.chainId, txHash, market.config.chainKey) : null,
+      meter: confirming ? { seen, needed } : undefined,
     })
   }, [
     grantPending,

@@ -1,7 +1,7 @@
 import type { ChainKey } from "../shared/chain"
 import type { You } from "../shared/stream"
 import { withChain } from "./activeChain"
-import { accountDirtyCount, resetAccountDirty, retainAccountDirty, takeAccountDirty } from "./accountDirty"
+import { accountDirtyCount, dropAccountDirty, resetAccountDirty, retainAccountDirty, takeAccountDirty } from "./accountDirty"
 import { pushSessions, type PushSession } from "./accountPush"
 import { hub, type MarketSocket } from "./hub"
 import { youFor } from "./rounds"
@@ -44,6 +44,53 @@ type Item = {
 function deliverSocket(peer: MarketSocket, you: You, now: number): boolean {
   const report = hub.send(peer, { type: "account", serverNow: now, you }, true)
   return report.sent === 1
+}
+
+/**
+ * Send one account now. Grant progress must not wait for the one-second keyframe.
+ * A failed send stays dirty so the keyframe retries it.
+ */
+export function pushAccountNow(chain: ChainKey, address: string, now = Date.now()): void {
+  withChain(chain, () => {
+    const sockets = hub.sockets().filter((peer) => listens(peer, address, chain))
+    const sessions = pushSessions(chain).filter((session) => session.addresses().includes(address))
+    if (sockets.length === 0 && sessions.length === 0) return
+    let you: You | null
+    try {
+      you = youFor(address)
+    } catch (error) {
+      console.error(error)
+      return
+    }
+    if (!you) {
+      dropAccountDirty(chain, address)
+      return
+    }
+    const fp = accountFingerprint(you)
+    let failed = false
+    for (const peer of sockets) {
+      const prior = socketFp.get(peer)
+      if (prior && prior.address === address && prior.fp === fp) continue
+      if (!deliverSocket(peer, you, now)) {
+        failed = true
+        continue
+      }
+      socketFp.set(peer, { address, fp })
+    }
+    for (const session of sessions) {
+      if (session.fingerprint(address) === fp) continue
+      let accepted = false
+      try {
+        accepted = session.notify({ serverNow: now, yous: [you] })
+      } catch (error) {
+        console.error(error)
+      }
+      if (!accepted) failed = true
+      else session.remember(address, fp)
+    }
+    if (failed) retainAccountDirty(chain, [address])
+    else dropAccountDirty(chain, address)
+  })
 }
 
 /**

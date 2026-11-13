@@ -33,16 +33,33 @@ export type ParsedDeposit = {
 }
 
 let latest: TreasuryReport | null = null
-let queue: Promise<void> = Promise.resolve()
 let polling = false
+/** Nonce allocation. A broadcast must not sit in front of the next signature. */
+let signQueue: Promise<void> = Promise.resolve()
+/** In-order submission. The next transaction can already be signed. */
+let broadcastQueue: Promise<void> = Promise.resolve()
+let broadcasts = 0
 
-function enqueue<T>(job: () => Promise<T>): Promise<T> {
-  const run = queue.then(job, job)
-  queue = run.then(
+function enqueueSign<T>(job: () => Promise<T>): Promise<T> {
+  const run = signQueue.then(job, job)
+  signQueue = run.then(
     () => undefined,
     () => undefined,
   )
   return run
+}
+
+function enqueueBroadcast<T>(job: () => Promise<T>): Promise<T> {
+  broadcasts += 1
+  const run = broadcastQueue.then(job, job)
+  const done = run.finally(() => {
+    broadcasts -= 1
+  })
+  broadcastQueue = done.then(
+    () => undefined,
+    () => undefined,
+  )
+  return done
 }
 
 export function currentTreasuryReport(): TreasuryReport | null {
@@ -111,6 +128,12 @@ export function nearRpcUrlFor(primary: string, now: number, quietUntil: number):
 /** A status read should return immediately. send_tx may wait to be included. */
 const STATUS_FETCH_MS = 8_000
 const SEND_FETCH_MS = 20_000
+/** Signing only needs a recent block hash. One short try, then the fallback inside rpc. */
+const SIGN_FETCH_MS = 2_000
+/** A NEAR block hash stays valid for about a minute. Refresh well inside that. */
+export const NONCE_TTL_MS = 30_000
+const STATUS_POLL_MS = 1_500
+const NEAR_GRANT_POLL_MS = 300
 
 async function rpcOnce(url: string, method: string, params: unknown, timeoutMs: number): Promise<unknown> {
   const response = await fetch(url, {
@@ -217,23 +240,106 @@ export function assertQmMetadata(meta: { symbol: string; decimals: number }) {
   }
 }
 
-async function nextNonce(account: string, secretKey: string): Promise<{ nonce: bigint; blockHash: Uint8Array; publicKey: Uint8Array }> {
+/** Optimistic is enough to sign. Final waits for a block the transaction does not need. */
+export function signingKeyQuery(account: string, publicKey: string) {
+  return {
+    request_type: "view_access_key" as const,
+    finality: "optimistic" as const,
+    account_id: account,
+    public_key: publicKey,
+  }
+}
+
+export function nonceCacheFresh(at: number, now: number): boolean {
+  return now >= at && now - at <= NONCE_TTL_MS
+}
+
+/** Invalid nonce or a stale block hash. An executed action error is not a reason to sign again. */
+export function nearNonceRejected(error: unknown): boolean {
+  const message = (error instanceof Error ? error.message : typeof error === "string" ? error : "").toLowerCase()
+  if (message.includes("invalidnonce")) return true
+  if (message.includes("actionerror") || message.includes("functioncallerror")) return false
+  return message.includes("invalidtxerror") && message.includes("expired")
+}
+
+type NonceCache = { account: string; nonce: bigint; blockHash: Uint8Array; at: number }
+let nonceCache: NonceCache | null = null
+
+async function readNonce(account: string, secretKey: string): Promise<{ nonce: bigint; blockHash: Uint8Array; publicKey: Uint8Array }> {
   const publicKey = await publicKeyBytes(secretKey)
   if (!publicKey) throw new Error("TREASURY_PRIVATE_KEY must be an ed25519 NEAR secret key")
-  const result = (await rpc("query", {
-    request_type: "view_access_key",
-    finality: "final",
-    account_id: account,
-    public_key: `ed25519:${bs58.encode(publicKey)}`,
+  const result = (await rpc("query", signingKeyQuery(account, `ed25519:${bs58.encode(publicKey)}`), {
+    attempts: 1,
+    timeoutMs: SIGN_FETCH_MS,
   })) as { nonce?: number; block_hash?: string }
   if (typeof result.block_hash !== "string") throw new Error("Treasury access key is missing")
   return { nonce: BigInt(result.nonce ?? 0) + 1n, blockHash: bs58.decode(result.block_hash), publicKey }
+}
+
+async function allocateNonce(
+  account: string,
+  secretKey: string,
+  refresh: boolean,
+): Promise<{ nonce: bigint; blockHash: Uint8Array; publicKey: Uint8Array }> {
+  const now = Date.now()
+  if (!refresh && nonceCache && nonceCache.account === account && nonceCacheFresh(nonceCache.at, now)) {
+    const publicKey = await publicKeyBytes(secretKey)
+    if (!publicKey) throw new Error("TREASURY_PRIVATE_KEY must be an ed25519 NEAR secret key")
+    return { nonce: nonceCache.nonce, blockHash: nonceCache.blockHash, publicKey }
+  }
+  const fresh = await readNonce(account, secretKey)
+  nonceCache = { account, nonce: fresh.nonce, blockHash: fresh.blockHash, at: now }
+  return fresh
+}
+
+function commitNonce(account: string, used: bigint) {
+  if (!nonceCache || nonceCache.account !== account || nonceCache.nonce !== used) return
+  nonceCache = { ...nonceCache, nonce: used + 1n, at: Date.now() }
 }
 
 /** Included and not-yet-executed replies use a string status. Only an object can be a Failure. */
 export function nearExecutionFailed(status: unknown): { failed: true; reason: string } | { failed: false } {
   if (!status || typeof status !== "object" || !("Failure" in status)) return { failed: false }
   return { failed: true, reason: JSON.stringify(status.Failure) }
+}
+
+type SignedNear = { hash: string; raw: string }
+
+async function signUnderLock(input: {
+  signerId: string
+  secretKey: string
+  receiverId: string
+  actions: number[][]
+  refresh?: boolean
+  onSigned?: (hash: string) => void
+}): Promise<SignedNear> {
+  return enqueueSign(async () => {
+    const viewed = await allocateNonce(input.signerId, input.secretKey, input.refresh === true)
+    const signed = await signTransaction({
+      signerId: input.signerId,
+      secretKey: input.secretKey,
+      nonce: viewed.nonce,
+      receiverId: input.receiverId,
+      blockHash: viewed.blockHash,
+      actions: input.actions,
+    })
+    input.onSigned?.(signed.hash)
+    commitNonce(input.signerId, viewed.nonce)
+    return { hash: signed.hash, raw: Buffer.from(signed.signed).toString("base64") }
+  })
+}
+
+async function sendOnce(
+  raw: string,
+  waitUntil: "NONE" | "INCLUDED" | "EXECUTED" | "FINAL",
+): Promise<{ status?: unknown; transaction?: { hash?: string } }> {
+  const result = (await rpc("send_tx", {
+    signed_tx_base64: raw,
+    wait_until: waitUntil,
+  })) as { status?: unknown; transaction?: { hash?: string } }
+  const execution = nearExecutionFailed(result?.status)
+  if (execution.failed) throw new Error(execution.reason)
+  return result
 }
 
 async function submit(input: {
@@ -246,28 +352,26 @@ async function submit(input: {
   recoverHash?: boolean
   onSigned?: (hash: string) => void
 }): Promise<string> {
-  const viewed = await nextNonce(input.signerId, input.secretKey)
-  const signed = await signTransaction({
-    signerId: input.signerId,
-    secretKey: input.secretKey,
-    nonce: viewed.nonce,
-    receiverId: input.receiverId,
-    blockHash: viewed.blockHash,
-    actions: input.actions,
+  const waitUntil = input.waitUntil ?? "EXECUTED"
+  const signed = await signUnderLock(input)
+  return enqueueBroadcast(async () => {
+    try {
+      const result = await sendOnce(signed.raw, waitUntil)
+      return result.transaction?.hash ?? signed.hash
+    } catch (error) {
+      if (input.recoverHash && nearSubmitLost(error)) return signed.hash
+      // Only the tail can reuse the chain nonce. A later signature is already queued behind this send.
+      if (broadcasts !== 1 || !nearNonceRejected(error)) throw error
+      const again = await signUnderLock({ ...input, refresh: true })
+      try {
+        const result = await sendOnce(again.raw, waitUntil)
+        return result.transaction?.hash ?? again.hash
+      } catch (retryError) {
+        if (input.recoverHash && nearSubmitLost(retryError)) return again.hash
+        throw retryError
+      }
+    }
   })
-  input.onSigned?.(signed.hash)
-  try {
-    const result = (await rpc("send_tx", {
-      signed_tx_base64: Buffer.from(signed.signed).toString("base64"),
-      wait_until: input.waitUntil ?? "EXECUTED",
-    })) as { status?: unknown; transaction?: { hash?: string } }
-    const execution = nearExecutionFailed(result?.status)
-    if (execution.failed) throw new Error(execution.reason)
-    return result?.transaction?.hash ?? signed.hash
-  } catch (error) {
-    if (input.recoverHash && nearSubmitLost(error)) return signed.hash
-    throw error
-  }
 }
 
 /** A rejected transaction stays a failure. A timeout or a dropped socket can still land. */
@@ -313,8 +417,8 @@ export function nearGrantSeen(result: NearGrantStatus | null): { failed: boolean
 }
 
 /**
- * One poll of a grant. Execution is enough once the receipt wait is over.
- * Refund finality is the last meter tick, not a reason to drop the credit.
+ * One poll of a grant. Execution credits it. Finality is not another wait.
+ * A timeout before execution does not credit.
  */
 export function nextNearGrantWatch(input: {
   elapsedMs: number
@@ -325,22 +429,18 @@ export function nextNearGrantWatch(input: {
   const step = nearGrantSeen(input.status)
   if (step.failed) return { seen: input.seen, done: false, failed: true }
   const seen = Math.max(input.seen, step.seen)
-  if (seen >= MINT_CONFIRMATIONS) return { seen: MINT_CONFIRMATIONS, done: true, failed: false }
-  if (input.elapsedMs >= input.deadlineMs) {
-    if (seen >= MINT_CONFIRMATIONS - 1) return { seen: MINT_CONFIRMATIONS, done: true, failed: false }
-    return { seen, done: false, failed: true }
-  }
+  // Execution credits the grant. Finality is not another wait.
+  if (seen >= MINT_CONFIRMATIONS - 1) return { seen: MINT_CONFIRMATIONS, done: true, failed: false }
+  if (input.elapsedMs >= input.deadlineMs) return { seen, done: false, failed: true }
   return { seen, done: false, failed: false }
 }
-
-const NEAR_GRANT_POLL_MS = 1_000
 
 async function readNearGrantStatus(signerId: string, hash: string): Promise<NearGrantStatus | null> {
   try {
     return (await rpc(
       "EXPERIMENTAL_tx_status",
       { tx_hash: hash, sender_account_id: signerId, wait_until: "NONE" },
-      { attempts: 1, timeoutMs: STATUS_FETCH_MS },
+      { attempts: 1, timeoutMs: STATUS_POLL_MS },
     )) as NearGrantStatus
   } catch {
     return null
@@ -470,14 +570,12 @@ export async function bootNear(treasury: string): Promise<TreasuryReport> {
     const first = await collectHoldings(treasury, [])
     const planned = planSeed({ treasury: first.treasury, ledgerMicros: ledgerSumMicros(), agents: [] })
     if (planned.mintMicros > 0n) {
-      await enqueue(() =>
-        submit({
-          signerId: treasury,
-          secretKey: signingKey(),
-          receiverId: token,
-          actions: [encodeFunctionCall("mint", jsonArgs({ account_id: treasury, amount: planned.mintMicros.toString() }), GAS, 0n)],
-        }),
-      )
+      await submit({
+        signerId: treasury,
+        secretKey: signingKey(),
+        receiverId: token,
+        actions: [encodeFunctionCall("mint", jsonArgs({ account_id: treasury, amount: planned.mintMicros.toString() }), GAS, 0n)],
+      })
     }
     const second = await collectHoldings(treasury, [])
     return publishReport(describeTreasury({ account: treasury, treasury: second.treasury, ledgerMicros: ledgerSumMicros(), agents: [] }))
@@ -493,7 +591,7 @@ export async function sendNearActions(input: {
   receiverId: string
   actions: number[][]
 }): Promise<string> {
-  return enqueue(() => submit(input))
+  return submit(input)
 }
 
 export async function inspectNear(treasury: string): Promise<TreasuryReport> {
@@ -517,17 +615,15 @@ export async function mintNearToTreasury(
   const env = loadEnv()
   const treasury = await accountFromSecret(signingKey())
   if (!treasury) throw new Error("TREASURY_PRIVATE_KEY must be an ed25519 NEAR secret key")
-  const hash = await enqueue(() =>
-    submit({
-      signerId: treasury,
-      secretKey: signingKey(),
-      receiverId: env.tokenAccount.trim(),
-      actions: [encodeFunctionCall("mint", jsonArgs({ account_id: treasury, amount: String(amountMicros) }), GAS, 0n)],
-      waitUntil: "NONE",
-      recoverHash: true,
-      onSigned: (hash) => report?.({ txHash: hash, seen: 1 }),
-    }),
-  )
+  const hash = await submit({
+    signerId: treasury,
+    secretKey: signingKey(),
+    receiverId: env.tokenAccount.trim(),
+    actions: [encodeFunctionCall("mint", jsonArgs({ account_id: treasury, amount: String(amountMicros) }), GAS, 0n)],
+    waitUntil: "NONE",
+    recoverHash: true,
+    onSigned: (hash) => report?.({ txHash: hash, seen: 1 }),
+  })
   await watchNearGrant(treasury, hash, (progress) => report?.(progress))
 }
 
@@ -574,62 +670,82 @@ export async function requestNearWithdraw(
   address: string,
   amountMicros: number,
 ): Promise<{ ok: true; you: You; txHash: string } | { ok: false; error: string; you?: You }> {
-  return enqueue(async () => {
-    const who = normalizeAccount(address, "near-testnet")
-    const you = who ? youFor(who) : null
-    if (!who || !you) return { ok: false, error: "Unknown wallet" }
-    if (!Number.isSafeInteger(amountMicros) || amountMicros <= 0) return { ok: false, error: "Amount is invalid" }
-    if (amountMicros > you.balanceMicros) return { ok: false, error: "Insufficient balance" }
-    const env = loadEnv()
-    const treasury = await accountFromSecret(signingKey())
-    if (!treasury) return { ok: false, error: "TREASURY_PRIVATE_KEY must be an ed25519 NEAR secret key" }
-    let raw = ""
-    let hash = ""
-    try {
-      const viewed = await nextNonce(treasury, signingKey())
-      const signed = await signTransaction({
-        signerId: treasury,
-        secretKey: signingKey(),
+  const who = normalizeAccount(address, "near-testnet")
+  const you = who ? youFor(who) : null
+  if (!who || !you) return { ok: false, error: "Unknown wallet" }
+  if (!Number.isSafeInteger(amountMicros) || amountMicros <= 0) return { ok: false, error: "Amount is invalid" }
+  if (amountMicros > you.balanceMicros) return { ok: false, error: "Insufficient balance" }
+  const env = loadEnv()
+  const treasury = await accountFromSecret(signingKey())
+  if (!treasury) return { ok: false, error: "TREASURY_PRIVATE_KEY must be an ed25519 NEAR secret key" }
+  const transfer = {
+    signerId: treasury,
+    secretKey: signingKey(),
+    receiverId: env.tokenAccount.trim(),
+    actions: [
+      encodeFunctionCall(
+        "ft_transfer",
+        jsonArgs({ receiver_id: who, amount: String(amountMicros), memo: null }),
+        GAS,
+        ONE_YOCTO,
+      ),
+    ],
+  }
+  let id = ""
+  let signed: SignedNear
+  try {
+    const prepared = await enqueueSign(async () => {
+      const current = youFor(who)
+      if (!current || amountMicros > current.balanceMicros) throw new Error("Insufficient balance")
+      const viewed = await allocateNonce(treasury, signingKey(), false)
+      const tx = await signTransaction({
+        signerId: transfer.signerId,
+        secretKey: transfer.secretKey,
         nonce: viewed.nonce,
-        receiverId: env.tokenAccount.trim(),
+        receiverId: transfer.receiverId,
         blockHash: viewed.blockHash,
-        actions: [
-          encodeFunctionCall(
-            "ft_transfer",
-            jsonArgs({ receiver_id: who, amount: String(amountMicros), memo: null }),
-            GAS,
-            ONE_YOCTO,
-          ),
-        ],
+        actions: transfer.actions,
       })
-      raw = Buffer.from(signed.signed).toString("base64")
-      hash = signed.hash
-    } catch (error) {
-      return { ok: false, error: nearFaultMessage(error), you }
-    }
-    let id = ""
-    try {
-      id = debitWithdraw(who, amountMicros, raw, hash)
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Withdrawal failed"
+      const raw = Buffer.from(tx.signed).toString("base64")
+      const nextId = debitWithdraw(who, amountMicros, raw, tx.hash)
+      commitNonce(treasury, viewed.nonce)
+      return { hash: tx.hash, raw, id: nextId }
+    })
+    signed = prepared
+    id = prepared.id
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Withdrawal failed"
+    if (message === "Insufficient balance" || message === "Unknown wallet" || message === "Amount is invalid") {
       return { ok: false, error: message, you: youFor(who) ?? undefined }
     }
-    try {
-      await broadcastRaw(raw)
-      getDb()
-        .query("UPDATE withdrawals SET status = 'sent' WHERE chain_key = ? AND id = ? AND status = 'pending'")
-        .run(activeChainKey(), id)
-      return { ok: true, you: youFor(who)!, txHash: hash }
-    } catch (error) {
-      const message = error instanceof Error ? error.message.toLowerCase() : ""
-      if (message.includes("failure") || message.includes("revert") || message.includes("not enough")) {
+    return { ok: false, error: nearFaultMessage(error), you: youFor(who) ?? you }
+  }
+  try {
+    await enqueueBroadcast(async () => {
+      try {
+        await broadcastRaw(signed.raw)
+      } catch (error) {
+        if (broadcasts !== 1 || !nearNonceRejected(error)) throw error
         refundWithdraw(id)
-        return { ok: false, error: nearFaultMessage(error), you: youFor(who) ?? undefined }
+        const again = await signUnderLock({ ...transfer, refresh: true })
+        id = debitWithdraw(who, amountMicros, again.raw, again.hash)
+        signed = again
+        await broadcastRaw(again.raw)
       }
-      console.error(error)
-      return { ok: false, error: "Withdrawal is pending", you: youFor(who) ?? undefined }
+    })
+    getDb()
+      .query("UPDATE withdrawals SET status = 'sent' WHERE chain_key = ? AND id = ? AND status = 'pending'")
+      .run(activeChainKey(), id)
+    return { ok: true, you: youFor(who)!, txHash: signed.hash }
+  } catch (error) {
+    const message = error instanceof Error ? error.message.toLowerCase() : ""
+    if (nearNonceRejected(error) || message.includes("failure") || message.includes("revert") || message.includes("not enough")) {
+      refundWithdraw(id)
+      return { ok: false, error: nearFaultMessage(error), you: youFor(who) ?? undefined }
     }
-  })
+    console.error(error)
+    return { ok: false, error: "Withdrawal is pending", you: youFor(who) ?? undefined }
+  }
 }
 
 export function parseNearDeposits(payload: unknown, treasury: string, token: string, timestamp = 0n): ParsedDeposit[] {
@@ -745,7 +861,7 @@ async function resumeNearWithdrawals() {
     if (!row.raw_tx) continue
     const raw = row.raw_tx
     try {
-      await enqueue(() => broadcastRaw(raw))
+      await enqueueBroadcast(() => broadcastRaw(raw))
       getDb()
         .query("UPDATE withdrawals SET status = 'sent' WHERE chain_key = ? AND id = ? AND status = 'pending'")
         .run(activeChainKey(), row.id)
