@@ -387,7 +387,7 @@ const en: Copy = {
   agentsToken: "Session token",
   agentsPromptLabel: "Example prompt",
   agentsPrompt:
-    "The link is already signed in. Call account.\nIf the balance is under $1, call claim_grant, then account again.\nCall book. place_buy_in for $1 on board.join.id, side up.\nOne open round at a time. After it settles, call account and tell me the round, side, stake, and balance.",
+    "The link is already signed in. Call account.\nIf the balance is under $1 and grantDue is true, call claim_grant, then account again. A past nextGrantAt means the grant is due.\nCall book. place_buy_in for $1 on board.join.id, side up. If it is late or closed, call book again and use the new board.join.id.\nOne open round at a time. After it settles, call account and tell me the round, side, stake, and balance.",
   agentsCopyFailed: "Copy failed. Select the text.",
   nearReport: {
     treasury: (account) => `near-testnet treasury ${account}`,
@@ -595,7 +595,7 @@ const zhTW: Copy = {
   agentsToken: "登入代碼",
   agentsPromptLabel: "範例提示",
   agentsPrompt:
-    "這個連結已經登入。先呼叫 account。\n餘額不到 $1 就呼叫 claim_grant，再呼叫 account。\n呼叫 book，用 place_buy_in 在 board.join.id 買 $1，方向 up。\n一次只下一筆。結算後再呼叫 account，告訴我局號、方向、金額和餘額。",
+    "這個連結已經登入。先呼叫 account。\n餘額不到 $1 且 grantDue 為真才呼叫 claim_grant，再呼叫 account。nextGrantAt 已過表示撥款已可領。\n呼叫 book，用 place_buy_in 在 board.join.id 買 $1，方向 up。太晚或已關閉就再呼叫 book，改用新的 board.join.id。\n一次只下一筆。結算後再呼叫 account，告訴我局號、方向、金額和餘額。",
   agentsCopyFailed: "複製失敗。請選取文字。",
   nearReport: {
     treasury: (account) => `near-testnet 金庫 ${account}`,

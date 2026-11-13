@@ -7,7 +7,7 @@ import { loginMessage, nearLoginMessage } from "../shared/login"
 import { NEP413_RECIPIENT } from "../shared/nearKey"
 import { marketPreferences } from "../shared/market"
 import { bindHttp, handle } from "./http"
-import { useDatabase } from "./db"
+import { getDb, useDatabase } from "./db"
 import { advance, board, credit, notePrint, resetRuntime, youFor, type Print } from "./rounds"
 
 let server: ReturnType<typeof Bun.serve> | null = null
@@ -150,11 +150,14 @@ test("mcp initialize, sign-in, book, and one buy-in", async () => {
   expect(signed.amountMicros).toBe(100_000_000)
   expect(signed.intervalMs).toBe(120_000)
   expect(typeof signed.nextGrantAt).toBe("number")
+  expect(signed.grantDue).toBe(true)
+  expect(typeof signed.serverNow).toBe("number")
   expect(signed.pending).toBe(true)
   expect(signed.grantNote).toBe("The grant on this market is $100 every 2 minutes. Call claim_grant again after nextGrantAt.")
   expect(typeof signed.token).toBe("string")
   const claimed = payload(await client.callTool({ name: "claim_grant", arguments: {} }))
   expect(claimed.granted).toBe(false)
+  expect(claimed.grantDue).toBe(true)
   expect(claimed.pending).toBe(true)
   expect(claimed.amountMicros).toBe(100_000_000)
   expect(claimed.intervalMs).toBe(120_000)
@@ -168,8 +171,17 @@ test("mcp initialize, sign-in, book, and one buy-in", async () => {
   const roundId = board(now).join?.id
   expect(typeof roundId).toBe("number")
 
+  notePrint({ price: "90", exchangeTs: now - 30_000, receivedAt: now, source: "binance" })
   const book = payload(await client.callTool({ name: "book", arguments: {} }))
   expect(book.feed).toBe("live")
+  expect(typeof book.serverNow).toBe("number")
+  const tape = book.tape as { t: number }[]
+  expect(tape.some((point) => point.t === now - 30_000)).toBe(false)
+  expect(tape.some((point) => point.t === now - 500)).toBe(true)
+  const wide = payload(await client.callTool({ name: "book", arguments: { tailMs: 90_000 } }))
+  expect((wide.tape as { t: number }[]).some((point) => point.t === now - 30_000)).toBe(true)
+  const bookTool = listed.tools.find((tool) => tool.name === "book")
+  expect(bookTool?.description).toContain("board.join.strikeAt")
   const bought = payload(
     await client.callTool({
       name: "place_buy_in",
@@ -181,11 +193,17 @@ test("mcp initialize, sign-in, book, and one buy-in", async () => {
   expect(youFor(account.address.toLowerCase())?.openBuyIns[0]?.roundId).toBe(roundId)
   expect(published).toBe(1)
 
+  const grantedAt = Date.now()
+  getDb()
+    .query("UPDATE users SET grant_at = ? WHERE chain_key = ? AND address = ?")
+    .run(grantedAt, "base-sepolia", account.address.toLowerCase())
   const rebound = payload(await client.callTool({ name: "sign_in", arguments: { token: signed.token } }))
   expect(rebound.address).toBe(account.address.toLowerCase())
   expect(rebound.balanceMicros).toBe(9_000_000)
   expect(rebound.token).toBeUndefined()
   expect(rebound.intervalMs).toBe(120_000)
+  expect(rebound.grantDue).toBe(false)
+  expect(Number(rebound.nextGrantAt)).toBeGreaterThan(Number(rebound.serverNow))
 
   const again = payload(
     await client.callTool({

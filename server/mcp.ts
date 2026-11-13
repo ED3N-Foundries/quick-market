@@ -9,7 +9,7 @@ import { NEP413_RECIPIENT } from "../shared/nearKey"
 import type { PublicConfig } from "../shared/market"
 import { activeChainKey, withChain } from "./activeChain"
 import { chainConfig } from "./env"
-import { grantOnSignIn, grantSettings, startGrant } from "./grant"
+import { grantDue, grantOnSignIn, grantSettings, startGrant } from "./grant"
 import { normalizeAccount, parseMicros } from "./money"
 import {
   accountResults,
@@ -104,14 +104,16 @@ function grantSentence(): string {
   return `The grant on this market is ${money} every ${every}. Call claim_grant again after nextGrantAt.`
 }
 
-function grantView(address: string) {
+function grantView(address: string, now = Date.now()) {
   const settings = grantSettings()
   const you = youFor(address)
   const grantAt = you?.grantAt ?? null
   return {
     amountMicros: settings.amount,
     intervalMs: settings.intervalMs,
-    nextGrantAt: grantAt == null ? Date.now() : grantAt + settings.intervalMs,
+    nextGrantAt: grantAt == null ? now : grantAt + settings.intervalMs,
+    grantDue: grantDue(grantAt, now, settings.intervalMs),
+    serverNow: now,
     grantNote: grantSentence(),
   }
 }
@@ -270,14 +272,16 @@ function registerTools(server: McpServer, accounts: Map<string, Bound>, deps: Mc
   server.registerTool(
     "book",
     {
-      description: "The live board, the price feed, the handoff, and a tail of the tape.",
+      description:
+        "The live board, the price feed, the handoff, and a tail of the tape. serverNow is the server clock. Bets are accepted until board.join.strikeAt. If that is within a few seconds of serverNow, call book again and use the new board.join.id. One open round at a time.",
       inputSchema: { tailMs: z.number().int().optional() },
       annotations: readOnly,
     },
     async ({ tailMs }) => {
       const now = Date.now()
-      const tail = tailMs === undefined ? 90_000 : Math.min(120_000, Math.max(1_000, tailMs))
+      const tail = tailMs === undefined ? 1_000 : Math.min(120_000, Math.max(1_000, tailMs))
       return textResult({
+        serverNow: now,
         board: board(now),
         feed: feedStatus(now),
         handoff: handoffNow(),
@@ -346,7 +350,7 @@ function registerTools(server: McpServer, accounts: Map<string, Bound>, deps: Mc
   server.registerTool(
     "account",
     {
-      description: `Balance, open buy-ins, recent results, and the grant timer for a signed-in account on ${market.name}. ${grantLine}`,
+      description: `Balance, open buy-ins, recent results, and the grant timer for a signed-in account on ${market.name}. grantDue is true when a claim is allowed. serverNow is the server clock. ${grantLine}`,
       inputSchema: { address: z.string().optional(), limit: z.number().int().optional() },
       annotations: readOnly,
     },
@@ -434,7 +438,7 @@ function registerTools(server: McpServer, accounts: Map<string, Bound>, deps: Mc
   server.registerTool(
     "claim_grant",
     {
-      description: `Claim the testnet grant on ${market.name}. ${grantLine}`,
+      description: `Claim the testnet grant on ${market.name}. grantDue is true when a claim is allowed. ${grantLine}`,
       inputSchema: { address: z.string().optional() },
     },
     async (args) => claimGrant(accounts, deps, args.address),
