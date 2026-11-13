@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { agentConnectors, connectorUrl, storedSessionToken } from "./agentsUrl"
+import { agentConnectors, connectorLinkLabel, connectorSessionToken, connectorUrl, storedSessionToken } from "./agentsUrl"
 
 test("each network has its own connector, and the token stays on that market", () => {
   expect(connectorUrl("https://qmkt.app", "base-sepolia", "abc")).toBe(
@@ -8,6 +8,18 @@ test("each network has its own connector, and the token stays on that market", (
   expect(connectorUrl("https://qmkt.app", "near-testnet", null)).toBe("https://qmkt.app/mcp?chain=near-testnet")
   expect(connectorUrl("https://quickmarket.app", "near-testnet", "def")).toBe(
     "https://quickmarket.app/mcp?chain=near-testnet&token=def",
+  )
+})
+
+test("the shown link drops the scheme and keeps the session token separate", () => {
+  const token = "a".repeat(64)
+  const url = connectorUrl("https://qmkt.app", "base-sepolia", token)
+  expect(connectorLinkLabel(url)).toBe("qmkt.app/mcp?chain=base-sepolia")
+  expect(connectorLinkLabel(url)).not.toContain(token)
+  expect(connectorSessionToken(url)).toBe(token)
+  expect(connectorSessionToken(connectorUrl("https://quickmarket.app", "near-testnet", null))).toBeNull()
+  expect(connectorLinkLabel(connectorUrl("https://quickmarket.app", "near-testnet", "def"))).toBe(
+    "quickmarket.app/mcp?chain=near-testnet",
   )
 })
 

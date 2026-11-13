@@ -1270,8 +1270,8 @@ button.grant-status:disabled {
   gap: 12px;
 }
 .agents-overlay {
-  width: min(460px, 100%);
-  max-height: min(80dvh, 640px);
+  width: min(540px, 100%);
+  max-height: min(86dvh, 760px);
   overflow: auto;
 }
 .agents-overlay p,
@@ -1285,21 +1285,55 @@ button.grant-status:disabled {
 .agents-client { display: flex; gap: 8px; align-items: flex-start; }
 .agents-client svg { width: 16px; height: 16px; flex: none; margin-top: 2px; }
 .agents-client p strong { color: var(--text); font-weight: 600; }
-.agents-market { display: flex; flex-direction: column; gap: 4px; }
-.agents-url-row {
+.agents-card {
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: #0c0d11;
+}
+.agents-card-head {
+  display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 8px;
 }
-.agents-url-label { color: var(--muted); font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; }
-.agents-url {
-  flex: 1 1 160px;
-  min-width: 0;
-  color: var(--text);
+.agents-card-head button {
+  flex: none;
+  padding: 4px 8px;
+  border-radius: 8px;
   font-size: 12px;
-  word-break: break-all;
 }
+.agents-url-label { color: var(--muted); font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; }
+.agents-link {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.agents-token { display: flex; flex-direction: column; gap: 2px; }
+.agents-token-value {
+  display: block;
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  user-select: all;
+  cursor: text;
+}
+.agents-overlay .agents-prompt-text {
+  color: var(--text);
+  white-space: pre-line;
+  user-select: text;
+}
+.agents-card .note { margin: 0; }
 .agents-box {
   margin-top: 18px;
   width: 100%;

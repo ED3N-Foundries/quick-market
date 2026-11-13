@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import {
   chainNetworkLabel,
   formatGrantDollars,
@@ -12,7 +12,7 @@ import {
 } from "./format"
 import { localize } from "./copy"
 import { useI18n } from "./i18n"
-import { agentConnectors } from "./agentsUrl"
+import { agentConnectors, connectorLinkLabel, connectorSessionToken } from "./agentsUrl"
 import { ClaudeLogo, GrokLogo, OpenAiLogo } from "./logos"
 import { TokenBadge } from "./App"
 import { ChainBadge } from "./badges"
@@ -332,12 +332,24 @@ const agentClients = [
   { Logo: OpenAiLogo, name: "ChatGPT", href: "https://chatgpt.com/plugins", label: "chatgpt.com/plugins", text: "agentsChat" },
 ] as const
 
+function selectContents(node: HTMLElement | null) {
+  if (!node) return
+  const range = document.createRange()
+  range.selectNodeContents(node)
+  const selection = window.getSelection()
+  if (!selection) return
+  selection.removeAllRanges()
+  selection.addRange(range)
+}
+
 export function AgentsOverlay({ chainKey, onClose }: { chainKey: string; onClose: () => void }) {
   const { text } = useI18n()
   const session = useSession()
   const pageToken = session.pageChain?.key === chainKey ? session.token : null
   const markets = agentConnectors(window.location.origin, { chainKey, token: pageToken })
   const [copied, setCopied] = useState<string | null>(null)
+  const [failed, setFailed] = useState<string | null>(null)
+  const fields = useRef(new Map<string, HTMLElement>())
   useEffect(() => {
     if (!session.token) onClose()
   }, [session.token, onClose])
@@ -349,10 +361,20 @@ export function AgentsOverlay({ chainKey, onClose }: { chainKey: string; onClose
     return () => window.removeEventListener("keydown", onKey)
   }, [onClose])
   const copy = (value: string, which: string) => {
-    void navigator.clipboard.writeText(value).then(
-      () => setCopied(which),
-      () => setCopied(null),
-    )
+    const done = () => {
+      setCopied(which)
+      setFailed(null)
+    }
+    const missed = () => {
+      setCopied(null)
+      setFailed(which)
+      selectContents(fields.current.get(which) ?? null)
+    }
+    if (!navigator.clipboard?.writeText) {
+      missed()
+      return
+    }
+    void navigator.clipboard.writeText(value).then(done, missed)
   }
   const labelFor = (key: string) => (key === "near-testnet" ? text.chainNearNetwork : text.chainTestnetNetwork)
   return (
@@ -371,17 +393,58 @@ export function AgentsOverlay({ chainKey, onClose }: { chainKey: string; onClose
           </button>
         </header>
         <p>{text.agentsIntro}</p>
-        {markets.map(({ chainKey: key, url }) => (
-          <div key={key} className="agents-market">
-            <div className="agents-url-row">
-              <span className="agents-url-label">{labelFor(key)}</span>
-              <code className="agents-url">{url}</code>
-              <button type="button" onClick={() => copy(url, key)}>
-                {copied === key ? text.agentsCopied : text.agentsCopy}
-              </button>
+        {markets.map(({ chainKey: key, url }) => {
+          const token = connectorSessionToken(url)
+          return (
+            <div key={key} className="agents-card">
+              <div className="agents-card-head">
+                <span className="agents-url-label">{labelFor(key)}</span>
+                <button type="button" onClick={() => copy(url, key)}>
+                  {copied === key ? text.agentsCopied : text.agentsCopy}
+                </button>
+              </div>
+              <code className="agents-link" title={url}>
+                {connectorLinkLabel(url)}
+              </code>
+              {token ? (
+                <div className="agents-token">
+                  <span className="agents-url-label">{text.agentsToken}</span>
+                  <code
+                    className="agents-token-value"
+                    tabIndex={0}
+                    ref={(node) => {
+                      if (node) fields.current.set(key, node)
+                      else fields.current.delete(key)
+                    }}
+                    onClick={(event) => selectContents(event.currentTarget)}
+                    onFocus={(event) => selectContents(event.currentTarget)}
+                  >
+                    {token}
+                  </code>
+                </div>
+              ) : null}
+              {failed === key ? <p className="note bad">{text.agentsCopyFailed}</p> : null}
             </div>
+          )
+        })}
+        <div className="agents-card">
+          <div className="agents-card-head">
+            <span className="agents-url-label">{text.agentsPromptLabel}</span>
+            <button type="button" onClick={() => copy(text.agentsPrompt, "prompt")}>
+              {copied === "prompt" ? text.agentsCopied : text.agentsCopy}
+            </button>
           </div>
-        ))}
+          <p
+            className="agents-prompt-text"
+            ref={(node) => {
+              if (node) fields.current.set("prompt", node)
+              else fields.current.delete("prompt")
+            }}
+          >
+            {text.agentsPrompt}
+          </p>
+          {failed === "prompt" ? <p className="note bad">{text.agentsCopyFailed}</p> : null}
+        </div>
         <div className="agents-steps">
           {agentClients.map((client) => (
             <div key={client.name} className="agents-client">

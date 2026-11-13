@@ -44,6 +44,19 @@ export function connectorUrl(origin: string, chainKey: string, token: string | n
   return url.toString()
 }
 
+/** Host, path, and chain. The session token is left out so the row can stay short. */
+export function connectorLinkLabel(url: string): string {
+  const parsed = new URL(url)
+  const chain = parsed.searchParams.get("chain")
+  return `${parsed.host}${parsed.pathname}${chain ? `?chain=${chain}` : ""}`
+}
+
+/** The session token in full, or null when this connector has none. */
+export function connectorSessionToken(url: string): string | null {
+  const token = new URL(url).searchParams.get("token")
+  return token && token.length > 0 ? token : null
+}
+
 /** One signed-in connector per market. Markets with no stored session are left out. */
 export function agentConnectors(
   origin: string,
