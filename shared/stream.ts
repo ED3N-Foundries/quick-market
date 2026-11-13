@@ -76,6 +76,8 @@ export type SettlementPayout = {
   side: Side
   stakeMicros: number
   payoutMicros: number
+  /** New spendable balance after this payout. Private account frames only. */
+  balanceMicros?: number
 }
 
 export type SettlementEvent = PublicSettlement & {
@@ -87,6 +89,8 @@ export type AccountResult = PublicSettlement & {
   side: Side
   stakeMicros: number
   payoutMicros: number
+  /** Spendable balance after this round. Set on the settlement push. */
+  balanceMicros?: number
 }
 
 type PublicFrame = {
@@ -155,6 +159,7 @@ export type ServerStreamMessage =
 export type ClientStreamMessage =
   | { type: "hello"; token?: string }
   | { type: "resync" }
+  | { type: "account" }
   | { type: "lag"; t: number }
   | { type: "buy-in"; requestId: string; side: Side; stake: string; roundId: number }
 

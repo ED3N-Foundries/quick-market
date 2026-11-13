@@ -74,6 +74,30 @@ test("a buffered slow reader skips deltas until its recovery snapshot", () => {
   expect(sent).toEqual([])
 })
 
+test("a priority frame is sent while ticks are coalesced", () => {
+  closed = []
+  let calls = 0
+  const sent: string[] = []
+  const slow = peer("slow", 70_000, (data) => {
+    calls += 1
+    sent.push(data)
+    return 1
+  })
+  const peers = new Set([slow])
+  let recovered = 0
+  const recover = () => {
+    recovered += 1
+  }
+  expect(publishTo(peers, "tick", { recover }).coalesced).toBe(1)
+  expect(publishTo(peers, "credit", { recover, priority: true }).sent).toBe(1)
+  expect(sent).toEqual(["credit"])
+  expect(recovered).toBe(0)
+  slow.getBufferedAmount = () => 0
+  expect(publishTo(peers, "tick-2", { recover }).recovered).toBe(1)
+  expect(recovered).toBe(1)
+  expect(sent).toEqual(["credit"])
+})
+
 test("a send failure closes only that client", () => {
   closed = []
   const peers = new Set<HubPeer & { id: string }>([

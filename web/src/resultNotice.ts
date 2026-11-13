@@ -1,9 +1,13 @@
-import type { AccountResult, Board, OpenBuyIn, Side } from "./types"
+import type { AccountResult, Board, OpenBuyIn, Side, You } from "./types"
 
-/** How long the loading card stays up when the server has not answered. */
-export const SETTLING_MS = 15_000
 /** How long the result stays up after it replaces the loading card. */
 export const RESULT_MS = 4_500
+/** Ask for the account frame again once a settling card has been up this long. */
+export const SETTLE_PULL_MS = 300
+/** Minimum gap between those account pulls. */
+export const SETTLE_PULL_GAP_MS = 1_000
+/** Show the balance line once a settling card has been up this long. */
+export const SETTLE_SLOW_MS = 3_000
 
 export type ResultTone = "credit" | "debit" | "push" | "void"
 
@@ -74,14 +78,34 @@ function seenWith(seen: readonly number[], roundId: number): number[] {
 }
 
 /**
+ * True when a settling card should ask the server for the account frame.
+ * The first pull waits out `SETTLE_PULL_MS`. Later pulls wait out the gap.
+ */
+export function settlePullDue(openedAt: number, now: number, lastPullAt: number): boolean {
+  if (!(now >= openedAt + SETTLE_PULL_MS)) return false
+  if (!(lastPullAt > 0)) return true
+  return now >= lastPullAt + SETTLE_PULL_GAP_MS
+}
+
+/**
+ * The ledger credit for one address. Grant fields stay. The settled round leaves the open list.
+ * A missing balance keeps the local figure.
+ */
+export function applySettlement(you: You, result: AccountResult): You {
+  return {
+    ...you,
+    balanceMicros: result.balanceMicros ?? you.balanceMicros,
+    openBuyIns: you.openBuyIns.filter((bet) => bet.roundId !== result.roundId),
+  }
+}
+
+/**
  * Open one settling card per buy-in once `clockNow` reaches its settle time.
- * `wallNow` stamps the card, because the dismiss timer follows the machine clock.
- * A card that has been up for SETTLING_MS without a result is dropped.
+ * `wallNow` stamps the card, because a tap-to-dismiss follows the machine clock.
+ * The card stays until the server result replaces it.
  */
 export function tickNotices(state: NoticeState, bets: readonly DueBuyIn[], clockNow: number, wallNow: number): NoticeState {
   let cards = state.cards
-  const live = cards.filter((card) => card.kind !== "settling" || wallNow - card.openedAt < SETTLING_MS)
-  if (live.length !== cards.length) cards = live
   let seen = state.seen
   for (const bet of bets) {
     if (clockNow < bet.settlesAt) continue

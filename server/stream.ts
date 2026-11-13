@@ -105,20 +105,19 @@ export class MarketStream {
     this.broadcast({ type: "settled", serverNow, ...result }, chain)
     for (const payout of payouts) {
       if (!hub.connected(payout.address, chain)) continue
-      const you = this.deps.youFor(payout.address)
-      if (!you) continue
       const message: ServerStreamMessage = {
         type: "account",
         serverNow,
-        you,
+        you: null,
         result: {
           ...result,
           side: payout.side,
           stakeMicros: payout.stakeMicros,
           payoutMicros: payout.payoutMicros,
+          ...(typeof payout.balanceMicros === "number" ? { balanceMicros: payout.balanceMicros } : {}),
         },
       }
-      this.note("account", hub.sendTo(payout.address, message, (peer) => this.snapshot(peer), activeChainKey()))
+      this.note("account", hub.sendTo(payout.address, message, (peer) => this.snapshot(peer), activeChainKey(), true))
     }
   }
 

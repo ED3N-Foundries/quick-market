@@ -111,24 +111,56 @@ function exportAndDelete(
   }
 }
 
-/** Downsample raw ticks into per-minute OHLC so charts keep working after raw archival. */
+/** Minutes written per call. The next call continues after the market loop has run. */
+const DOWNSAMPLE_MINUTES = 60
+
+/** Downsample a bounded run of raw minutes so one call cannot scan the whole tape. */
 export function downsampleTicks(db: Database, olderThanMs: number, now = Date.now()): number {
   try {
     const cutoffSec = Math.floor((now - olderThanMs) / 1000)
-    const result = db.query(
+    const oldest = db.query("SELECT MIN(second_ts) AS sec FROM ticks WHERE second_ts < ?").get(cutoffSec) as
+      | { sec: number | null }
+      | null
+    if (oldest?.sec == null) return 0
+    const hasMinute = db.query("SELECT 1 AS hit FROM ticks_minute WHERE min_ts = ?")
+    const hasTick = db.query("SELECT 1 AS hit FROM ticks WHERE second_ts >= ? AND second_ts < ? LIMIT 1")
+    const insert = db.query(
       `INSERT OR IGNORE INTO ticks_minute (min_ts, open, high, low, close, count, source)
-       SELECT m,
-              (SELECT price FROM ticks WHERE CAST(second_ts / 60 AS INTEGER) = CAST(m / 60 AS INTEGER) ORDER BY second_ts ASC LIMIT 1),
+       SELECT ?,
+              (SELECT price FROM ticks WHERE second_ts >= ? AND second_ts < ? ORDER BY second_ts ASC LIMIT 1),
               MAX(price), MIN(price),
-              (SELECT price FROM ticks WHERE CAST(second_ts / 60 AS INTEGER) = CAST(m / 60 AS INTEGER) ORDER BY second_ts DESC LIMIT 1),
+              (SELECT price FROM ticks WHERE second_ts >= ? AND second_ts < ? ORDER BY second_ts DESC LIMIT 1),
               COUNT(*),
-              (SELECT source FROM ticks WHERE CAST(second_ts / 60 AS INTEGER) = CAST(m / 60 AS INTEGER) ORDER BY second_ts DESC LIMIT 1)
-       FROM (SELECT CAST(second_ts / 60 AS INTEGER) * 60 AS m, price, source FROM ticks WHERE second_ts < ?)
-       GROUP BY m`,
-    ).run(cutoffSec)
-    return Number((result as { changes?: number }).changes ?? 0)
+              (SELECT source FROM ticks WHERE second_ts >= ? AND second_ts < ? ORDER BY second_ts DESC LIMIT 1)
+       FROM ticks
+       WHERE second_ts >= ? AND second_ts < ?`,
+    )
+    let minute = Math.floor(oldest.sec / 60) * 60
+    let wrote = 0
+    const write = db.transaction(() => {
+      for (let step = 0; step < DOWNSAMPLE_MINUTES && minute < cutoffSec; step++) {
+        const end = minute + 60
+        if (!hasMinute.get(minute) && hasTick.get(minute, end)) {
+          const result = insert.run(minute, minute, end, minute, end, minute, end, minute, end)
+          wrote += Number((result as { changes?: number }).changes ?? 0)
+        }
+        minute = end
+      }
+    })
+    write()
+    return wrote
   } catch {
     return 0
+  }
+}
+
+/** True when raw ticks older than the retention window are still in the ledger. */
+export function ticksArchiveRemains(db: Database, now = Date.now()): boolean {
+  try {
+    const cutoffSec = Math.floor((now - TICKS_RAW_RETENTION_MS) / 1000)
+    return db.query("SELECT 1 AS hit FROM ticks WHERE second_ts < ? LIMIT 1").get(cutoffSec) != null
+  } catch {
+    return false
   }
 }
 

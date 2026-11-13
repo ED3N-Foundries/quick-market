@@ -26,7 +26,7 @@ import {
   snapshotProcessHealth,
 } from "./processHealth"
 import { flushHealthSample, HEALTH_SAMPLE_MS, startLagWatchdog } from "./selfHealth"
-import { archiveOldHealth, archiveOldTicks, archivesSizeBytes } from "./archive"
+import { archiveOldHealth, archiveOldTicks, archivesSizeBytes, ticksArchiveRemains } from "./archive"
 import { getDb } from "./db"
 import { startOracle } from "./oracle"
 import {
@@ -379,6 +379,30 @@ const selfHealthRuntime = globalThis as unknown as {
 if (selfHealthRuntime.qmSelfHealthTimer) clearInterval(selfHealthRuntime.qmSelfHealthTimer)
 if (process.env.QM_HEALTH_LOG !== "0") {
   let lastArchive = 0
+  let archivePump: ReturnType<typeof setTimeout> | null = null
+  const pumpArchive = () => {
+    archivePump = null
+    try {
+      const { dataDir: dir } = selfHealthPaths()
+      const db = getDb()
+      const at = Date.now()
+      try {
+        archiveOldHealth(db, dir, at)
+      } catch {
+        // ignore
+      }
+      try {
+        archiveOldTicks(db, dir, at)
+      } catch {
+        // ignore
+      }
+      if (!ticksArchiveRemains(db, at)) return
+      archivePump = setTimeout(pumpArchive, 250)
+      ;(archivePump as unknown as { unref?: () => void }).unref?.()
+    } catch {
+      // ignore
+    }
+  }
   selfHealthRuntime.qmSelfHealthTimer = setInterval(() => {
     try {
       const now = Date.now()
@@ -413,15 +437,9 @@ if (process.env.QM_HEALTH_LOG !== "0") {
       })
       if (now - lastArchive >= 60 * 60 * 1000) {
         lastArchive = now
-        try {
-          archiveOldHealth(db, dataDir, now)
-        } catch {
-          // ignore
-        }
-        try {
-          archiveOldTicks(db, dataDir, now)
-        } catch {
-          // ignore
+        if (!archivePump) {
+          archivePump = setTimeout(pumpArchive, 0)
+          ;(archivePump as unknown as { unref?: () => void }).unref?.()
         }
         try {
           void archivesSizeBytes(dataDir)
@@ -510,6 +528,10 @@ Bun.serve<{ address: string | null; chain: ChainKey }>({
         if (!parsed || typeof parsed !== "object") return
         body = parsed as Record<string, unknown>
       } catch {
+        return
+      }
+      if (body.type === "account") {
+        stream.account(ws, false)
         return
       }
       if (body.type === "hello") {

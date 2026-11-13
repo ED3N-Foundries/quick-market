@@ -92,6 +92,7 @@ export type Copy = {
   emptyPool: string
   void: string
   settling: string
+  settlingSlow: string
   credited: string
   deducted: string
   elapsed: (timer: string) => string
@@ -282,6 +283,7 @@ const en: Copy = {
   emptyPool: "No one in this pool.",
   void: "Void",
   settling: "Settling market…",
+  settlingSlow: "Updating your balance",
   credited: "Credited",
   deducted: "Deducted",
   elapsed: (timer) => `Elapsed time ${timer}`,
@@ -479,6 +481,7 @@ const zhTW: Copy = {
   emptyPool: "這個池子沒有人。",
   void: "作廢",
   settling: "市場結算中…",
+  settlingSlow: "正在更新餘額",
   credited: "已入帳",
   deducted: "已扣款",
   elapsed: (timer) => `已經過 ${timer}`,

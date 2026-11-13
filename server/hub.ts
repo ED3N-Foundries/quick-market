@@ -29,6 +29,8 @@ type PublishOptions = {
   compress?: boolean
   recover?: (peer: MarketSocket) => void
   filter?: (peer: MarketSocket) => boolean
+  /** Deliver this frame even while ticks are being coalesced. A credit must not wait on a snapshot. */
+  priority?: boolean
 }
 
 const recovery = new WeakMap<HubPeer, boolean>()
@@ -65,7 +67,7 @@ export function publishTo<T extends HubPeer>(peers: Set<T>, data: string, option
       closePeer(peers, peer, result)
       continue
     }
-    if (recovery.get(peer)) {
+    if (!options.priority && recovery.get(peer)) {
       if (buffered > RECOVER_BUFFER_LIMIT || !options.recover) {
         result.coalesced += 1
         continue
@@ -75,15 +77,19 @@ export function publishTo<T extends HubPeer>(peers: Set<T>, data: string, option
       options.recover(peer as T & MarketSocket)
       continue
     }
-    if (buffered > COALESCE_BUFFER_LIMIT) {
+    if (!options.priority && buffered > COALESCE_BUFFER_LIMIT) {
       recovery.set(peer, true)
       result.coalesced += 1
       continue
     }
     try {
       const status = peer.send(data, compress)
-      if (status === 0) {
+      if (status === 0 && !options.priority) {
         recovery.set(peer, true)
+        result.coalesced += 1
+        continue
+      }
+      if (status === 0) {
         result.coalesced += 1
         continue
       }
@@ -112,9 +118,10 @@ export const hub = {
   send(ws: MarketSocket, message: unknown) {
     return publishTo(new Set([ws]), JSON.stringify(message))
   },
-  sendTo(address: string, message: unknown, recover: (peer: MarketSocket) => void, chain?: ChainKey) {
+  sendTo(address: string, message: unknown, recover: (peer: MarketSocket) => void, chain?: ChainKey, priority = false) {
     return publishTo(sockets, JSON.stringify(message), {
       recover,
+      priority,
       filter: (peer) => sameAccount(peer, address, chain),
     })
   },

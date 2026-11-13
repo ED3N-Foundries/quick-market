@@ -28,7 +28,7 @@ import {
   walletDisplayLabel,
 } from "./format"
 import { placePricePops, pricePopText, type PlacedPop, type PopRect } from "./pricePop"
-import { RESULT_MS, SETTLING_MS, type MarketNotice } from "./resultNotice"
+import { RESULT_MS, SETTLE_SLOW_MS, type MarketNotice } from "./resultNotice"
 import type { Band, Board, Config, OpenBuyIn, Side } from "./types"
 import { readCachedBalance, visibleBalance } from "./balanceCache"
 import { TestnetBrief } from "./testnetBriefView"
@@ -1725,7 +1725,7 @@ function samePlaces(current: PlacedPop[] | null, next: PlacedPop[]): boolean {
   })
 }
 
-function useToastLeave(waitMs: number, startedAt: number, onDone: () => void) {
+function useToastLeave(waitMs: number | null, startedAt: number, onDone: () => void) {
   const [leaving, setLeaving] = useState(false)
   const doneRef = useRef(onDone)
   doneRef.current = onDone
@@ -1742,6 +1742,7 @@ function useToastLeave(waitMs: number, startedAt: number, onDone: () => void) {
   }
 
   useEffect(() => {
+    if (waitMs == null) return
     const left = Math.max(0, waitMs - (Date.now() - startedAt))
     const id = window.setTimeout(() => closeRef.current(), left)
     return () => window.clearTimeout(id)
@@ -1777,10 +1778,21 @@ function popClass(notice: MarketNotice): string {
 
 function ResultPop({ notice, onDone }: { notice: MarketNotice; onDone: () => void }) {
   const { text } = useI18n()
-  const kind = notice.kind
-  const started = notice.kind === "settling" ? notice.openedAt : notice.shownAt
-  const wait = kind === "settling" ? SETTLING_MS : RESULT_MS
-  const { leaving, close } = useToastLeave(wait, started, onDone)
+  const settling = notice.kind === "settling"
+  const started = settling ? notice.openedAt : notice.shownAt
+  const { leaving, close } = useToastLeave(settling ? null : RESULT_MS, started, onDone)
+  const [slow, setSlow] = useState(false)
+  const openedAt = notice.kind === "settling" ? notice.openedAt : 0
+  useEffect(() => {
+    if (openedAt === 0) return
+    const left = SETTLE_SLOW_MS - (Date.now() - openedAt)
+    if (left <= 0) {
+      setSlow(true)
+      return
+    }
+    const id = window.setTimeout(() => setSlow(true), left)
+    return () => window.clearTimeout(id)
+  }, [openedAt])
   const tone = popClass(notice)
   const figure = notice.kind === "result" ? pricePopText(notice.tone, notice.amountMicros, notice.signed) : null
   const label =
@@ -1793,16 +1805,18 @@ function ResultPop({ notice, onDone }: { notice: MarketNotice; onDone: () => voi
           : notice.tone === "void"
             ? text.void
             : text.push
+  const aria = settling && slow ? `${label}. ${text.settlingSlow}` : figure ? `${label} ${figure}` : label
   return (
     <button
       type="button"
       className={leaving ? `price-pop ${tone} leaving` : `price-pop ${tone}`}
-      aria-label={figure ? `${label} ${figure}` : label}
+      aria-label={aria}
       onClick={close}
     >
-      <span key={notice.kind === "settling" ? "settling" : tone} className="price-pop-figure">
+      <span key={settling ? "settling" : tone} className="price-pop-figure">
         {figure ?? text.settling}
       </span>
+      {settling && slow ? <span className="price-pop-sub">{text.settlingSlow}</span> : null}
     </button>
   )
 }

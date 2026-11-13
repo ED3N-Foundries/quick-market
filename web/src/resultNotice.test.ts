@@ -6,8 +6,11 @@ import {
   resultAmount,
   resultTone,
   stakeCameBack,
+  applySettlement,
   settleNotice,
-  SETTLING_MS,
+  settlePullDue,
+  SETTLE_PULL_GAP_MS,
+  SETTLE_PULL_MS,
   tickNotices,
 } from "./resultNotice"
 import type { AccountResult, Board } from "./types"
@@ -102,18 +105,47 @@ test("two rounds get two cards, and a dismissed settling card does not reopen", 
   expect(kept.cards.map((card) => card.roundId)).toEqual([2])
 })
 
-test("a settling card drops after the wait, and a late result still shows", () => {
+test("a settling card stays up until the result arrives", () => {
   const opened = tickNotices(emptyNotices(), [bet(1, 20_000)], 20_000, 50_000)
-  const dropped = tickNotices(opened, [bet(1, 20_000)], 20_000 + SETTLING_MS, 50_000 + SETTLING_MS)
-  expect(dropped.cards).toEqual([])
+  const held = tickNotices(opened, [bet(1, 20_000)], 80_000, 110_000)
+  expect(held).toBe(opened)
   const late = settleNotice(
-    dropped,
+    held,
     message({ resolution: "paid", winningSide: "down", payoutMicros: 0 }),
-    70_000,
+    120_000,
   )
   expect(late.cards).toEqual([
-    { kind: "result", roundId: 1, tone: "debit", amountMicros: 10_000_000, signed: false, stakeReturned: false, shownAt: 70_000 },
+    { kind: "result", roundId: 1, tone: "debit", amountMicros: 10_000_000, signed: false, stakeReturned: false, shownAt: 120_000 },
   ])
+})
+
+test("a settling card pulls once it has waited, then waits out the gap", () => {
+  expect(settlePullDue(1_000, 1_000 + SETTLE_PULL_MS - 1, 0)).toBe(false)
+  expect(settlePullDue(1_000, 1_000 + SETTLE_PULL_MS, 0)).toBe(true)
+  expect(settlePullDue(1_000, 5_000, 5_000)).toBe(false)
+  expect(settlePullDue(1_000, 5_000 + SETTLE_PULL_GAP_MS, 5_000)).toBe(true)
+})
+
+test("a settlement credit replaces the balance and drops that round", () => {
+  const next = applySettlement(
+    {
+      address: "me",
+      balanceMicros: 40_000_000,
+      grantAt: 7,
+      grantPending: null,
+      openBuyIns: [
+        { roundId: 1, side: "up", stakeMicros: 10_000_000 },
+        { roundId: 2, side: "down", stakeMicros: 5_000_000 },
+      ],
+    },
+    message({ balanceMicros: 58_500_000 }),
+  )
+  expect(next.balanceMicros).toBe(58_500_000)
+  expect(next.grantAt).toBe(7)
+  expect(next.openBuyIns).toEqual([{ roundId: 2, side: "down", stakeMicros: 5_000_000 }])
+  const kept = applySettlement(next, message({ roundId: 2, balanceMicros: undefined }))
+  expect(kept.balanceMicros).toBe(58_500_000)
+  expect(kept.openBuyIns).toEqual([])
 })
 
 test("a win shows the gain, and push, void, and a loss show the stake", () => {

@@ -121,12 +121,23 @@ test("settlement broadcasts no payouts and sends account results privately", () 
     strike: "100",
     settle: "101",
     feeMicros: 0,
-    payouts: [{ address: "me", side: "up", stakeMicros: 1_000_000, payoutMicros: 2_000_000 }],
-    balances: [{ address: "me", balanceMicros: 10_000_000 }],
+    payouts: [{ address: "me", side: "up", stakeMicros: 1_000_000, payoutMicros: 2_000_000, balanceMicros: 10_000_000 }],
+    balances: [],
   }
   market.settled(event, 10)
   expect(publicSent.some((message) => "payouts" in message || "balances" in message)).toBe(false)
-  expect(mineSent.filter((message) => message.type === "account")).toHaveLength(1)
+  expect(mineSent.filter((message) => message.type === "account")).toEqual([
+    expect.objectContaining({
+      type: "account",
+      you: null,
+      result: expect.objectContaining({
+        side: "up",
+        stakeMicros: 1_000_000,
+        payoutMicros: 2_000_000,
+        balanceMicros: 10_000_000,
+      }),
+    }),
+  ])
   expect(otherSent.filter((message) => message.type === "account")).toHaveLength(0)
 })
 

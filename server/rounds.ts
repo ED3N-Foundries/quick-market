@@ -626,16 +626,17 @@ function closeRound(round: RoundRow, forceVoid = false): SettledEvent {
 
   const tx = getDb().transaction(() => {
     const current = getRound(round.id)
-    if (!current || current.status !== "open") return
+    if (!current || current.status !== "open") return null
+    const chain = activeChainKey()
+    const setPayout = getDb().query("UPDATE buy_ins SET payout_micros = ? WHERE chain_key = ? AND id = ?")
+    const addBalance = getDb().query(
+      "UPDATE users SET balance_micros = balance_micros + ? WHERE chain_key = ? AND address = ? RETURNING balance_micros",
+    )
+    const balances = new Map<string, number>()
     for (const payout of outcome.payouts) {
-      getDb()
-        .query("UPDATE buy_ins SET payout_micros = ? WHERE chain_key = ? AND id = ?")
-        .run(payout.payoutMicros, activeChainKey(), payout.id)
-      if (payout.payoutMicros > 0) {
-        getDb()
-          .query("UPDATE users SET balance_micros = balance_micros + ? WHERE chain_key = ? AND address = ?")
-          .run(payout.payoutMicros, activeChainKey(), payout.address)
-      }
+      setPayout.run(payout.payoutMicros, chain, payout.id)
+      const row = addBalance.get(payout.payoutMicros, chain, payout.address) as { balance_micros: number } | null
+      if (row) balances.set(payout.address, row.balance_micros)
     }
     const status = outcome.resolution === "void" ? "void" : "settled"
     getDb()
@@ -654,17 +655,19 @@ function closeRound(round: RoundRow, forceVoid = false): SettledEvent {
         outcome.resolution,
         outcome.poolUpMicros,
         outcome.poolDownMicros,
-        activeChainKey(),
+        chain,
         round.id,
       )
+    return balances
   })
-  tx()
+  const credited = tx()
 
   const payouts = outcome.payouts.map((payout) => ({
     address: payout.address,
     side: payout.side,
     stakeMicros: payout.stakeMicros,
     payoutMicros: payout.payoutMicros,
+    ...(credited?.has(payout.address) ? { balanceMicros: credited.get(payout.address) } : {}),
   }))
   return {
     roundId: round.id,

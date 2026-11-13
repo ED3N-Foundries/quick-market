@@ -30,7 +30,7 @@ import { grantLanded } from "./grantWatch"
 import { buyIsStuck, shouldReleaseStuckBuy, STUCK_BUY_MS } from "./stuckBuy"
 import type { Handoff, Ticker } from "../../shared/source"
 import { tickerFor } from "../../shared/source"
-import { dismissRound, dueBuyIns, emptyNotices, settleNotice, tickNotices } from "./resultNotice"
+import { applySettlement, dismissRound, dueBuyIns, emptyNotices, settleNotice, settlePullDue, SETTLE_PULL_GAP_MS, SETTLE_PULL_MS, tickNotices } from "./resultNotice"
 import { applyBookPatch } from "./boardStream"
 import { acceptStateBoard, missingCardWindow, patchNeedsSnapshot } from "./boardRepair"
 import { tapeLead } from "./tapeLead"
@@ -69,6 +69,8 @@ export function useMarket(token: string | null, seed: You | null = null, initial
   const [pending, setPending] = useState(false)
   const [historyVersion, setHistoryVersion] = useState(0)
   const [noticeState, setNoticeState] = useState(emptyNotices)
+  const settlingRoundsRef = useRef<number[]>([])
+  settlingRoundsRef.current = noticeState.cards.flatMap((card) => (card.kind === "settling" ? [card.roundId] : []))
   const [lateNotices, setLateNotices] = useState<number[]>([])
   const [pulse, setPulse] = useState(0)
   const [unauthorized, setUnauthorized] = useState(false)
@@ -160,7 +162,10 @@ export function useMarket(token: string | null, seed: You | null = null, initial
 
   const acceptAccount = useCallback(
     (message: Pick<AccountMessage, "you" | "unauthorized" | "result" | "results">) => {
-      const outstanding = new Set(youRef.current?.openBuyIns.map((bet) => bet.roundId) ?? [])
+      const outstanding = new Set<number>([
+        ...(youRef.current?.openBuyIns.map((bet) => bet.roundId) ?? []),
+        ...settlingRoundsRef.current,
+      ])
       if (message.unauthorized) {
         setUnauthorized(true)
         acceptYou(null)
@@ -170,6 +175,8 @@ export function useMarket(token: string | null, seed: You | null = null, initial
       if (message.you) {
         acceptYou(message.you)
         markConfirmed(true)
+      } else if (message.result && youRef.current) {
+        acceptYou(applySettlement(youRef.current, message.result))
       }
       const results = message.result
         ? [message.result]
@@ -369,6 +376,38 @@ export function useMarket(token: string | null, seed: You | null = null, initial
     raf = requestAnimationFrame(loop)
     return () => cancelAnimationFrame(raf)
   }, [])
+
+  const lastSettlePull = useRef(0)
+  const settlingOpenedAt = noticeState.cards.reduce((oldest, card) => {
+    if (card.kind !== "settling") return oldest
+    return oldest === 0 ? card.openedAt : Math.min(oldest, card.openedAt)
+  }, 0)
+  useEffect(() => {
+    if (settlingOpenedAt === 0) {
+      lastSettlePull.current = 0
+      return
+    }
+    let timer = 0
+    const kick = () => {
+      const now = Date.now()
+      if (settlePullDue(settlingOpenedAt, now, lastSettlePull.current)) {
+        lastSettlePull.current = now
+        const socket = socketRef.current
+        if (socket && socket.readyState === WebSocket.OPEN) {
+          try {
+            socket.send(JSON.stringify({ type: "account" }))
+          } catch {
+            // The next kick tries again.
+          }
+        }
+      }
+      const untilFirst = SETTLE_PULL_MS - (Date.now() - settlingOpenedAt)
+      const wait = lastSettlePull.current > 0 ? Math.min(200, SETTLE_PULL_GAP_MS) : Math.max(50, untilFirst)
+      timer = window.setTimeout(kick, wait)
+    }
+    kick()
+    return () => window.clearTimeout(timer)
+  }, [settlingOpenedAt])
 
   useLayoutEffect(() => {
     if (!token || !seed) return

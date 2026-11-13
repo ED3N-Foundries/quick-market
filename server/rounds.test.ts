@@ -348,6 +348,8 @@ test("settlement credits every address and leaves balances off the event", () =>
   expect(event?.payouts.some((payout) => payout.address === you)).toBe(true)
   expect(event?.balances).toEqual([])
   expect(event?.payouts.find((payout) => payout.address === you)?.payoutMicros).toBe(0)
+  expect(event?.payouts.find((payout) => payout.address === you)?.balanceMicros).toBe(youFor(you)!.balanceMicros)
+  expect(event?.payouts.find((payout) => payout.address === bot)?.balanceMicros).toBe(youFor(bot)!.balanceMicros)
   expect(youFor(bot)!.balanceMicros).toBeGreaterThan(100 * USDC - 50 * USDC)
 })
 
