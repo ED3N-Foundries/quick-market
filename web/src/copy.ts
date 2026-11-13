@@ -11,6 +11,7 @@ export type Copy = {
   settles: string
   buyIn: string
   switching: string
+  waitingFeed: string
   priceDelayed: string
   now: string
   walletMenu: string
@@ -179,6 +180,8 @@ export type Copy = {
   connectPhantom: string
   connectNear: string
   grantedToast: string
+  withdrawFailed: string
+  withdrawnToast: string
   phantomNotFound: string
   phantomConnectFailed: string
   errorDetails: string
@@ -194,6 +197,7 @@ const en: Copy = {
   settles: "Settles",
   buyIn: "Buy-in",
   switching: "Switching price source",
+  waitingFeed: "Waiting for a new feed. This can take up to 30 seconds.",
   priceDelayed: "Price delayed",
   now: "Now",
   walletMenu: "Wallet menu",
@@ -296,7 +300,7 @@ const en: Copy = {
   paceSeconds: (seconds) => `once every ${seconds}s`,
   grantButton: (amount) => `Grant ${amount}`,
   grantReadyAmount: (amount) => `Grant ready · ${amount}`,
-  grantProcessing: "Processing",
+  grantProcessing: "Processing grant",
   nextGrant: (wait) => `Next grant in ${wait}`,
   grantSentence: (amount, pace) =>
     `Quick Market adds ${amount} QM USDC to this balance ${pace}. The wallet is not charged, and Phantom is not involved.`,
@@ -369,6 +373,8 @@ const en: Copy = {
   connectPhantom: "Connect Phantom",
   connectNear: "Connect Meteor",
   grantedToast: "Grant credited",
+  withdrawFailed: "Withdraw failed",
+  withdrawnToast: "Withdraw sent",
   phantomNotFound: "Phantom Wallet not found",
   phantomConnectFailed: "Phantom connection failed",
   errorDetails: "Error details",
@@ -384,6 +390,7 @@ const zhTW: Copy = {
   settles: "結算",
   buyIn: "下注",
   switching: "正在切換報價來源",
+  waitingFeed: "正在等待新的報價來源，最多約 30 秒。",
   priceDelayed: "報價延遲",
   now: "回到現在",
   walletMenu: "錢包選單",
@@ -486,7 +493,7 @@ const zhTW: Copy = {
   paceSeconds: (seconds) => `每 ${seconds} 秒一次`,
   grantButton: (amount) => `領取 ${amount}`,
   grantReadyAmount: (amount) => `可以領取 · ${amount}`,
-  grantProcessing: "處理中",
+  grantProcessing: "正在處理撥款",
   nextGrant: (wait) => `下次領取還要 ${wait}`,
   grantSentence: (amount, pace) =>
     `Quick Market ${pace}，把 ${amount} QM USDC 加進這個餘額。不會向錢包扣款，也不經過 Phantom。`,
@@ -559,6 +566,8 @@ const zhTW: Copy = {
   connectPhantom: "連接 Phantom",
   connectNear: "連接 Meteor",
   grantedToast: "撥款已入帳",
+  withdrawFailed: "提領失敗",
+  withdrawnToast: "提領已送出",
   phantomNotFound: "找不到 Phantom 錢包",
   phantomConnectFailed: "Phantom 連線失敗",
   errorDetails: "錯誤詳情",

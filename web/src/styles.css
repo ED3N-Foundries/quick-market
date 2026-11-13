@@ -744,9 +744,20 @@ body {
   display: block;
   height: 12px;
   border-radius: 999px;
-  background: linear-gradient(90deg, var(--raise-2) 0%, rgba(243, 240, 232, 0.16) 45%, var(--raise-2) 90%);
-  background-size: 220% 100%;
-  animation: chart-shimmer 1.4s ease-in-out infinite;
+  /* Two identical waves on a 200% tile. 100% → 0% shifts exactly one
+     wave, so the highlight leaving one side is the same highlight
+     entering the other. Linear, so the joint does not stop. */
+  background-image: linear-gradient(
+    90deg,
+    var(--raise-2) 0%,
+    rgba(243, 240, 232, 0.16) 25%,
+    var(--raise-2) 50%,
+    rgba(243, 240, 232, 0.16) 75%,
+    var(--raise-2) 100%
+  );
+  background-size: 200% 100%;
+  background-repeat: repeat;
+  animation: chart-shimmer 1.4s linear infinite;
 }
 .chart-skeleton span:nth-child(1) { width: 72%; }
 .chart-skeleton span:nth-child(2) { width: 100%; }
@@ -754,7 +765,7 @@ body {
 .chart-skeleton span:nth-child(4) { width: 46%; }
 @keyframes chart-shimmer {
   from { background-position: 100% 0; }
-  to { background-position: -100% 0; }
+  to { background-position: 0% 0; }
 }
 @media (prefers-reduced-motion: reduce) {
   .chart-skeleton span { animation: none; background: var(--raise-2); }
@@ -866,6 +877,14 @@ body {
   font-weight: 650;
   letter-spacing: 0.16em;
   text-transform: uppercase;
+}
+.handoff-sub {
+  max-width: 28ch;
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: 0;
+  line-height: 1.35;
 }
 .reconnect-banner {
   position: absolute;
@@ -1103,6 +1122,16 @@ button.grant-status:disabled {
   cursor: default;
   color: var(--muted);
   text-decoration: none;
+}
+.grant-status[data-processing="1"]::after {
+  content: "";
+  animation: grant-ellipsis 1.2s steps(1, end) infinite;
+}
+@keyframes grant-ellipsis {
+  0% { content: ""; }
+  25% { content: "."; }
+  50% { content: ".."; }
+  75% { content: "..."; }
 }
 .grant-copy { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.4; }
 .grant-submit { width: 100%; }
@@ -1372,6 +1401,7 @@ button.grant-status:disabled {
 @media (prefers-reduced-motion: reduce) {
   .connect-label[role="status"], .toast, .toast[data-leaving="1"] { animation: none; }
   .wait-spin { animation: none; border-top-color: var(--warn); }
+  .grant-status[data-processing="1"]::after { animation: none; content: "..."; }
   .toast-meter > span { transition: none; }
 }
 .share-preview, .note, .fee { font-size: 13px; color: var(--muted); }
@@ -1949,6 +1979,7 @@ tr.open td { color: var(--text); }
   .clock { font-size: 40px; }
   .chart-wrap { height: 220px; }
   .handoff-banner { font-size: 22px; padding: 16px 18px; }
+  .handoff-sub { font-size: 13px; }
   .reconnect-banner { font-size: 18px; padding: 16px 18px; }
   .reconnect-title { font-size: 18px; }
   .chart-skeleton { gap: 14px; padding: 28px 18px; }

@@ -885,26 +885,29 @@ export function useMarket(token: string | null, seed: You | null = null, initial
     [reload],
   )
 
-  const withdrawWallet = useCallback(async (amount: string): Promise<string | null> => {
-    if (!tokenRef.current) return "Connect a wallet first"
+  const withdrawWallet = useCallback(async (amount: string): Promise<
+    { ok: true; txHash: string | null } | { ok: false; message: string }
+  > => {
+    if (!tokenRef.current) return { ok: false, message: "Connect a wallet first" }
     const offline = connectionErrorNow()
-    if (offline) return offline
+    if (offline) return { ok: false, message: offline }
     try {
       const response = await fetch(api("/api/withdraw"), {
         method: "POST",
         headers: headers(tokenRef.current, true),
         body: JSON.stringify({ amount }),
       })
-      const body = await response.json()
+      const body = (await response.json()) as { error?: string; you?: You; txHash?: string }
       if (body.you) acceptYou(body.you)
+      const txHash = typeof body.txHash === "string" && body.txHash.length > 0 ? body.txHash : null
       if (response.status === 401) {
         setUnauthorized(true)
-        return "Connect a wallet first"
+        return { ok: false, message: "Connect a wallet first" }
       }
-      if (!response.ok) return body.error ?? "Withdraw failed"
-      return null
+      if (!response.ok) return { ok: false, message: body.error ?? "Withdraw failed" }
+      return { ok: true, txHash }
     } catch {
-      return "Can't reach the market server"
+      return { ok: false, message: "Can't reach the market server" }
     }
   }, [acceptYou, connectionErrorNow])
 

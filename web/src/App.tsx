@@ -390,15 +390,32 @@ export function App({
     if (withdrawing) return
     setWithdrawing(true)
     setWithdrawError(null)
-    const message = await market.withdrawWallet(withdrawAmount)
+    const result = await market.withdrawWallet(withdrawAmount)
     setWithdrawing(false)
-    if (message) {
-      setWithdrawError(message)
+    if (!result.ok) {
+      setWithdrawError(result.message)
+      const detail = localize(lang, result.message)
+      upsertToast({
+        id: "withdraw-error",
+        kind: "error",
+        title: text.withdrawFailed,
+        text: detail === text.withdrawFailed ? undefined : detail,
+      })
       return
     }
+    const micros = parseAmountMicros(withdrawAmount)
+    const txHash = result.txHash
     setWithdrawError(null)
     setWithdrawAmount("")
     setWithdrawOpen(false)
+    upsertToast({
+      id: "withdraw-ok",
+      kind: "ok",
+      title: text.withdrawnToast,
+      text: micros !== null ? formatMoney(micros) : undefined,
+      txHash,
+      txUrl: txHash ? grantTxUrl(market.config.chainId, txHash, market.config.chainKey) : null,
+    })
   }
 
   function chip(percent: number) {
@@ -543,6 +560,7 @@ export function App({
           <p className="handoff-banner">
             {handoff.to && <span className="handoff-kicker">{text.switching}</span>}
             <span>{handoffBanner(handoff.from, handoff.to, lang)}</span>
+            {!handoff.to && <span className="handoff-sub">{text.waitingFeed}</span>}
           </p>
         )}
         {lost && !handoff && market.connectionReason === "reconnecting" && (
@@ -745,7 +763,9 @@ export function App({
                 {grantStatusLabel(grantWait, market.config.grantMicros, lang)}
               </button>
             ) : (
-              <p className="grant-status">{grantStatusLabel(grantWait, market.config.grantMicros, lang, grantInFlight)}</p>
+              <p className="grant-status" data-processing={grantInFlight ? "1" : "0"}>
+                {grantStatusLabel(grantWait, market.config.grantMicros, lang, grantInFlight)}
+              </p>
             ))}
           {!held && (
             <>
