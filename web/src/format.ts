@@ -284,8 +284,14 @@ export function grantButtonLabel(timing: GrantTiming, amountMicros: number, lang
   return text.nextGrant(formatGrantWait(timing.waitMs, lang))
 }
 
-export function grantStatusLabel(timing: GrantTiming, amountMicros: number, lang: Lang = "en"): string {
+export function grantStatusLabel(
+  timing: GrantTiming,
+  amountMicros: number,
+  lang: Lang = "en",
+  inFlight = false,
+): string {
   const text = copy(lang)
+  if (inFlight) return text.grantProcessing
   if (timing.due) return text.grantReadyAmount(formatGrantDollars(amountMicros))
   return text.nextGrant(formatGrantWait(timing.waitMs, lang))
 }

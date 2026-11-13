@@ -181,6 +181,8 @@ test("grant timing and labels describe an hourly claim", () => {
   const ready = grantTiming(null, 0, hour)
   expect(grantButtonLabel(ready, amount)).toBe("Grant $100")
   expect(grantStatusLabel(ready, amount)).toBe("Grant ready · $100")
+  expect(grantStatusLabel(ready, amount, "en", true)).toBe("Processing")
+  expect(grantStatusLabel(ready, amount, "zh-TW", true)).toBe("處理中")
   expect(grantNextLabel(ready)).toBe("Ready")
   const waiting = grantTiming(0, 0, hour)
   expect(grantButtonLabel(waiting, amount)).toBe("Next grant in 1h")

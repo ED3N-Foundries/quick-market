@@ -338,15 +338,14 @@ export function App({
   const grantWait = grantTiming(grantAt, now, market.config.grantIntervalMs)
   const grantPending = you?.grantPending ?? null
   const grantInFlight = funding || grantPending !== null
-  const holdStake = session.signing || grantPending !== null
   const isNearChain = market.config.chainKey === "near-testnet"
   useEffect(() => {
     const mark = baselineRef.current
     if (!mark || market.pending) return
     if (!held || held.roundId !== mark.roundId || held.side !== mark.side) baselineRef.current = null
   }, [held, market.pending])
-  // Minting status lives in a toast with a clickable confirmation link, so the
-  // stake column never resizes while a grant is in flight.
+  // Confirmation detail stays in the toast. The stake column keeps one grant
+  // line and only swaps its words, so the box does not resize while a grant is in flight.
   useEffect(() => {
     const active = grantPending !== null || (testnet && funding)
     if (!active) {
@@ -734,25 +733,20 @@ export function App({
           ) : (
             <BalanceFigure micros={shownMicros} markRef={balanceMark} />
           )}
-          {!holdStake && testnet && market.config.grantIntervalMs > 0 && grantKnown &&
-            (grantWait.due ? (
+          {testnet && market.config.grantIntervalMs > 0 && grantKnown &&
+            (grantWait.due && !grantInFlight ? (
               <button
                 type="button"
                 className="grant-status"
                 onClick={openGrant}
-                disabled={!session.token || grantInFlight || paused}
+                disabled={!session.token || paused}
                 title={lost ? text.reconnectingMarket : undefined}
               >
                 {grantStatusLabel(grantWait, market.config.grantMicros, lang)}
               </button>
             ) : (
-              <p className="grant-status">{grantStatusLabel(grantWait, market.config.grantMicros, lang)}</p>
+              <p className="grant-status">{grantStatusLabel(grantWait, market.config.grantMicros, lang, grantInFlight)}</p>
             ))}
-          {lost && (
-            <p className="note warn" role="status">
-              {text.reconnectingMarket} · {text.reconnectingHint}
-            </p>
-          )}
           {!held && (
             <>
               <label className="stake-field">

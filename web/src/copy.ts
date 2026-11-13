@@ -113,6 +113,7 @@ export type Copy = {
   paceSeconds: (seconds: number) => string
   grantButton: (amount: string) => string
   grantReadyAmount: (amount: string) => string
+  grantProcessing: string
   nextGrant: (wait: string) => string
   grantSentence: (amount: string, pace: string) => string
   briefKicker: string
@@ -295,6 +296,7 @@ const en: Copy = {
   paceSeconds: (seconds) => `once every ${seconds}s`,
   grantButton: (amount) => `Grant ${amount}`,
   grantReadyAmount: (amount) => `Grant ready · ${amount}`,
+  grantProcessing: "Processing",
   nextGrant: (wait) => `Next grant in ${wait}`,
   grantSentence: (amount, pace) =>
     `Quick Market adds ${amount} QM USDC to this balance ${pace}. The wallet is not charged, and Phantom is not involved.`,
@@ -484,6 +486,7 @@ const zhTW: Copy = {
   paceSeconds: (seconds) => `每 ${seconds} 秒一次`,
   grantButton: (amount) => `領取 ${amount}`,
   grantReadyAmount: (amount) => `可以領取 · ${amount}`,
+  grantProcessing: "處理中",
   nextGrant: (wait) => `下次領取還要 ${wait}`,
   grantSentence: (amount, pace) =>
     `Quick Market ${pace}，把 ${amount} QM USDC 加進這個餘額。不會向錢包扣款，也不經過 Phantom。`,

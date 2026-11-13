@@ -949,7 +949,8 @@ body {
   display: flex;
   flex-direction: column;
   min-width: 0;
-  min-height: 230px;
+  /* Open return line ("You · …" plus "$x back") fits inside. The button's auto margin takes the spare space when that line is closed. */
+  min-height: 300px;
   transition:
     opacity 280ms cubic-bezier(0.2, 0.8, 0.2, 1),
     border-color 280ms cubic-bezier(0.2, 0.8, 0.2, 1),
@@ -1069,9 +1070,23 @@ body {
 }
 .token-mark { width: 16px; height: 16px; display: block; flex: none; }
 .grant-status {
+  display: block;
+  box-sizing: border-box;
+  height: 18px;
   margin: 4px 0 0;
+  padding: 0;
+  border: 0;
+  background: none;
   color: var(--muted);
   font-size: 12px;
+  font-weight: 400;
+  line-height: 18px;
+  letter-spacing: 0;
+  text-transform: none;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 button.grant-status {
   border: 0;
@@ -1082,9 +1097,13 @@ button.grant-status {
   text-decoration: underline;
   text-underline-offset: 2px;
   cursor: pointer;
-  text-align: left;
 }
-button.grant-status:disabled { cursor: default; }
+button.grant-status:disabled {
+  opacity: 1;
+  cursor: default;
+  color: var(--muted);
+  text-decoration: none;
+}
 .grant-copy { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.4; }
 .grant-submit { width: 100%; }
 .balance {
@@ -1940,7 +1959,7 @@ tr.open td { color: var(--text); }
   .side.up { grid-column: 1; grid-row: 1; }
   .side.down { grid-column: 2; grid-row: 1; }
   .stake { grid-column: 1 / -1; grid-row: 2; }
-  .side { min-height: 0; padding: 12px; }
+  .side { min-height: 252px; padding: 12px; }
   .pool, .to-win { font-size: 13px; }
   .to-win {
     height: 2.5em;
