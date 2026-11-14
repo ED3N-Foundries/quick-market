@@ -502,7 +502,7 @@ export function App({
           </div>
           {lost && <LinkQualityBadge link={market.link} blocked />}
         </div>
-        <div className="clock-cluster" data-move={heldSpan?.strike ? "1" : "0"}>
+        <div className="clock-cluster">
           <PriceReadout
             priceRef={market.priceRef}
             strike={heldSpan?.strike ?? null}
@@ -1455,10 +1455,11 @@ function PriceReadout({
       const price = priceRef.current
       if (priceEl.current) priceEl.current.textContent = price ? formatPrice(price) : "—"
       const delta = price && strike ? formatDollarMove(price, strike) : null
-      if (delta && deltaEl.current && wordEl.current && moveEl.current) {
-        deltaEl.current.textContent = delta.text
-        wordEl.current.textContent = moveWord(delta.side, lang)
-        moveEl.current.dataset.side = delta.side
+      if (deltaEl.current && wordEl.current && moveEl.current) {
+        deltaEl.current.textContent = delta?.text ?? ""
+        wordEl.current.textContent = delta ? moveWord(delta.side, lang) : ""
+        moveEl.current.dataset.side = delta?.side ?? "push"
+        moveEl.current.dataset.empty = delta ? "0" : "1"
       }
       raf = requestAnimationFrame(loop)
     }
@@ -1481,12 +1482,10 @@ function PriceReadout({
           </span>
         </span>
       </div>
-      {strike && (
-        <div ref={moveEl} className="move">
-          <span ref={wordEl} className="move-label" />
-          <span ref={deltaEl} className="delta" />
-        </div>
-      )}
+      <div ref={moveEl} className="move" data-empty="1">
+        <span ref={wordEl} className="move-label" />
+        <span ref={deltaEl} className="delta" />
+      </div>
     </>
   )
 }

@@ -77,7 +77,7 @@ body {
 .clock-cluster {
   display: grid;
   grid-template-columns: auto auto;
-  grid-template-rows: auto auto;
+  grid-template-rows: auto auto auto;
   align-items: stretch;
   justify-content: end;
   row-gap: 6px;
@@ -86,7 +86,6 @@ body {
   border: 1px solid var(--line);
   border-radius: 18px;
 }
-.clock-cluster[data-move="1"] { grid-template-columns: auto auto auto; }
 
 .brand { display: flex; flex-direction: column; gap: 2px; align-items: flex-start; }
 .market-switch {
@@ -181,14 +180,17 @@ body {
 }
 
 .price-block,
-.move,
 .clock-block {
   display: grid;
-  grid-row: span 2;
   grid-template-rows: subgrid;
   align-items: center;
 }
-.price-block { justify-items: start; padding-right: 22px; }
+.price-block {
+  grid-column: 1;
+  grid-row: 1 / span 2;
+  justify-items: start;
+  padding-right: 22px;
+}
 .price-line {
   display: flex;
   align-items: center;
@@ -231,23 +233,37 @@ body {
   white-space: nowrap;
 }
 .move {
-  justify-items: end;
-  min-width: 12.5rem;
-  padding: 0 22px;
-  border-left: 1px solid var(--line);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  grid-column: 1;
+  grid-row: 3;
+  justify-self: start;
+  min-height: 18px;
+  padding-left: 42px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
+.move[data-empty="1"] { visibility: hidden; }
 .move-label {
   color: var(--muted);
-  font-size: 12px;
-  letter-spacing: 0.12em;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
   text-transform: uppercase;
   line-height: 1;
+  min-width: 4.1em;
+  text-align: right;
 }
 .move .delta {
-  font-variant-numeric: tabular-nums;
-  line-height: 0.9;
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  line-height: 1;
   white-space: nowrap;
-  text-align: right;
 }
 .move[data-side="up"] .move-label,
 .move[data-side="up"] .delta { color: var(--up); }
@@ -255,15 +271,10 @@ body {
 .move[data-side="down"] .delta { color: var(--down); }
 .move[data-side="push"] .move-label,
 .move[data-side="push"] .delta { color: var(--push); }
-.move[data-side="up"] .delta,
-.move[data-side="down"] .delta,
-.move[data-side="push"] .delta {
-  font-size: 46px;
-  font-weight: 700;
-  letter-spacing: -0.045em;
-}
 
 .clock-block {
+  grid-column: 2;
+  grid-row: 1 / span 3;
   justify-items: end;
   min-width: 8.4rem;
   padding-left: 22px;
@@ -2095,8 +2106,7 @@ tr.open td { color: var(--text); }
 @media (max-width: 860px) {
   .app { padding-top: 12px; }
   .top { grid-template-columns: 1fr; gap: 10px; margin-bottom: 10px; }
-  .clock-cluster,
-  .clock-cluster[data-move="1"] {
+  .clock-cluster {
     grid-template-columns: minmax(0, 1fr) auto;
     grid-template-rows: auto auto;
     align-items: center;
@@ -2104,10 +2114,7 @@ tr.open td { color: var(--text); }
     width: 100%;
     padding: 12px 14px;
   }
-  .clock-cluster[data-move="0"] { grid-template-rows: auto; }
-  .clock-cluster[data-move="0"] .clock-block { grid-row: 1; }
   .price-block,
-  .move,
   .clock-block {
     display: flex;
     flex-direction: column;
@@ -2127,21 +2134,15 @@ tr.open td { color: var(--text); }
   .lock { width: 28px; height: 28px; }
   .lock svg { width: 16px; height: 16px; }
   .move {
-    grid-column: 1;
+    grid-column: 1 / -1;
     grid-row: 2;
-    min-width: 0;
-    margin-top: 8px;
-    padding: 0 12px 0 0;
-    border-left: 0;
-    container-type: inline-size;
-    container-name: move;
+    min-height: 16px;
+    padding-left: 36px;
   }
-  .move[data-side="up"] .delta,
-  .move[data-side="down"] .delta,
-  .move[data-side="push"] .delta { font-size: 32px; }
+  .move .delta { font-size: 15px; }
   .clock-block {
     grid-column: 2;
-    grid-row: 1 / span 2;
+    grid-row: 1;
     align-self: center;
     align-items: flex-end;
     padding-left: 12px;
@@ -2202,9 +2203,7 @@ tr.open td { color: var(--text); }
 @container price (max-width: 165px) {
   .price { font-size: 18px; }
 }
-@container move (max-width: 220px) {
-  .move .delta { font-size: 26px; }
-}
-@container move (max-width: 180px) {
-  .move .delta { font-size: 22px; }
+@media (max-width: 360px) {
+  .move-label { font-size: 10px; }
+  .move .delta { font-size: 14px; }
 }
