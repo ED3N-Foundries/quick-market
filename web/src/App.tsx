@@ -46,6 +46,7 @@ import { useSideBook } from "./useSideBook"
 import { grantWaitStatus, loginStatus, shortWalletFault, SIGN_PROMPT } from "./phantomConnect"
 import { ClaudeLogo, GrokLogo, NearLogo, OpenAiLogo, PhantomLogo } from "./logos"
 import { ToastStack, useToasts } from "./toasts"
+import { formatNearRetry } from "./nearFunding"
 import { useSession } from "./wallet"
 import { History } from "./history"
 import { AgentsPanel, briefTx, FundOverlay, GrantOverlay, WithdrawOverlay } from "./overlays"
@@ -339,6 +340,8 @@ export function App({
   const grantPending = you?.grantPending ?? null
   const grantInFlight = funding || grantPending !== null
   const isNearChain = market.config.chainKey === "near-testnet"
+  const nearCooling = isNearChain && market.nearFunding.cooling
+  const nearWait = nearCooling ? formatNearRetry(market.nearRetryMs) : ""
   useEffect(() => {
     const mark = baselineRef.current
     if (!mark || market.pending) return
@@ -440,6 +443,11 @@ export function App({
     setFundError(null)
     if (market.blocked) {
       setFundError("Reconnecting to the market")
+      return
+    }
+    if (nearCooling) {
+      setFundError("NEAR funding paused — RPC cooling. Try again shortly.")
+      setFundOpen(true)
       return
     }
     setFundOpen(true)
@@ -757,19 +765,34 @@ export function App({
           )}
           {testnet && market.config.grantIntervalMs > 0 && grantKnown &&
             (grantWait.due && !grantInFlight ? (
-              <button
-                type="button"
-                className="grant-status"
-                onClick={openGrant}
-                disabled={!session.token || paused}
-                title={lost ? text.reconnectingMarket : undefined}
-              >
-                {grantStatusLabel(grantWait, market.config.grantMicros, lang)}
-              </button>
+              <>
+                <button
+                  type="button"
+                  className="grant-status"
+                  onClick={openGrant}
+                  disabled={!session.token || paused || nearCooling}
+                  aria-disabled={!session.token || paused || nearCooling}
+                  title={nearCooling ? `${text.nearPaused} ${text.nearRetry(nearWait)}` : lost ? text.reconnectingMarket : undefined}
+                >
+                  {grantStatusLabel(grantWait, market.config.grantMicros, lang)}
+                </button>
+                {nearCooling && (
+                  <p className="note warn" role="status">
+                    {text.nearPaused} {text.nearRetry(nearWait)} {text.nearContinues}
+                  </p>
+                )}
+              </>
             ) : (
-              <p className="grant-status" data-processing={grantInFlight ? "1" : "0"}>
-                {grantStatusLabel(grantWait, market.config.grantMicros, lang, grantInFlight)}
-              </p>
+              <>
+                <p className="grant-status" data-processing={grantInFlight ? "1" : "0"}>
+                  {grantStatusLabel(grantWait, market.config.grantMicros, lang, grantInFlight)}
+                </p>
+                {nearCooling && !grantInFlight && (
+                  <p className="note warn" role="status">
+                    {text.nearPaused} {text.nearRetry(nearWait)} {text.nearContinues}
+                  </p>
+                )}
+              </>
             ))}
           {!held && (
             <>
@@ -831,6 +854,8 @@ export function App({
           blocked={paused}
           notice={lost}
           error={fundError}
+          cooling={nearCooling}
+          coolingWait={nearWait}
           onClose={() => {
             setFundOpen(false)
             if (!funding) {
@@ -842,6 +867,10 @@ export function App({
             if (funding) return
             if (market.blocked) {
               setFundError("Reconnecting to the market")
+              return
+            }
+            if (nearCooling) {
+              setFundError("NEAR funding paused — RPC cooling. Try again shortly.")
               return
             }
             const before = grantAt
@@ -913,6 +942,7 @@ export function App({
           treasury={market.config.treasury}
           chainId={market.config.chainId}
           chainName={market.config.chainName}
+          confirmations={market.config.confirmations}
           amount={fundAmount}
           disabled={!session.token || funding || paused}
           customDisabled={!session.token || funding || fundMicros === null || paused}
@@ -935,7 +965,7 @@ export function App({
             setFundPhase("phantom")
             setFundHash(null)
             setFundError(null)
-            void session.deposit(amount, market.config.treasury, market.config.usdc, market.config.chainId).then(async (result) => {
+            void session.deposit(amount, market.config.treasury, market.config.usdc, market.config.chainId, market.config.confirmations).then(async (result) => {
               if (!result.ok) {
                 setFundError(result.message)
                 setFunding(false)
@@ -983,6 +1013,8 @@ export function App({
           blocked={paused}
           notice={lost}
           error={withdrawError}
+          cooling={nearCooling}
+          coolingWait={nearWait}
           onAmount={(value) => {
             setWithdrawAmount(value)
             setWithdrawError(null)

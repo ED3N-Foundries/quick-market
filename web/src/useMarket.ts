@@ -33,10 +33,19 @@ import type { Handoff, Ticker } from "../../shared/source"
 import { tickerFor } from "../../shared/source"
 import { applySettlement, dismissRound, dueBuyIns, emptyNotices, settleNotice, settlePullDue, SETTLE_PULL_GAP_MS, SETTLE_PULL_MS, tickNotices } from "./resultNotice"
 import { applyBookPatch } from "./boardStream"
+import {
+  acknowledgeOrderTiming,
+  completeOrderTiming,
+  ORDER_BOOK_TIMEOUT_MS,
+  orderTimingExpired,
+  startOrderTiming,
+  type OrderTiming,
+} from "./orderLatency"
 import { acceptStateBoard, missingCardWindow, patchNeedsSnapshot } from "./boardRepair"
 import { tapeLead } from "./tapeLead"
-import type { AccountMessage, Board, Config, ServerStreamMessage, Side, SnapshotMessage, You } from "./types"
+import type { AccountMessage, Board, Config, NearFunding, ServerStreamMessage, Side, SnapshotMessage, You } from "./types"
 import { withChainQuery } from "./runtimeConfig"
+import { emptyNearFunding, isNearCoolingBody, nearRetryMs, parseNearFunding } from "./nearFunding"
 
 function readTape(value: unknown): TapePoint[] | null {
   if (!Array.isArray(value)) return null
@@ -77,6 +86,7 @@ export function useMarket(token: string | null, seed: You | null = null, initial
   const [unauthorized, setUnauthorized] = useState(false)
   const [confirmed, setConfirmed] = useState(false)
   const [socketUp, setSocketUp] = useState(false)
+  const [nearFunding, setNearFunding] = useState<NearFunding>(() => emptyNearFunding())
 
   const offsetRef = useRef(0)
   const clockRef = useRef(createClock())
@@ -116,6 +126,7 @@ export function useMarket(token: string | null, seed: You | null = null, initial
     sentAt: number
   } | null>(null)
   const sendBetRef = useRef<() => void>(() => {})
+  const orderTimingRef = useRef<OrderTiming | null>(null)
   const epochRef = useRef<string | null>(null)
   const seqRef = useRef(0)
   const needsSnapshotRef = useRef(false)
@@ -216,6 +227,7 @@ export function useMarket(token: string | null, seed: You | null = null, initial
       setFeed(message.feed)
       setTicker(message.ticker)
       setHandoff(message.handoff)
+      if (message.nearFunding) setNearFunding(parseNearFunding(message.nearFunding))
       const points = readTape(message.tape)
       if (points) {
         const chart = chartRef.current
@@ -261,6 +273,8 @@ export function useMarket(token: string | null, seed: You | null = null, initial
     setFeed(body.feed)
     if (body.ticker) setTicker(body.ticker)
     setHandoff(body.handoff ?? null)
+    if (body.nearFunding) setNearFunding(parseNearFunding(body.nearFunding))
+    else if (body.config?.chainKey !== "near-testnet") setNearFunding(emptyNearFunding())
     noteServerNow(body.serverNow)
     const holdYou = Boolean(opts?.tape) && betLock.current
     if (!holdYou && fresh) acceptYou(body.you ?? null)
@@ -450,6 +464,7 @@ export function useMarket(token: string | null, seed: You | null = null, initial
         setFeed(body.feed)
         if (body.ticker) setTicker(body.ticker)
         setHandoff(body.handoff ?? null)
+        if (body.nearFunding) setNearFunding(parseNearFunding(body.nearFunding))
         noteServerNow(body.serverNow)
         if (fresh && youEpoch.current === seen) acceptYou(body.you ?? null)
         if (token) markConfirmed(true)
@@ -478,6 +493,48 @@ export function useMarket(token: string | null, seed: You | null = null, initial
     let generation = 0
     let failures = 0
     let wokeAt = 0
+    let orderReportTimer = 0
+
+    const clearOrderReportTimer = () => {
+      window.clearTimeout(orderReportTimer)
+      orderReportTimer = 0
+    }
+
+    const resetOrderTiming = () => {
+      clearOrderReportTimer()
+      orderTimingRef.current = null
+    }
+
+    const sendOrderReport = (current: WebSocket, report: Record<string, unknown>) => {
+      if (current.readyState !== WebSocket.OPEN) return
+      try {
+        current.send(JSON.stringify({ type: "order-latency", ...report }))
+      } catch {
+        return
+      }
+    }
+
+    const noteOrderBook = (current: WebSocket, next: Board) => {
+      const ms = completeOrderTiming(orderTimingRef.current, next, performance.now())
+      if (ms === null) return
+      const requestId = orderTimingRef.current!.requestId
+      resetOrderTiming()
+      sendOrderReport(current, { requestId, kind: "book", ms })
+    }
+
+    const noteOrderAck = (current: WebSocket, requestId: string) => {
+      const ack = acknowledgeOrderTiming(orderTimingRef.current, requestId, performance.now())
+      if (!ack) return
+      orderTimingRef.current = ack.timing
+      sendOrderReport(current, { requestId, kind: "ack", ms: ack.ms })
+      clearOrderReportTimer()
+      orderReportTimer = window.setTimeout(() => {
+        const timing = orderTimingRef.current
+        if (!orderTimingExpired(timing, requestId, performance.now())) return
+        resetOrderTiming()
+        sendOrderReport(current, { requestId, kind: "missing" })
+      }, ORDER_BOOK_TIMEOUT_MS)
+    }
 
     const detach = (current: WebSocket) => {
       current.onopen = null
@@ -517,6 +574,9 @@ export function useMarket(token: string | null, seed: You | null = null, initial
           stake: bet.stake,
           roundId: bet.roundId,
         }))
+        bet.sentAt = Date.now()
+        resetOrderTiming()
+        orderTimingRef.current = startOrderTiming(bet.requestId, bet.roundId, performance.now())
       } catch {
         connect()
       }
@@ -551,6 +611,7 @@ export function useMarket(token: string | null, seed: You | null = null, initial
 
     function connect() {
       if (stopped) return
+      resetOrderTiming()
       window.clearTimeout(retry)
       window.clearTimeout(snapshotWait)
       retryPendingRef.current = false
@@ -628,6 +689,7 @@ export function useMarket(token: string | null, seed: You | null = null, initial
         }
         if (message.type === "snapshot") {
           acceptSnapshot(message)
+          noteOrderBook(current, message.board)
           return
         }
         if (message.type === "account") {
@@ -648,11 +710,13 @@ export function useMarket(token: string | null, seed: You | null = null, initial
           betLock.current = false
           setPending(false)
           if (message.ok && message.you) {
+            noteOrderAck(current, bet.requestId)
             acceptYou(message.you)
             markConfirmed(true)
             setError(null)
             return
           }
+          resetOrderTiming()
           if (bet.windowOpen) acceptYou(bet.snapshot)
           if (message.code === LATE_BUY_IN_CODE) setLateNotices((current) => (current.length > 0 ? current : [1]))
           else setError(message.error ?? "Buy-in failed")
@@ -706,6 +770,7 @@ export function useMarket(token: string | null, seed: You | null = null, initial
             return
           }
           commitBoard(next, message.serverNow)
+          noteOrderBook(current, next)
           return
         }
         if (needsSnapshotRef.current) return
@@ -789,6 +854,7 @@ export function useMarket(token: string | null, seed: You | null = null, initial
     return () => {
       stopped = true
       generation += 1
+      resetOrderTiming()
       window.clearTimeout(retry)
       window.clearTimeout(snapshotWait)
       retryPendingRef.current = false
@@ -925,7 +991,7 @@ export function useMarket(token: string | null, seed: You | null = null, initial
 
   const claimGrant = useCallback(async (): Promise<
     | { ok: true; granted: boolean; pending: boolean; txHash: string | null; confirmations: number }
-    | { ok: false; message: string; dropped: boolean; txHash: string | null }
+    | { ok: false; message: string; dropped: boolean; txHash: string | null; cooling?: boolean }
   > => {
     if (!tokenRef.current) return { ok: false, message: "Sign in to receive a grant.", dropped: false, txHash: null }
     const offline = connectionErrorNow()
@@ -942,7 +1008,29 @@ export function useMarket(token: string | null, seed: You | null = null, initial
         txHash?: string
         confirmations?: number
         you?: You
+        code?: string
+        retryAfterMs?: number
+        coolingUntil?: number | null
+        reason?: string | null
+        nearFunding?: unknown
       } | null
+      if (body && (isNearCoolingBody(body) || response.status === 503)) {
+        const funding = parseNearFunding({
+          cooling: true,
+          retryAfterMs: body?.retryAfterMs ?? 0,
+          untilMs: (body as { coolingUntil?: unknown })?.coolingUntil ?? null,
+          reason: (body as { reason?: unknown })?.reason ?? body?.error ?? null,
+        })
+        // coolingUntil is the server field name; also accept untilMs.
+        if (funding.untilMs == null && typeof body?.coolingUntil === "number") {
+          funding.untilMs = body.coolingUntil
+        }
+        setNearFunding(funding.cooling ? funding : { ...funding, cooling: true })
+        return { ok: false, message: body?.error ?? "NEAR funding paused — RPC cooling. Try again shortly.", dropped: false, txHash: null, cooling: true }
+      }
+      if (body && typeof (body as { nearFunding?: unknown }).nearFunding !== "undefined") {
+        setNearFunding(parseNearFunding((body as { nearFunding?: unknown }).nearFunding))
+      }
       if (body?.you) {
         acceptYou(body.you)
         markConfirmed(true)
@@ -995,7 +1083,7 @@ export function useMarket(token: string | null, seed: You | null = null, initial
   )
 
   const withdrawWallet = useCallback(async (amount: string): Promise<
-    { ok: true; txHash: string | null } | { ok: false; message: string }
+    { ok: true; txHash: string | null } | { ok: false; message: string; cooling?: boolean }
   > => {
     if (!tokenRef.current) return { ok: false, message: "Connect a wallet first" }
     const offline = connectionErrorNow()
@@ -1006,19 +1094,50 @@ export function useMarket(token: string | null, seed: You | null = null, initial
         headers: headers(tokenRef.current, true),
         body: JSON.stringify({ amount }),
       })
-      const body = (await response.json()) as { error?: string; you?: You; txHash?: string }
-      if (body.you) acceptYou(body.you)
-      const txHash = typeof body.txHash === "string" && body.txHash.length > 0 ? body.txHash : null
+      const body = (await response.json().catch(() => null)) as {
+        error?: string
+        you?: You
+        txHash?: string
+        code?: string
+        retryAfterMs?: number
+        coolingUntil?: number | null
+        reason?: string | null
+      } | null
+      if (body && (isNearCoolingBody(body) || response.status === 503)) {
+        const funding = parseNearFunding({
+          cooling: true,
+          retryAfterMs: body?.retryAfterMs ?? 0,
+          untilMs: body?.coolingUntil ?? null,
+          reason: body?.reason ?? body?.error ?? null,
+        })
+        setNearFunding({ ...funding, cooling: true })
+        return { ok: false, message: body?.error ?? "NEAR funding paused — RPC cooling. Try again shortly.", cooling: true }
+      }
+      if (body?.you) acceptYou(body.you)
+      const txHash = typeof body?.txHash === "string" && body.txHash.length > 0 ? body.txHash : null
       if (response.status === 401) {
         setUnauthorized(true)
         return { ok: false, message: "Connect a wallet first" }
       }
-      if (!response.ok) return { ok: false, message: body.error ?? "Withdrawal failed" }
+      if (!response.ok) return { ok: false, message: body?.error ?? "Withdrawal failed" }
       return { ok: true, txHash }
     } catch {
       return { ok: false, message: "Can't reach the market server" }
     }
   }, [acceptYou, connectionErrorNow])
+
+  useEffect(() => {
+    if (!nearFunding.cooling || nearFunding.untilMs == null) return
+    const waitMs = Math.max(0, nearFunding.untilMs - Date.now())
+    if (waitMs <= 0) {
+      void reload().catch(() => {})
+      return
+    }
+    const id = window.setTimeout(() => {
+      void reload().catch(() => {})
+    }, Math.min(waitMs + 500, 120_000))
+    return () => window.clearTimeout(id)
+  }, [nearFunding.cooling, nearFunding.untilMs, reload])
 
   const now = Date.now() + offsetRef.current
   void pulse
@@ -1088,5 +1207,7 @@ export function useMarket(token: string | null, seed: You | null = null, initial
     slow,
     connectionReason: connection.reason,
     connectionErrorNow,
+    nearFunding,
+    nearRetryMs: nearRetryMs(nearFunding, Date.now()),
   }
 }

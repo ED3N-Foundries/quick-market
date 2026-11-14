@@ -14,6 +14,7 @@ import {
   type Holding,
   type TreasuryReport,
 } from "../shared/near"
+import { marketPreferences } from "../shared/market"
 import { MINT_CONFIRMATIONS, MINT_RECEIPT_TIMEOUT_MS } from "../shared/mint"
 import { parseNearPublicKey, publicKeyBytes } from "../shared/nearKey"
 import { encodeFunctionCall, jsonArgs, signTransaction } from "./nearTx"
@@ -144,6 +145,150 @@ const NEAR_GRANT_POLL_MS = 300
 /** dRPC answers 403 to an empty user agent. */
 const NEAR_RPC_USER_AGENT = "quick-market"
 
+/** Funding-plane circuit breaker. Tripped when every endpoint is cooling or rate-limited. */
+export const NEAR_COOLDOWN_CODE = "NEAR_COOLING"
+export const NEAR_COOLDOWN_MESSAGE = "NEAR funding paused — RPC cooling. Try again shortly."
+export const NEAR_DEPOSIT_BATCH_DEFAULT = 12
+export const NEAR_CUSTODY_INTERVAL_DEFAULT_MS = 20_000
+export const NEAR_RPC_GAP_DEFAULT_MS = 75
+const NEAR_COOLDOWN_DEFAULT_MS = 30_000
+const NEAR_COOLDOWN_MAX_DEFAULT_MS = 120_000
+const NEAR_COOLDOWN_STREAK_TRIP = 8
+const NEAR_COOLDOWN_STREAK_WINDOW_MS = 60_000
+
+export type NearFundingState = {
+  cooling: boolean
+  retryAfterMs: number
+  untilMs: number | null
+  reason: string | null
+}
+
+export class NearCoolingError extends Error {
+  code = NEAR_COOLDOWN_CODE
+  retryAfterMs: number
+  coolingUntil: number | null
+  constructor(retryAfterMs: number, untilMs: number | null, reason?: string) {
+    super(reason ? `${NEAR_COOLDOWN_MESSAGE} (${reason})` : NEAR_COOLDOWN_MESSAGE)
+    this.name = "NearCoolingError"
+    this.retryAfterMs = retryAfterMs
+    this.coolingUntil = untilMs
+  }
+}
+
+export function isNearCooling(error: unknown): boolean {
+  if (error instanceof NearCoolingError) return true
+  if (error && typeof error === "object" && "code" in error) {
+    return (error as { code?: unknown }).code === NEAR_COOLDOWN_CODE
+  }
+  if (error instanceof Error) return error.message.includes(NEAR_COOLDOWN_MESSAGE)
+  return false
+}
+
+function envInt(name: string, def: number, min: number, max: number): number {
+  const raw = Number(process.env[name])
+  if (!Number.isInteger(raw)) return def
+  return Math.min(max, Math.max(min, raw))
+}
+
+export function nearCooldownMs(env: Record<string, string | undefined> = process.env): number {
+  const raw = Number(env.NEAR_COOLDOWN_MS)
+  if (Number.isInteger(raw)) return Math.min(300_000, Math.max(5_000, raw))
+  return NEAR_COOLDOWN_DEFAULT_MS
+}
+
+export function nearCooldownMaxMs(env: Record<string, string | undefined> = process.env): number {
+  const raw = Number(env.NEAR_COOLDOWN_MAX_MS)
+  if (Number.isInteger(raw)) return Math.min(600_000, Math.max(nearCooldownMs(env), raw))
+  return NEAR_COOLDOWN_MAX_DEFAULT_MS
+}
+
+export function nearDepositBatch(env: Record<string, string | undefined> = process.env): number {
+  const raw = Number(env.NEAR_DEPOSIT_BATCH)
+  if (Number.isInteger(raw)) return Math.min(32, Math.max(1, raw))
+  return NEAR_DEPOSIT_BATCH_DEFAULT
+}
+
+export function nearCustodyIntervalMs(env: Record<string, string | undefined> = process.env): number {
+  const raw = Number(env.NEAR_CUSTODY_INTERVAL_MS)
+  if (Number.isInteger(raw)) return Math.min(120_000, Math.max(5_000, raw))
+  return NEAR_CUSTODY_INTERVAL_DEFAULT_MS
+}
+
+export function nearRpcGapMs(env: Record<string, string | undefined> = process.env): number {
+  const raw = Number(env.NEAR_RPC_GAP_MS)
+  if (Number.isInteger(raw)) return Math.min(1_000, Math.max(0, raw))
+  return NEAR_RPC_GAP_DEFAULT_MS
+}
+
+type NearCooldown = { untilMs: number; reason: string; trippedAt: number }
+let nearCooldown: NearCooldown | null = null
+let nearLastCooldownMs = NEAR_COOLDOWN_DEFAULT_MS
+let busyCallAt: number[] = []
+let lastCooldownLogAt = 0
+
+function pruneBusyCalls(now: number): void {
+  while (busyCallAt.length > 0 && now - (busyCallAt[0] ?? 0) > NEAR_COOLDOWN_STREAK_WINDOW_MS) {
+    busyCallAt.shift()
+  }
+}
+
+export function tripNearCooldown(reason: string, now = Date.now()): NearFundingState {
+  const base = nearCooldownMs()
+  const max = nearCooldownMaxMs()
+  let duration: number
+  if (nearCooldown && nearCooldown.untilMs > now) {
+    const remaining = nearCooldown.untilMs - now
+    duration = Math.min(max, Math.max(base, remaining * 2))
+  } else if (nearLastCooldownMs > base && nearCooldown && now - nearCooldown.trippedAt < 5 * 60_000) {
+    duration = Math.min(max, nearLastCooldownMs * 2)
+  } else {
+    duration = base
+  }
+  const jitter = Math.floor(Math.random() * 10_000) - 5_000
+  duration = Math.min(max, Math.max(1_000, duration + jitter))
+  nearLastCooldownMs = duration
+  nearCooldown = { untilMs: now + duration, reason, trippedAt: now }
+  console.error(`near rpc cooling ${reason}, retry in ${Math.round(duration / 1000)}s`)
+  return nearCooldownStatus(now)
+}
+
+export function nearCooldownStatus(now = Date.now()): NearFundingState {
+  if (nearCooldown && now >= nearCooldown.untilMs) nearCooldown = null
+  if (!nearCooldown) return { cooling: false, retryAfterMs: 0, untilMs: null, reason: null }
+  return {
+    cooling: true,
+    retryAfterMs: Math.max(0, nearCooldown.untilMs - now),
+    untilMs: nearCooldown.untilMs,
+    reason: nearCooldown.reason,
+  }
+}
+
+export function resetNearCooldownForTest(): void {
+  nearCooldown = null
+  nearLastCooldownMs = NEAR_COOLDOWN_DEFAULT_MS
+  busyCallAt = []
+  lastCooldownLogAt = 0
+}
+
+function noteBusyCall(now: number): void {
+  pruneBusyCalls(now)
+  busyCallAt.push(now)
+  pruneBusyCalls(now)
+  if (busyCallAt.length >= NEAR_COOLDOWN_STREAK_TRIP) {
+    tripNearCooldown(`${busyCallAt.length} consecutive RPC failures`, now)
+  }
+}
+
+function noteRpcSuccess(): void {
+  busyCallAt = []
+  if (nearCooldown && Date.now() >= nearCooldown.untilMs) nearCooldown = null
+}
+
+function sleep(ms: number): Promise<void> {
+  if (ms <= 0) return Promise.resolve()
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
 const NEAR_RPC_LINE = /^(https?:\/\/\S+)\s+(\d+)\s+(\d+)\s+(\d+)$/
 
 const quietUntil = new Map<string, number>()
@@ -201,6 +346,7 @@ export function nearRpcStatus(now = Date.now(), endpoints = nearRpcEndpoints()):
 export function resetNearRpcQuiet(): void {
   quietUntil.clear()
   rpcAttempts.clear()
+  resetNearCooldownForTest()
 }
 
 function blankEnv(value: string | undefined): string | undefined {
@@ -320,6 +466,8 @@ async function rpcOnce(url: string, method: string, params: unknown, timeoutMs: 
 /**
  * Walk the list once. A busy hop is parked for its backoff and the call tries the next.
  * send_tx hops share one budget, the longest send timeout, so a 2-second node cannot stack into a minute.
+ * When every endpoint is already cooling, fast-fail into the funding cooldown instead of
+ * burning one more burst against rate limits.
  */
 export async function callNearRpc(
   endpoints: readonly NearRpcEndpoint[],
@@ -327,12 +475,26 @@ export async function callNearRpc(
   params: unknown,
   options?: { timeoutMs?: number },
 ): Promise<unknown> {
+  const entry = nearCooldownStatus()
+  if (entry.cooling) {
+    throw new NearCoolingError(entry.retryAfterMs, entry.untilMs, entry.reason ?? undefined)
+  }
+  if (endpoints.length > 0) {
+    const at = Date.now()
+    const allCooling = endpoints.every((endpoint) => (quietUntil.get(endpoint.url) ?? 0) > at)
+    if (allCooling) {
+      const tripped = tripNearCooldown("all endpoints cooling", at)
+      throw new NearCoolingError(tripped.retryAfterMs, tripped.untilMs, tripped.reason ?? undefined)
+    }
+  }
   const send = method === "send_tx"
   let ordered = nearRpcOrder(endpoints, Date.now(), quietUntil)
   if (send) ordered = nearSendOrder(ordered, waitUntilOf(params))
   const budget = send ? Math.max(0, ...endpoints.map((endpoint) => endpoint.sendTimeoutMs)) : 0
   const started = Date.now()
   let last = "NEAR RPC failed"
+  let busyInCall = 0
+  let rateLimitedInCall = 0
   for (const endpoint of ordered) {
     const remaining = budget - (Date.now() - started)
     if (send && remaining < 200) break
@@ -355,6 +517,7 @@ export async function callNearRpc(
         lastMethod: method,
         lastError: null,
       })
+      noteRpcSuccess()
       return result
     } catch (error) {
       last = rpcFailureText(error)
@@ -370,9 +533,24 @@ export async function callNearRpc(
         lastError: last.slice(0, 300),
       })
       if (!nearRpcBusy(error) && !nearRpcBusy(new Error(last))) break
+      busyInCall += 1
+      if (last.toLowerCase().includes("429") || last.toLowerCase().includes("rate")) rateLimitedInCall += 1
       quietUntil.set(endpoint.url, Date.now() + endpoint.backoffMs)
     }
   }
+  const failedAt = Date.now()
+  const allNowCooling =
+    endpoints.length > 0 && endpoints.every((endpoint) => (quietUntil.get(endpoint.url) ?? 0) > failedAt)
+  if (rateLimitedInCall >= 2) {
+    const tripped = tripNearCooldown(`${rateLimitedInCall} endpoints rate-limited`, failedAt)
+    throw new NearCoolingError(tripped.retryAfterMs, tripped.untilMs, last)
+  }
+  if (allNowCooling) {
+    const tripped = tripNearCooldown("all endpoints cooling", failedAt)
+    throw new NearCoolingError(tripped.retryAfterMs, tripped.untilMs, last)
+  }
+  if (busyInCall === ordered.length && ordered.length > 0) noteBusyCall(failedAt)
+  else if (busyInCall === 0) noteRpcSuccess()
   throw new Error(last)
 }
 
@@ -663,6 +841,21 @@ export async function watchNearGrant(
   const started = Date.now()
   let seen = 1
   while (seen < MINT_CONFIRMATIONS) {
+    const cooling = nearCooldownStatus()
+    if (cooling.cooling && cooling.untilMs != null) {
+      const waitMs = Math.min(cooling.retryAfterMs, MINT_RECEIPT_TIMEOUT_MS - (Date.now() - started))
+      if (waitMs > 0) await sleep(Math.min(waitMs, 5_000))
+      else await sleep(NEAR_GRANT_POLL_MS)
+      const next = nextNearGrantWatch({
+        elapsedMs: Date.now() - started,
+        deadlineMs: MINT_RECEIPT_TIMEOUT_MS,
+        seen,
+        status: null,
+      })
+      if (next.failed) throw new Error(`${NEAR_COOLDOWN_MESSAGE} ${hash}`)
+      if (next.done) return
+      continue
+    }
     const elapsed = Date.now() - started
     const status = elapsed < MINT_RECEIPT_TIMEOUT_MS ? await readNearGrantStatus(signerId, hash) : null
     const next = nextNearGrantWatch({
@@ -818,6 +1011,8 @@ export async function mintNearToTreasury(
   report?: (progress: { txHash?: string; seen: number }) => void,
 ): Promise<void> {
   if (!Number.isSafeInteger(amountMicros) || amountMicros <= 0) throw new Error("Amount is invalid")
+  const cooling = nearCooldownStatus()
+  if (cooling.cooling) throw new NearCoolingError(cooling.retryAfterMs, cooling.untilMs, cooling.reason ?? undefined)
   const env = loadEnv()
   const treasury = await nearTreasuryId()
   if (!treasury) throw new Error("TREASURY_PRIVATE_KEY must be an ed25519 NEAR secret key")
@@ -864,10 +1059,14 @@ function refundWithdraw(id: string) {
   tx()
 }
 
+export function nearWithdrawalWait(): "EXECUTED_OPTIMISTIC" | "EXECUTED" {
+  return marketPreferences.confirmations === 1 ? "EXECUTED_OPTIMISTIC" : "EXECUTED"
+}
+
 async function broadcastRaw(raw: string): Promise<void> {
   const result = (await rpc("send_tx", {
     signed_tx_base64: raw,
-    wait_until: "EXECUTED",
+    wait_until: nearWithdrawalWait(),
   })) as { status?: { Failure?: unknown } }
   if (result.status && "Failure" in result.status) throw new Error(JSON.stringify(result.status.Failure))
 }
@@ -875,12 +1074,26 @@ async function broadcastRaw(raw: string): Promise<void> {
 export async function requestNearWithdraw(
   address: string,
   amountMicros: number,
-): Promise<{ ok: true; you: You; txHash: string } | { ok: false; error: string; you?: You }> {
+): Promise<
+  | { ok: true; you: You; txHash: string }
+  | { ok: false; error: string; you?: You; code?: string; retryAfterMs?: number; coolingUntil?: number | null }
+> {
   const who = normalizeAccount(address, "near-testnet")
   const you = who ? youFor(who) : null
   if (!who || !you) return { ok: false, error: "Unknown wallet" }
   if (!Number.isSafeInteger(amountMicros) || amountMicros <= 0) return { ok: false, error: "Amount is invalid" }
   if (amountMicros > you.balanceMicros) return { ok: false, error: "Insufficient balance" }
+  const cooling = nearCooldownStatus()
+  if (cooling.cooling) {
+    return {
+      ok: false,
+      error: NEAR_COOLDOWN_MESSAGE,
+      you,
+      code: NEAR_COOLDOWN_CODE,
+      retryAfterMs: cooling.retryAfterMs,
+      coolingUntil: cooling.untilMs,
+    }
+  }
   const env = loadEnv()
   const treasury = await nearTreasuryId()
   if (!treasury) return { ok: false, error: "TREASURY_PRIVATE_KEY must be an ed25519 NEAR secret key" }
@@ -944,6 +1157,17 @@ export async function requestNearWithdraw(
       .run(activeChainKey(), id)
     return { ok: true, you: youFor(who)!, txHash: signed.hash }
   } catch (error) {
+    if (isNearCooling(error)) {
+      const status = nearCooldownStatus()
+      return {
+        ok: false,
+        error: NEAR_COOLDOWN_MESSAGE,
+        you: youFor(who) ?? undefined,
+        code: NEAR_COOLDOWN_CODE,
+        retryAfterMs: status.retryAfterMs,
+        coolingUntil: status.untilMs,
+      }
+    }
     const message = error instanceof Error ? error.message.toLowerCase() : ""
     if (nearNonceRejected(error) || message.includes("failure") || message.includes("revert") || message.includes("not enough")) {
       refundWithdraw(id)
@@ -1016,8 +1240,13 @@ type NearBlock = {
   chunks: { chunk_hash: string; gas_used: string }[]
 }
 
+export function nearDepositBlockQuery(height?: number): { finality: "optimistic" | "final" } | { block_id: number } {
+  if (height !== undefined) return { block_id: height }
+  return { finality: marketPreferences.confirmations === 1 ? "optimistic" : "final" }
+}
+
 async function nearBlock(height?: number): Promise<NearBlock> {
-  return (await rpc("block", height === undefined ? { finality: "final" } : { block_id: height })) as NearBlock
+  return (await rpc("block", nearDepositBlockQuery(height))) as NearBlock
 }
 
 /** Blocks older than this are gone from the free non-archival nodes. A shorter gap may still be propagating. */
@@ -1053,6 +1282,14 @@ function saveDepositCursor(cursorKey: string, height: number) {
 }
 
 async function pollNearDeposits(treasury: string) {
+  const cooling = nearCooldownStatus()
+  if (cooling.cooling) {
+    if (Date.now() - lastCooldownLogAt > 30_000) {
+      lastCooldownLogAt = Date.now()
+      console.error(`near deposits paused, cooling ${Math.round(cooling.retryAfterMs / 1000)}s`)
+    }
+    return
+  }
   const token = loadEnv().tokenAccount.trim()
   const cursorKey = `${activeChainKey()}:near_deposit_height`
   const cursorRow = getDb().query("SELECT value FROM meta WHERE key = ?").get(cursorKey) as { value: string } | null
@@ -1063,32 +1300,52 @@ async function pollNearDeposits(treasury: string) {
   }
   const cursor = Number(cursorRow.value)
   if (!Number.isSafeInteger(cursor)) throw new Error("NEAR deposit cursor is invalid")
-  const end = Math.min(latest.header.height, cursor + 32)
+  const batch = nearDepositBatch()
+  const gapMs = nearRpcGapMs()
+  const end = Math.min(latest.header.height, cursor + batch)
   for (let height = cursor + 1; height <= end; height += 1) {
     let block: NearBlock
     try {
       block = await nearBlock(height)
     } catch (error) {
+      if (isNearCooling(error)) return
       const resume = nearHistoryMissing(error) ? prunedDepositResume(cursor, latest.header.height) : null
       if (resume === null) throw error
       console.error(`near deposits skipped ${height}..${resume}, pruned`)
       saveDepositCursor(cursorKey, resume)
       return
     }
+    if (gapMs > 0) await sleep(gapMs)
     const timestamp = BigInt(block.header.timestamp_nanosec ?? "0")
     for (const header of block.chunks) {
       if (header.gas_used === "0") continue
-      const chunk = (await rpc("chunk", { chunk_id: header.chunk_hash })) as {
+      let chunk: {
         transactions?: { hash: string; signer_id: string; receiver_id: string; actions?: { FunctionCall?: { method_name?: string } }[] }[]
       }
+      try {
+        chunk = (await rpc("chunk", { chunk_id: header.chunk_hash })) as {
+          transactions?: { hash: string; signer_id: string; receiver_id: string; actions?: { FunctionCall?: { method_name?: string } }[] }[]
+        }
+      } catch (error) {
+        if (isNearCooling(error)) return
+        throw error
+      }
+      if (gapMs > 0) await sleep(gapMs)
       for (const transaction of chunk.transactions ?? []) {
         if (transaction.receiver_id !== token) continue
         if (!transaction.actions?.some((action) => action.FunctionCall?.method_name === "ft_transfer")) continue
-        const payload = await rpc("EXPERIMENTAL_tx_status", {
-          tx_hash: transaction.hash,
-          sender_account_id: transaction.signer_id,
-          wait_until: "NONE",
-        })
+        let payload: unknown
+        try {
+          payload = await rpc("EXPERIMENTAL_tx_status", {
+            tx_hash: transaction.hash,
+            sender_account_id: transaction.signer_id,
+            wait_until: "NONE",
+          })
+        } catch (error) {
+          if (isNearCooling(error)) return
+          throw error
+        }
+        if (gapMs > 0) await sleep(gapMs)
         for (const row of parseNearDeposits(payload, treasury, token, timestamp)) {
           if (applyNearDeposit(row)) console.log(`deposit ${row.from} ${row.amountMicros} ${row.txHash}`)
         }
@@ -1099,10 +1356,12 @@ async function pollNearDeposits(treasury: string) {
 }
 
 async function resumeNearWithdrawals() {
+  if (nearCooldownStatus().cooling) return
   const rows = getDb()
     .query("SELECT id, raw_tx FROM withdrawals WHERE chain_key = ? AND status = 'pending' ORDER BY created_at ASC")
     .all(activeChainKey()) as { id: string; raw_tx: string | null }[]
   for (const row of rows) {
+    if (nearCooldownStatus().cooling) return
     if (!row.raw_tx) continue
     const raw = row.raw_tx
     try {
@@ -1111,6 +1370,7 @@ async function resumeNearWithdrawals() {
         .query("UPDATE withdrawals SET status = 'sent' WHERE chain_key = ? AND id = ? AND status = 'pending'")
         .run(activeChainKey(), row.id)
     } catch (error) {
+      if (isNearCooling(error)) return
       const message = error instanceof Error ? error.message.toLowerCase() : ""
       if (message.includes("failure") || message.includes("revert") || message.includes("not enough")) refundWithdraw(row.id)
       else console.error(error)
@@ -1128,13 +1388,19 @@ export function startNearCustody(treasury: string) {
       if (polling) return
       polling = true
       Promise.all([
-        pollNearDeposits(treasury).catch((error) => console.error(error)),
-        resumeNearWithdrawals().catch((error) => console.error(error)),
+        pollNearDeposits(treasury).catch((error) => {
+          if (isNearCooling(error)) return
+          console.error(error)
+        }),
+        resumeNearWithdrawals().catch((error) => {
+          if (isNearCooling(error)) return
+          console.error(error)
+        }),
       ]).finally(() => {
         polling = false
       })
     })
   }
   tick()
-  runtime.quickMarketNearCustody = setInterval(tick, 8_000)
+  runtime.quickMarketNearCustody = setInterval(tick, nearCustodyIntervalMs())
 }

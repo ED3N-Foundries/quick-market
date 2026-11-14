@@ -290,6 +290,7 @@ test("an account keyframe stays off the public sequence", () => {
     handoff: () => null,
     youFor: () => null,
     accountResults: () => [],
+    nearFunding: () => ({ cooling: false, retryAfterMs: 0, untilMs: null, reason: null }),
   })
   try {
     market.snapshot(peer)

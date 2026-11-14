@@ -56,7 +56,7 @@ export type Copy = {
   fundAmount: string
   customAmount: string
   confirmPhantom: string
-  waitingConfirmations: string
+  waitingConfirmations: (confirmations: number) => string
   ledgerWait: (brief: string) => string
   depositSent: string
   grantMissed: string
@@ -199,6 +199,9 @@ export type Copy = {
   phantomConnectFailed: string
   errorDetails: string
   stepOf: (current: number, total: number) => string
+  nearPaused: string
+  nearRetry: (wait: string) => string
+  nearContinues: string
 }
 
 const en: Copy = {
@@ -255,7 +258,7 @@ const en: Copy = {
   fundAmount: "Fund amount",
   customAmount: "Custom amount",
   confirmPhantom: "Confirm in Phantom…",
-  waitingConfirmations: "Waiting for 3 confirmations…",
+  waitingConfirmations: (confirmations) => `Waiting for ${confirmations} confirmation${confirmations === 1 ? "" : "s"}…`,
   ledgerWait: (brief) => `Transfer sent. Waiting for the ledger.${brief ? ` ${brief}` : ""}`,
   depositSent: "Deposit sent. It will show after confirmation.",
   grantMissed: "The grant did not land. Try again.",
@@ -407,6 +410,9 @@ const en: Copy = {
   phantomConnectFailed: "Phantom connection failed",
   errorDetails: "Error details",
   stepOf: (current, total) => `Step ${current} of ${total}`,
+  nearPaused: "NEAR funding paused — RPC cooling.",
+  nearRetry: (wait) => `Try again in ~${wait}.`,
+  nearContinues: "Trading and settlement continue.",
 }
 
 const zhTW: Copy = {
@@ -463,7 +469,7 @@ const zhTW: Copy = {
   fundAmount: "存入金額",
   customAmount: "自訂金額",
   confirmPhantom: "請在 Phantom 確認…",
-  waitingConfirmations: "等待 3 次確認…",
+  waitingConfirmations: (confirmations) => `等待 ${confirmations} 次確認…`,
   ledgerWait: (brief) => `轉帳已送出。正在等待入帳。${brief ? ` ${brief}` : ""}`,
   depositSent: "存款已送出。確認後會顯示。",
   grantMissed: "撥款未完成。請再試一次。",
@@ -615,6 +621,9 @@ const zhTW: Copy = {
   phantomConnectFailed: "Phantom 連線失敗",
   errorDetails: "錯誤詳情",
   stepOf: (current, total) => `步驟 ${current}／${total}`,
+  nearPaused: "NEAR 資金暫停 — RPC 冷卻中。",
+  nearRetry: (wait) => `約 ${wait} 後再試一次。`,
+  nearContinues: "交易和結算不受影響。",
 }
 
 export function copy(lang: Lang): Copy {
@@ -663,6 +672,7 @@ const zhFixed: Record<string, string> = {
   "Server error": "伺服器錯誤",
   "The browser blocked Meteor's sign-in window. Allow popups, then tap again.": "瀏覽器封鎖了 Meteor 的登入視窗。請允許彈出視窗後再點一次。",
   "NEAR is busy. Try again.": "NEAR 忙碌，請再試一次。",
+  "NEAR funding paused — RPC cooling. Try again shortly.": "NEAR 資金暫停 — RPC 冷卻中，請稍後再試。",
 }
 
 /** Translate a stored English sentence. Unknown text stays as it is. */

@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import { marketPreferences } from "../shared/market"
-import { applyNearDeposit, parseNearDeposits } from "./near"
+import { applyNearDeposit, nearDepositBlockQuery, nearWithdrawalWait, parseNearDeposits } from "./near"
 import { useDatabase } from "./db"
 import { youFor } from "./rounds"
 
@@ -36,6 +36,21 @@ test("deposit events credit only successful QM transfers to the treasury", () =>
     10n,
   )
   expect(rows).toEqual([{ txHash: "HashCase", logIndex: 0, from: sender, amountMicros: 2_500_000, timestamp: 10n }])
+})
+
+test("NEAR deposits and withdrawals use optimistic execution for one confirmation", () => {
+  const previous = marketPreferences.confirmations
+  try {
+    marketPreferences.confirmations = 1
+    expect(nearWithdrawalWait()).toBe("EXECUTED_OPTIMISTIC")
+    expect(nearDepositBlockQuery()).toEqual({ finality: "optimistic" })
+    expect(nearDepositBlockQuery(12)).toEqual({ block_id: 12 })
+    marketPreferences.confirmations = 2
+    expect(nearWithdrawalWait()).toBe("EXECUTED")
+    expect(nearDepositBlockQuery()).toEqual({ finality: "final" })
+  } finally {
+    marketPreferences.confirmations = previous
+  }
 })
 
 test("a NEAR deposit is credited once", () => {

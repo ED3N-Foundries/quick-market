@@ -18,6 +18,7 @@ export type MarketPreferences = {
   tapeMs: number
   grantMicros: number
   grantIntervalMs: number
+  confirmations: number
 }
 
 /** What the browser receives. Chain display fields are derived, not preferences. */
@@ -38,6 +39,7 @@ export type PublicConfig = {
   tokenLabel: string
   grantMicros: number
   grantIntervalMs: number
+  confirmations: number
 }
 
 const seconds = z.int().min(1).max(120)
@@ -60,6 +62,7 @@ export const publicConfigSchema = z.strictObject({
   tokenLabel: z.string().min(1),
   grantMicros: z.int().nonnegative(),
   grantIntervalMs: z.int().nonnegative(),
+  confirmations: positive,
 })
 
 type _publicConfig = Assert<Equal<z.infer<typeof publicConfigSchema>, PublicConfig>>
@@ -76,6 +79,7 @@ export const marketSchema = z.strictObject({
   tapeMs: positive,
   grantMicros: positive,
   grantIntervalMs: positive,
+  confirmations: positive,
 })
 
 type _market = Assert<Equal<z.infer<typeof marketSchema>, MarketPreferences>>
@@ -92,6 +96,7 @@ const defaults: MarketPreferences = {
   tapeMs: 15 * 60 * 1000,
   grantMicros: 100_000_000,
   grantIntervalMs: 120_000,
+  confirmations: 1,
 }
 
 /** How often a browser is sent a price. The stored tape is finer than this. */
@@ -109,6 +114,7 @@ type PreferenceEnv = {
   PRICE_SOURCE?: string
   GRANT_MICROS?: string
   GRANT_INTERVAL_MS?: string
+  CONFIRMATIONS?: string
 }
 
 function unset(value: unknown): unknown {
@@ -129,6 +135,7 @@ const preferenceEnv = z.object({
   PRICE_SOURCE: z.preprocess(unset, z.enum(priceSources).optional()),
   GRANT_MICROS: optionalPositive,
   GRANT_INTERVAL_MS: optionalPositive,
+  CONFIRMATIONS: optionalPositive,
 })
 
 function ambientPreferences(): PreferenceEnv {
@@ -152,6 +159,7 @@ export function loadMarket(env: PreferenceEnv = ambientPreferences()): MarketPre
     PRICE_SOURCE: env.PRICE_SOURCE,
     GRANT_MICROS: env.GRANT_MICROS,
     GRANT_INTERVAL_MS: env.GRANT_INTERVAL_MS,
+    CONFIRMATIONS: env.CONFIRMATIONS,
   })
   return marketSchema.parse({
     chain: declared.CHAIN ?? defaults.chain,
@@ -165,6 +173,7 @@ export function loadMarket(env: PreferenceEnv = ambientPreferences()): MarketPre
     tapeMs: defaults.tapeMs,
     grantMicros: declared.GRANT_MICROS ?? defaults.grantMicros,
     grantIntervalMs: declared.GRANT_INTERVAL_MS ?? defaults.grantIntervalMs,
+    confirmations: declared.CONFIRMATIONS ?? defaults.confirmations,
   })
 }
 

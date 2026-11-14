@@ -4,6 +4,7 @@ import {
   type AccountResult,
   type Board,
   type FeedState,
+  type NearFunding,
   type ServerStreamMessage,
   type SettlementEvent,
   type WireTapePoint,
@@ -21,6 +22,7 @@ type StreamDeps = {
   handoff(): Handoff | null
   youFor(address: string): You | null
   accountResults(address: string): AccountResult[]
+  nearFunding(): NearFunding
 }
 
 type MessageMetric = { messages: number; bytes: number; sentBytes: number }
@@ -59,6 +61,7 @@ export class MarketStream {
       handoff: this.deps.handoff(),
       board: this.buildBoard(),
       tape: this.deps.tape(),
+      nearFunding: this.deps.nearFunding(),
       ...(address ? { you: this.deps.youFor(address), results: this.deps.accountResults(address) } : {}),
     }
     this.note("snapshot", hub.send(peer, message))

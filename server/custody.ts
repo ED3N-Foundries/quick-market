@@ -12,6 +12,7 @@ import {
 import { privateKeyToAccount, type PrivateKeyAccount } from "viem/accounts"
 import { base, baseSepolia } from "viem/chains"
 import type { ChainConfig } from "../shared/chain"
+import { marketPreferences } from "../shared/market"
 import { MINT_CONFIRMATIONS, MINT_RECEIPT_TIMEOUT_MS, confirmationDepth, grantStep } from "../shared/mint"
 import { mintAbi, usdcAbi } from "../shared/usdc"
 import { activeChainKey, withChain } from "./activeChain"
@@ -20,7 +21,6 @@ import { chainConfig, loadEnv, rpcFor } from "./env"
 import { normalizeAddress } from "./money"
 import { credit, withdraw, youFor, type You } from "./rounds"
 
-const CONFIRMATIONS = 3n
 const LOG_RANGE = 199n
 const ZERO = "0x0000000000000000000000000000000000000000"
 export const DEAD = "0x000000000000000000000000000000000000dEaD" as Address
@@ -307,6 +307,10 @@ export async function resumeWithdrawals() {
   }
 }
 
+export function withdrawalReceiptWait(hash: Hash) {
+  return { hash, confirmations: marketPreferences.confirmations, timeout: 30_000 }
+}
+
 async function finishWithdraw(
   id: string,
   publicClient: ChainClient,
@@ -320,7 +324,7 @@ async function finishWithdraw(
   const hash = row.tx_hash as Hash
   try {
     await broadcast(publicClient, walletClient, row.raw_tx as Hex, hash)
-    const receipt = await publicClient.waitForTransactionReceipt({ hash, timeout: 30_000 })
+    const receipt = await publicClient.waitForTransactionReceipt(withdrawalReceiptWait(hash))
     if (receipt.status === "reverted") {
       refundRow(row)
       return { ok: false, error: "Withdrawal reverted", you: youFor(row.address) ?? undefined }
@@ -480,7 +484,8 @@ export async function pollDeposits(
   treasury: Address,
 ) {
   const head = await publicClient.getBlockNumber()
-  const safe = head > CONFIRMATIONS ? head - CONFIRMATIONS : 0n
+  const required = BigInt(marketPreferences.confirmations)
+  const safe = head >= required ? head - required + 1n : 0n
   const cursor = readCursor()
   if (cursor === null) {
     writeCursor(safe)

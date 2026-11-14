@@ -117,7 +117,7 @@ export type WalletSession = {
   disconnect: () => void
   switchChain: () => void
   expire: () => void
-  deposit: (amount: string, treasury: string, usdc: string, chainId: number) => Promise<DepositResult>
+  deposit: (amount: string, treasury: string, usdc: string, chainId: number, confirmations: number) => Promise<DepositResult>
 }
 
 const missing: WalletSession = {
@@ -539,7 +539,7 @@ function Bridge({ children, chain, wagmiConfig }: { children: ReactNode; chain: 
       if (action === "browse") return
       beginLogin()
     },
-    deposit: async (amount, treasury, usdc, chainId) => {
+    deposit: async (amount, treasury, usdc, chainId, confirmations) => {
       const micros = parseAmountMicros(amount)
       const shown = address
       if (micros === null || micros <= 0) return { ok: false, message: "Amount is invalid" }
@@ -642,7 +642,7 @@ function Bridge({ children, chain, wagmiConfig }: { children: ReactNode; chain: 
             args: [to, value],
             chainId: selected.id,
           })
-          const receipt = await client.waitForTransactionReceipt({ hash, timeout: 60_000 })
+          const receipt = await client.waitForTransactionReceipt({ hash, confirmations, timeout: 60_000 })
           if (receipt.status !== "success") return { ok: false, message: "Deposit failed" }
           return { ok: true, hash, pending: false }
         } catch (error) {

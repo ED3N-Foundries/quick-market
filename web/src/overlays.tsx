@@ -39,6 +39,7 @@ export function FundOverlay({
   treasury,
   chainId,
   chainName,
+  confirmations,
   amount,
   disabled,
   customDisabled,
@@ -56,6 +57,7 @@ export function FundOverlay({
   treasury: string
   chainId: number
   chainName: string
+  confirmations: number
   amount: string
   disabled: boolean
   customDisabled: boolean
@@ -123,11 +125,11 @@ export function FundOverlay({
             disabled={disabled}
           />
           <button type="button" className="primary" onClick={() => onFund(amount)} disabled={customDisabled}>
-            {phase === "phantom" ? text.confirmPhantom : phase === "confirming" || phase === "pending" ? text.waitingConfirmations : text.deposit}
+            {phase === "phantom" ? text.confirmPhantom : phase === "confirming" || phase === "pending" ? text.waitingConfirmations(confirmations) : text.deposit}
           </button>
         </div>
         {phase === "phantom" && <p className="note pending-note">{text.confirmPhantom}</p>}
-        {phase === "confirming" && <p className="note pending-note">{text.waitingConfirmations}</p>}
+        {phase === "confirming" && <p className="note pending-note">{text.waitingConfirmations(confirmations)}</p>}
         {phase === "pending" && (
           <p className="note pending-note" title={hash ?? undefined}>
             {text.ledgerWait(hash ? briefTx(hash) : "")}
@@ -156,6 +158,8 @@ export function GrantOverlay({
   blocked,
   notice = blocked,
   error,
+  cooling = false,
+  coolingWait = "",
   onClose,
   onGrant,
 }: {
@@ -170,6 +174,8 @@ export function GrantOverlay({
   blocked: boolean
   notice?: boolean
   error: string | null
+  cooling?: boolean
+  coolingWait?: string
   onClose: () => void
   onGrant: () => void
 }) {
@@ -183,6 +189,7 @@ export function GrantOverlay({
   }, [onClose])
   const timing = grantTiming(grantAt, now, grantIntervalMs)
   const near = chainKey === "near-testnet"
+  const coolingActive = cooling && near
   return (
     <div className="fund-back" onClick={onClose}>
       <div className="fund-overlay" role="dialog" aria-modal="true" aria-label={near ? text.grantNear : text.grantAria} onClick={(event) => event.stopPropagation()}>
@@ -211,12 +218,18 @@ export function GrantOverlay({
           type="button"
           className="primary grant-submit"
           onClick={onGrant}
-          disabled={granting || !timing.due || blocked}
-          title={notice ? text.reconnectingMarket : undefined}
+          disabled={granting || !timing.due || blocked || coolingActive}
+          aria-disabled={granting || !timing.due || blocked || coolingActive}
+          title={coolingActive ? `${text.nearPaused} ${text.nearRetry(coolingWait)}` : notice ? text.reconnectingMarket : undefined}
         >
           {granting ? text.granting : grantButtonLabel(timing, grantMicros, lang)}
         </button>
-        {notice && (
+        {coolingActive && (
+          <p className="note warn" role="status">
+            {text.nearPaused} {text.nearRetry(coolingWait)} {text.nearContinues}
+          </p>
+        )}
+        {notice && !coolingActive && (
           <p className="note warn" role="status">
             {text.reconnectingMarket} · {text.reconnectingHint}
           </p>
@@ -240,6 +253,8 @@ export function WithdrawOverlay({
   blocked,
   notice = blocked,
   error,
+  cooling = false,
+  coolingWait = "",
   onAmount,
   onMax,
   onClose,
@@ -257,6 +272,8 @@ export function WithdrawOverlay({
   blocked: boolean
   notice?: boolean
   error: string | null
+  cooling?: boolean
+  coolingWait?: string
   onAmount: (value: string) => void
   onMax: () => void
   onClose: () => void
@@ -271,7 +288,8 @@ export function WithdrawOverlay({
     return () => window.removeEventListener("keydown", onKey)
   }, [onClose])
   const parsed = parseAmountMicros(amount)
-  const submitDisabled = pending || blocked || parsed === null || parsed > balanceMicros
+  const coolingActive = cooling && chainKey === "near-testnet"
+  const submitDisabled = pending || blocked || coolingActive || parsed === null || parsed > balanceMicros
   return (
     <div className="fund-back" onClick={onClose}>
       <div className="fund-overlay" role="dialog" aria-modal="true" aria-label={chainKey === "near-testnet" ? text.withdrawNear : testnet ? text.withdrawQm : text.withdrawUsdc} onClick={(event) => event.stopPropagation()}>
@@ -304,18 +322,30 @@ export function WithdrawOverlay({
               placeholder={text.amount}
               value={amount}
               onChange={(event) => onAmount(event.target.value)}
-              disabled={pending || blocked}
+              disabled={pending || blocked || coolingActive}
             />
-            <button type="button" className="max-btn" onClick={onMax} disabled={pending || blocked || balanceMicros <= 0}>
+            <button type="button" className="max-btn" onClick={onMax} disabled={pending || blocked || coolingActive || balanceMicros <= 0}>
               {text.max}
             </button>
           </div>
-          <button type="button" className="primary" onClick={onSubmit} disabled={submitDisabled}>
+          <button
+            type="button"
+            className="primary"
+            onClick={onSubmit}
+            disabled={submitDisabled}
+            aria-disabled={submitDisabled}
+            title={coolingActive ? `${text.nearPaused} ${text.nearRetry(coolingWait)}` : undefined}
+          >
             {pending ? text.withdrawing : text.withdraw}
           </button>
         </div>
         {chainKey === "near-testnet" ? <p className="note">{text.paysNear}</p> : testnet ? <p className="note">{text.paysQm}</p> : null}
-        {notice && (
+        {coolingActive && (
+          <p className="note warn" role="status">
+            {text.nearPaused} {text.nearRetry(coolingWait)} {text.nearContinues}
+          </p>
+        )}
+        {notice && !coolingActive && (
           <p className="note warn" role="status">
             {text.reconnectingMarket} · {text.reconnectingHint}
           </p>

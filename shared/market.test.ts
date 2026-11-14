@@ -12,6 +12,7 @@ test("environment preferences replace defaults and NEAR is the default chain", (
     CHAIN: "base",
     GRANT_MICROS: "1",
     GRANT_INTERVAL_MS: "1",
+    CONFIRMATIONS: "2",
   })
   expect(loaded.windowSeconds).toBe(12)
   expect(loaded.marketSeconds).toBe(30)
@@ -23,12 +24,15 @@ test("environment preferences replace defaults and NEAR is the default chain", (
   expect(loadMarket({ CHAIN: "near-testnet" }).chain).toBe("near-testnet")
   expect(loaded.grantMicros).toBe(1)
   expect(loaded.grantIntervalMs).toBe(1)
+  expect(loaded.confirmations).toBe(2)
+  expect(loadMarket({}).confirmations).toBe(1)
 })
 
 test("a blank preference is ignored and an invalid one throws", () => {
   expect(loadMarket({ WINDOW_SECONDS: "  ", FEE_BPS: "" }).windowSeconds).toBe(10)
   expect(() => loadMarket({ FEE_BPS: "nope" })).toThrow("FEE_BPS")
   expect(() => loadMarket({ PRICE_SOURCE: "gemini" })).toThrow("PRICE_SOURCE")
+  expect(() => loadMarket({ CONFIRMATIONS: "0" })).toThrow("CONFIRMATIONS")
 })
 
 test("loaded preferences do not change after a later env write", () => {

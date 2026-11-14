@@ -19,9 +19,10 @@ import {
   routePercentiles,
 } from "./selfHealth"
 import { oracleView } from "./oracle"
+import { orderLatency } from "./orderLatency"
 import { noteRequestError, snapshotProcessHealth } from "./processHealth"
 import { parseMicros } from "./money"
-import { nearRpcStatus } from "./near"
+import { NEAR_COOLDOWN_CODE, isNearCooling, nearCooldownStatus, nearRpcStatus, type NearFundingState } from "./near"
 import {
   board,
   feedStatus,
@@ -47,7 +48,15 @@ export type HttpDeps = {
   fundingReport: () => Promise<unknown>
   grantsOpen: () => boolean
   mint: (amount: number, report?: (progress: { txHash?: string; seen: number }) => void) => Promise<void>
-  withdraw: (address: string, amount: number) => Promise<{ ok: boolean; error?: string; you?: unknown; txHash?: string }>
+  withdraw: (address: string, amount: number) => Promise<{
+    ok: boolean
+    error?: string
+    you?: unknown
+    txHash?: string
+    code?: string
+    retryAfterMs?: number
+    coolingUntil?: number | null
+  }>
   publish: () => void
   streamMetrics: () => unknown
   serveUi: boolean
@@ -95,6 +104,24 @@ function emptyTails() {
   return {}
 }
 
+function nearFundingFor(chainKey: string): NearFundingState {
+  if (chainKey !== "near-testnet") return { cooling: false, retryAfterMs: 0, untilMs: null, reason: null }
+  return nearCooldownStatus()
+}
+
+function coolingResponse(funding: NearFundingState): Response {
+  return json(
+    {
+      error: "NEAR funding paused — RPC cooling. Try again shortly.",
+      code: NEAR_COOLDOWN_CODE,
+      retryAfterMs: funding.retryAfterMs,
+      coolingUntil: funding.untilMs,
+      reason: funding.reason,
+    },
+    503,
+  )
+}
+
 function getHealth(): Response {
   const http = useDeps()
   let proc: ReturnType<typeof snapshotProcessHealth> | null = null
@@ -112,17 +139,26 @@ function getHealth(): Response {
   } catch {
     // ignore
   }
+  const cooling = nearFundingFor(http.chainKey())
+  const status = proc?.status ?? "ok"
+  const reason =
+    cooling.cooling && status === "ok"
+      ? `near rpc cooling — funding paused, trading live${cooling.reason ? `: ${cooling.reason}` : ""}`
+      : (proc?.reason ?? null)
+  const effective = cooling.cooling && status === "ok" ? "degraded" : status
   return json({
     ok: true,
     source: priceSource(),
     chain: http.chainKey(),
     treasury: http.treasuryReport(),
-    status: proc?.status ?? "ok",
-    reason: proc?.reason ?? null,
+    status: effective,
+    reason,
     process: withDisk(proc),
     previous: proc?.previous ?? null,
     nearRpc: http.chainKey() === "near-testnet" ? nearRpcStatus() : [],
+    nearCooldown: cooling,
     stream: http.streamMetrics(),
+    orderLatency: orderLatency.snapshot(),
     selfHealth: self,
     queryStats: (() => {
       try {
@@ -195,14 +231,23 @@ function getStatus(): Response {
   } catch {
     // ignore
   }
+  const cooling = nearFundingFor(http.chainKey())
+  const status = proc?.status ?? "ok"
+  const reason =
+    cooling.cooling && status === "ok"
+      ? `near rpc cooling — funding paused, trading live${cooling.reason ? `: ${cooling.reason}` : ""}`
+      : (proc?.reason ?? null)
+  const effective = cooling.cooling && status === "ok" ? "degraded" : status
   return json({
     serverNow: now,
-    status: proc?.status ?? "ok",
-    reason: proc?.reason ?? null,
+    status: effective,
+    reason,
     feed: feedStatus(now),
     process: withDisk(proc),
     previous: proc?.previous ?? null,
     nearRpc: http.chainKey() === "near-testnet" ? nearRpcStatus() : [],
+    nearCooldown: cooling,
+    orderLatency: orderLatency.snapshot(now),
     selfHealth: self,
     hangs,
   })
@@ -247,6 +292,7 @@ function getState(req: Request): Response {
       board: board(now),
       you: session.address ? youFor(session.address) : null,
       tape: tapeRange(now - tailMs, now),
+      nearFunding: nearFundingFor(http.chainKey()),
     },
     200,
     { "cache-control": "no-store" },
@@ -268,23 +314,25 @@ async function postSession(req: Request): Promise<Response> {
   })
   if (!result.ok) return json({ error: result.error }, result.error === NEAR_BUSY ? 503 : 400)
   if (http.grantsOpen() && grantOnSignIn(result.you.grantAt)) {
-    const settings = grantSettings()
     const chainKey = http.chainKey()
-    const started = startGrant({
-      address: result.you.address,
-      now: Date.now(),
-      chainKey,
-      amount: settings.amount,
-      intervalMs: settings.intervalMs,
-      mint: (amount, report) => http.mint(amount, report),
-    })
-    if (started.claimed) {
-      void started.done.catch((error) => {
-        console.error(error instanceof Error ? error.message : error)
+    if (chainKey !== "near-testnet" || !nearFundingFor(chainKey).cooling) {
+      const settings = grantSettings()
+      const started = startGrant({
+        address: result.you.address,
+        now: Date.now(),
+        chainKey,
+        amount: settings.amount,
+        intervalMs: settings.intervalMs,
+        mint: (amount, report) => http.mint(amount, report),
       })
+      if (started.claimed) {
+        void started.done.catch((error) => {
+          if (!isNearCooling(error)) console.error(error instanceof Error ? error.message : error)
+        })
+      }
     }
   }
-  return json({ token: result.token, you: youFor(result.you.address) })
+  return json({ token: result.token, you: youFor(result.you.address), nearFunding: nearFundingFor(http.chainKey()) })
 }
 
 function deleteSession(req: Request): Response {
@@ -301,6 +349,10 @@ async function postGrant(req: Request): Promise<Response> {
   const now = Date.now()
   const settings = grantSettings()
   const chainKey = http.chainKey()
+  if (chainKey === "near-testnet") {
+    const funding = nearFundingFor(chainKey)
+    if (funding.cooling) return coolingResponse(funding)
+  }
   const started = startGrant({
     address,
     now,
@@ -329,11 +381,25 @@ async function postWithdraw(req: Request): Promise<Response> {
   const http = useDeps()
   const session = readSession(req)
   if (!session.address) return json({ error: "Connect a wallet first" }, 401)
+  if (http.chainKey() === "near-testnet") {
+    const funding = nearFundingFor(http.chainKey())
+    if (funding.cooling) return coolingResponse(funding)
+  }
   const body = await readJson(req)
   const amount = parseMicros(body?.amount)
   if (amount === null) return json({ error: "Amount is invalid" }, 400)
   const result = await http.withdraw(session.address, amount)
-  if (!result.ok) return json({ error: result.error, you: result.you ?? null }, 400)
+  if (!result.ok) {
+    if (result.code === NEAR_COOLDOWN_CODE || isNearCooling(result.error)) {
+      return coolingResponse({
+        cooling: true,
+        retryAfterMs: result.retryAfterMs ?? 0,
+        untilMs: result.coolingUntil ?? null,
+        reason: typeof result.error === "string" ? result.error : null,
+      })
+    }
+    return json({ error: result.error, you: result.you ?? null }, 400)
+  }
   return json({ you: result.you, txHash: result.txHash })
 }
 

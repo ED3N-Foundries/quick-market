@@ -5,7 +5,11 @@ export const HUB_BUFFER_LIMIT = 256 * 1024
 const RECOVER_BUFFER_LIMIT = 16 * 1024
 const COALESCE_BUFFER_LIMIT = 64 * 1024
 
-export type SocketData = { address: string | null; chain: ChainKey }
+export type SocketData = {
+  address: string | null
+  chain: ChainKey
+  orderReports?: Map<string, { at: number; ack: boolean }>
+}
 export type MarketSocket = ServerWebSocket<SocketData>
 
 export type HubPeer = {

@@ -19,6 +19,7 @@ const baseConfig: PublicConfig = {
   tokenLabel: "QM USDC",
   grantMicros: 100_000_000,
   grantIntervalMs: 120_000,
+  confirmations: 1,
 }
 
 test("runtime config selects the existing Base Sepolia token", () => {

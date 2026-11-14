@@ -10,6 +10,7 @@ export type {
   BookMessage,
   BuyInResultMessage,
   FeedState,
+  NearFunding,
   OpenBuyIn,
   PoolCard,
   ServerStreamMessage,

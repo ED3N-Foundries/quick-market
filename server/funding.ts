@@ -23,6 +23,13 @@ export type FundingAgent = {
   missing: boolean
 }
 
+export type FundingCooling = {
+  cooling: boolean
+  retryAfterMs: number
+  untilMs: number | null
+  reason: string | null
+}
+
 export type FundingChain = {
   chainKey: ChainKey
   chainName: string
@@ -36,6 +43,7 @@ export type FundingChain = {
   lines: string[]
   shortAgents: FundingAgent[]
   error: string | null
+  cooling: FundingCooling | null
 }
 
 export type FundingReport = {
@@ -55,6 +63,7 @@ export type FundingSource = {
   token: string
   tokenLabel: string
   near: TreasuryReport | null
+  cooling?: FundingCooling | null
 }
 
 function asBig(value: number | bigint | null | undefined): bigint {
@@ -103,6 +112,7 @@ export function describeEvm(input: {
   balances: EvmBalances
   spendableMicros: bigint
   openStakeMicros: bigint
+  cooling?: FundingCooling | null
 }): FundingChain {
   const owed = input.spendableMicros + input.openStakeMicros
   const nativeHave = input.balances.nativeWei === null ? "unavailable" : formatToken(input.balances.nativeWei, WEI, 6)
@@ -130,6 +140,7 @@ export function describeEvm(input: {
     lines: [],
     shortAgents: [],
     error: input.balances.error,
+    cooling: input.cooling ?? null,
   }
 }
 
@@ -139,6 +150,7 @@ export function describeNear(input: {
   token: string
   tokenLabel: string
   report: TreasuryReport | null
+  cooling?: FundingCooling | null
 }): FundingChain {
   const report = input.report
   if (!report) {
@@ -155,6 +167,7 @@ export function describeNear(input: {
       lines: [],
       shortAgents: [],
       error: "NEAR treasury report is not ready",
+      cooling: input.cooling ?? null,
     }
   }
   return {
@@ -185,6 +198,7 @@ export function describeNear(input: {
       missing: agent.missing,
     })),
     error: null,
+    cooling: input.cooling ?? null,
   }
 }
 
@@ -220,6 +234,7 @@ export async function collectFunding(input: {
         token: source.token,
         tokenLabel: source.tokenLabel,
         report: source.near,
+        cooling: source.cooling ?? null,
       }))
       continue
     }
@@ -247,6 +262,7 @@ export async function collectFunding(input: {
       balances,
       spendableMicros: owed.spendableMicros,
       openStakeMicros: owed.openStakeMicros,
+      cooling: source.cooling ?? null,
     }))
   }
   return { at: input.now ?? Date.now(), chains }
