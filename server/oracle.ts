@@ -7,9 +7,10 @@ const PRICE = /^\d+(\.\d+)?$/
 
 /** A book quote older than this may be replaced by a trade. The switch clock is MOVE_MS. */
 export const BREAK_MS = 3_000
-/** No price change for this long leaves the active venue. */
-export const MOVE_MS = 5_000
-export const STANDBY_MS = MOVE_MS
+/** No price change for this long leaves the active venue. A quiet tape is not a dead feed. */
+export const MOVE_MS = 15_000
+/** A standby still has to have moved recently to be a valid replacement. */
+export const STANDBY_MS = 5_000
 export const RATE_MS = 30_000
 export const RECOVERY_MS = 2_000
 export const PRINTED_IDLE_MS = 8_000
@@ -183,7 +184,9 @@ export function recoveryAction(input: {
   alreadyTried: boolean
 }): { action: "switch" | "reconnect"; reason: string } {
   const stalled = input.messagesSilentMs >= MOVE_MS
-  if (input.venue !== "binance" || !stalled) return { action: "switch", reason: "no price change for 5.0s" }
+  if (input.venue !== "binance" || !stalled) {
+    return { action: "switch", reason: `no price change for ${(MOVE_MS / 1_000).toFixed(1)}s` }
+  }
   if (input.alreadyTried) return { action: "switch", reason: "reconnect produced no move" }
   if (!input.budget.ok) return { action: "switch", reason: `reconnect skipped (${input.budget.reason})` }
   return { action: "reconnect", reason: "" }
@@ -532,9 +535,16 @@ export function startOracle(handlers: OracleHandlers): () => void {
     },
   }
 
+  let lastPublishAt = 0
+  let publishTimer: ReturnType<typeof setTimeout> | null = null
   const publish = () => {
     if (mine !== epoch) return
-    const now = Date.now()
+    if (publishTimer) {
+      clearTimeout(publishTimer)
+      publishTimer = null
+    }
+    lastPublishAt = Date.now()
+    const now = lastPublishAt
     latest = {
       active,
       anchor,
@@ -552,6 +562,22 @@ export function startOracle(handlers: OracleHandlers): () => void {
         }
       }),
     }
+  }
+
+  /** The admin feed view is a status page, not the price bus. Four updates a second is plenty. */
+  const publishThrottled = (force = false) => {
+    if (mine !== epoch) return
+    const now = Date.now()
+    const wait = 250 - (now - lastPublishAt)
+    if (force || wait <= 0) {
+      publish()
+      return
+    }
+    if (publishTimer) return
+    publishTimer = setTimeout(() => {
+      publishTimer = null
+      publish()
+    }, wait)
   }
 
   const clearPending = () => {
@@ -685,7 +711,7 @@ export function startOracle(handlers: OracleHandlers): () => void {
     const moved = noteLeg(leg, nextPrice, now)
     if (venue !== active) {
       if (waiting) tryAdopt(now)
-      publish()
+      publishThrottled()
       return
     }
     if (moved) {
@@ -695,7 +721,7 @@ export function startOracle(handlers: OracleHandlers): () => void {
     handlers.onAlive(now)
     const publishPrint = quote.kind === "book" || now - leg.bookAt > BREAK_MS
     if (publishPrint && leg.price) consider({ price: leg.price, exchangeTs: now, receivedAt: now, source: venue })
-    publish()
+    publishThrottled()
   }
 
   let reconnectBinance = () => {}
@@ -729,6 +755,7 @@ export function startOracle(handlers: OracleHandlers): () => void {
     if (epoch === mine) epoch += 1
     if (breakTimer) clearTimeout(breakTimer)
     if (pendingTimer) clearTimeout(pendingTimer)
+    if (publishTimer) clearTimeout(publishTimer)
     for (const stop of stops) stop()
   }
 }

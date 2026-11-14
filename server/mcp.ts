@@ -7,9 +7,7 @@ import { LOGIN_SKEW_MS, loginMessage, nearLoginMessage } from "../shared/login"
 import type { ChainKey } from "../shared/chain"
 import { NEP413_RECIPIENT } from "../shared/nearKey"
 import type { PublicConfig } from "../shared/market"
-import type { You } from "../shared/stream"
 import { activeChainKey, withChain } from "./activeChain"
-import { addPushSession } from "./accountPush"
 import { chainConfig } from "./env"
 import { grantDue, grantOnSignIn, grantSettings, startGrant } from "./grant"
 import { normalizeAccount, parseMicros } from "./money"
@@ -48,26 +46,6 @@ type LiveSession = {
   transport: WebStandardStreamableHTTPServerTransport
   accounts: Map<string, Bound>
   chain: ChainKey
-  closePush: () => void
-}
-
-/** The standalone GET stream is the only place a server notification can land. */
-function accountStreamOpen(transport: WebStandardStreamableHTTPServerTransport): boolean {
-  const raw = transport as unknown as {
-    _streamMapping?: Map<string, unknown>
-    _standaloneSseStreamId?: string
-  }
-  const id = raw._standaloneSseStreamId
-  if (!id || !raw._streamMapping) return false
-  return raw._streamMapping.get(id) !== undefined
-}
-
-function notifyAccount(transport: WebStandardStreamableHTTPServerTransport, body: { serverNow: number; yous: You[] }): boolean {
-  if (!accountStreamOpen(transport)) return false
-  void transport
-    .send({ jsonrpc: "2.0", method: "notifications/quick-market/account", params: body } as never)
-    .catch(() => undefined)
-  return true
 }
 
 const sessions = new Map<string, LiveSession>()
@@ -105,7 +83,15 @@ function rpcError(status: number, message: string): Response {
   })
 }
 
+/** A 9k-account connection must not read every token on every tool call. */
+const refreshedAt = new WeakMap<Map<string, Bound>, number>()
+const REFRESH_EVERY_MS = 30_000
+
 function refresh(accounts: Map<string, Bound>) {
+  const now = Date.now()
+  const last = refreshedAt.get(accounts) ?? 0
+  if (now - last < REFRESH_EVERY_MS) return
+  refreshedAt.set(accounts, now)
   for (const [address, bound] of [...accounts]) {
     const session = readSessionToken(bound.token)
     if (session.address !== address) accounts.delete(address)
@@ -116,7 +102,9 @@ function pickAccount(
   accounts: Map<string, Bound>,
   raw: string | undefined,
 ): { ok: true; bound: Bound } | { ok: false; error: string } {
-  refresh(accounts)
+  // Session tokens live for a week. Revalidating the whole map on every
+  // account/order call turns a 9k-account connection into a DB scan storm.
+  // sign_in/resume_sessions validate a token when it enters the map.
   if (raw) {
     const address = normalizeAccount(raw, activeChainKey())
     if (!address) return { ok: false, error: "Address is invalid" }
@@ -281,6 +269,32 @@ function registerTools(server: McpServer, accounts: Map<string, Bound>, deps: Mc
         pending: Boolean(you?.grantPending),
         ...grantView(opened.you.address),
       })
+    },
+  )
+
+  server.registerTool(
+    "resume_sessions",
+    {
+      description:
+        "Re-establish up to 2000 stored session tokens on this connection in one call. This does not mint or open a grant. It is the fast path after the market restarts or the connection drops.",
+      inputSchema: { tokens: z.array(z.string().min(1)).min(1).max(2_000) },
+    },
+    async ({ tokens }) => {
+      const accepted: string[] = []
+      let rejected = 0
+      for (let index = 0; index < tokens.length; index++) {
+        const token = tokens[index]!
+        const session = readSessionToken(token)
+        if (!session.address) {
+          rejected += 1
+        } else {
+          accounts.set(session.address, { address: session.address, token })
+          accepted.push(session.address)
+        }
+        // A 1000-token batch must not freeze the book/round loop for seconds.
+        if ((index & 63) === 63) await new Promise((resolve) => setTimeout(resolve, 0))
+      }
+      return textResult({ accepted, rejected, acceptedCount: accepted.length })
     },
   )
 
@@ -468,7 +482,6 @@ function registerTools(server: McpServer, accounts: Map<string, Bound>, deps: Mc
     },
     async (args) => {
       const received = performance.now()
-      refresh(accounts)
       const chain = activeChainKey()
       const orders: BuyInOrder[] = []
       for (const order of args.orders) {
@@ -599,7 +612,6 @@ export async function handleMcp(req: Request, deps: McpDeps): Promise<Response> 
   }
   if (!isInitializeRequest(body)) return rpcError(400, "Bad Request: Server not initialized")
   const accounts = new Map<string, Bound>()
-  const fingerprints = new Map<string, string>()
   const chain = activeChainKey()
   const token = new URL(req.url).searchParams.get("token")
   if (token !== null) {
@@ -611,23 +623,12 @@ export async function handleMcp(req: Request, deps: McpDeps): Promise<Response> 
   const transport = new WebStandardStreamableHTTPServerTransport({
     sessionIdGenerator: () => crypto.randomUUID(),
     onsessioninitialized: (id) => {
-      const closePush = addPushSession({
-        id,
-        chain,
-        addresses() {
-          refresh(accounts)
-          return [...accounts.keys()]
-        },
-        fingerprint: (address) => fingerprints.get(address),
-        remember: (address, fingerprint) => {
-          fingerprints.set(address, fingerprint)
-        },
-        notify: (body) => notifyAccount(transport, body),
-      })
-      sessions.set(id, { transport, accounts, chain, closePush })
+      // MCP connections are agent/batch clients. They poll account state and
+      // do not need a per-account push stream; fanning 9k accounts into SSE
+      // notifications is what starved the market loop.
+      sessions.set(id, { transport, accounts, chain })
     },
     onsessionclosed: (id) => {
-      sessions.get(id)?.closePush()
       sessions.delete(id)
     },
   })

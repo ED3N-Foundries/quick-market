@@ -122,6 +122,7 @@ test("mcp initialize, sign-in, book, and one buy-in", async () => {
       "markets",
       "place_buy_in",
       "place_buy_ins",
+      "resume_sessions",
       "round",
       "rounds",
       "sign_in",
@@ -155,6 +156,11 @@ test("mcp initialize, sign-in, book, and one buy-in", async () => {
   expect(signed.pending).toBe(true)
   expect(signed.grantNote).toBe("The grant on this market is $100 every 2 minutes. Call claim_grant again after nextGrantAt.")
   expect(typeof signed.token).toBe("string")
+  const resumed = payload(
+    await client.callTool({ name: "resume_sessions", arguments: { tokens: [String(signed.token)] } }),
+  )
+  expect(resumed.accepted).toContain(account.address.toLowerCase())
+  expect(resumed.rejected).toBe(0)
   const claimed = payload(await client.callTool({ name: "claim_grant", arguments: {} }))
   expect(claimed.granted).toBe(false)
   expect(claimed.grantDue).toBe(true)

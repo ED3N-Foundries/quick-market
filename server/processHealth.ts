@@ -360,9 +360,9 @@ export function noteFeedAdopt(to: string): void {
 
 export function noteFeedLive(): void {
   // A live feed clears feed-related and previous-run degradation, and stale
-  // request-error markers. It never clears a crash/down marker (tick, boot,
+  // request-error markers. It never clears a crash marker (tick, boot,
   // uncaught) blindly — those clear via noteTickOk() after real recovery.
-  if (status === "down") return
+  if (status === "down" && !reason?.startsWith("feed ")) return
   if (reason == null || /^(feed |previous run ended uncleanly|request error|feed adopted|feed live|tick recovered)/.test(reason)) {
     if (status !== "ok" || reason !== "feed live") {
       status = "ok"

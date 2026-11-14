@@ -248,7 +248,7 @@ test("binance reconnects only when the budget and the socket allow it", () => {
   const fresh = { ok: true, reason: "" }
   expect(recoveryAction({ venue: "bybit", messagesSilentMs: MOVE_MS, budget: fresh, alreadyTried: false })).toEqual({
     action: "switch",
-    reason: "no price change for 5.0s",
+    reason: "no price change for 15.0s",
   })
   expect(recoveryAction({ venue: "binance", messagesSilentMs: 1_000, budget: fresh, alreadyTried: false }).action).toBe("switch")
   expect(recoveryAction({ venue: "binance", messagesSilentMs: MOVE_MS, budget: fresh, alreadyTried: false })).toEqual({

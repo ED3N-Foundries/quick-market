@@ -72,6 +72,8 @@ describe("processHealth", () => {
     noteFeedAdopt("bybit")
     // A down feed break needs an explicit live signal before clearing.
     expect(snapshotProcessHealth().status).toBe("down")
+    noteFeedLive()
+    expect(snapshotProcessHealth().status).toBe("ok")
     setProcessStatus("degraded", "feed binance dropped → bybit")
     noteFeedAdopt("bybit")
     expect(snapshotProcessHealth().status).toBe("ok")

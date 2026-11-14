@@ -25,6 +25,8 @@ import {
   noteBootFailure,
   noteFeedAdopt,
   noteFeedBreak,
+  noteFeedLive,
+  noteTickOk,
   setProcessStatus,
   snapshotProcessHealth,
 } from "./processHealth"
@@ -261,15 +263,20 @@ function wake() {
     runWake(plan, {
       advance: () => {
         let awaiting = false
+        const feedState: { value: "live" | "stale" } = { value: "stale" }
         for (const key of liveKeys()) {
           withChain(key, () => {
             const result = advance(now)
             if (result.awaitingPrice) awaiting = true
             const feed = feedStatus(now)
+            feedState.value = feed
             for (const event of result.settled) stream.settled(event, now)
             if (result.broadcastRound || feed !== lastFeed) publishRound(now)
           })
         }
+        // A live feed and a completed advance clear feed/tick failure markers.
+        if (feedState.value === "live") noteFeedLive()
+        noteTickOk(feedState.value)
         awaitingStrike = awaiting
         marketAt = nextMarketAt(now, timing())
         return { awaitingPrice: awaiting }
