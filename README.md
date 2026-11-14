@@ -272,6 +272,13 @@ The page is http://127.0.0.1:3101. It binds `0.0.0.0:3101`, has no password, and
 4. Open http://127.0.0.1:3101. Config, state, and the websocket are the pieces that mark the market down.
 5. Open http://127.0.0.1:5173.
 
+## Deploy (containers)
+
+Three repos only, no core-infra: `DEPLOY.md` + `docker-compose.yml` +
+`Dockerfile` + `deploy.env.example` in this directory. Sibling checkouts of
+`quick-market-agent` and `quick-market-health`, `cp deploy.env.example
+deploy.env`, `docker compose up -d --build`.
+
 ## Architecture
 
 Bun serves HTTP and a websocket. One SQLite database holds chain-scoped users, rounds, buy-ins, custody, and sessions, plus a shared BTC price tape. React draws the screen. The server wakes for the next price fanout, every 100ms, or for the next window boundary, strike, settle, or handoff resume. Between those moments it does not poll SQLite.

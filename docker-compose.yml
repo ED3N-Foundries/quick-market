@@ -1,0 +1,141 @@
+# Standalone deploy for Quick Market from the three public repos only.
+# Submission copy for the hackathon: core-infra's docker-compose.yml stays the
+# ops canonical file. This is a subset (qm network, no Caddy/tunnel).
+#
+# Layout: clone the three repos as siblings:
+#   quick-market/            (this file, Dockerfile, deploy.env.example)
+#   quick-market-agent/      (own Dockerfile + .env.example for local bun runs)
+#   quick-market-health/     (own Dockerfile + compose for single-service runs)
+#
+# Setup (from this directory):
+#   cp deploy.env.example deploy.env   # fill keys, never commit deploy.env
+#   docker compose up -d --build
+# Verify:
+#   curl -sf http://127.0.0.1:3001/api/state
+#   curl -sf http://127.0.0.1:3101/api/health
+
+name: quick-market
+
+services:
+  quick-market:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ed3n/quick-market:bun-1.4.4
+    container_name: quick-market
+    mem_limit: 768m
+    memswap_limit: 768m
+    pids_limit: 256
+    read_only: true
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
+      - DAC_OVERRIDE
+      - FOWNER
+    tmpfs:
+      - /tmp
+    env_file:
+      - path: ${DEPLOY_ENV_FILE:-./deploy.env}
+        required: true
+    environment:
+      NEAR_RPC_1: "https://near-testnet.drpc.org 1800 1800 1000"
+      NEAR_RPC_2: "https://test.rpc.fastnear.com 4000 20000 1500"
+      NEAR_RPC_3: "https://api.zan.top/near-testnet 4000 8000 1500"
+      NEAR_RPC_4: "https://testnet-rpc.intea.rs 4000 8000 2000"
+    volumes:
+      - qm_data:/data
+    ports:
+      - "127.0.0.1:3001:3001"
+    networks:
+      - qm
+    healthcheck:
+      test: ["CMD", "bun", "-e", "const r = await fetch('http://127.0.0.1:3001/api/state'); if (!r.ok) process.exit(1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 1800s
+
+  quick-market-agent:
+    build:
+      context: ../quick-market-agent
+    image: ed3n/quick-market-agent:bun-1.4.4
+    container_name: quick-market-agent
+    mem_limit: 768m
+    memswap_limit: 768m
+    pids_limit: 256
+    read_only: true
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
+      - DAC_OVERRIDE
+      - FOWNER
+    tmpfs:
+      - /tmp
+    env_file:
+      - path: ${DEPLOY_ENV_FILE:-./deploy.env}
+        required: true
+    environment:
+      API_URL: http://quick-market:3001
+      DB_PATH: /data/quick-market-agent.sqlite
+    volumes:
+      - qm_agent:/data
+    networks:
+      - qm
+    depends_on:
+      quick-market:
+        condition: service_healthy
+
+  quick-market-health:
+    build:
+      context: ../quick-market-health
+    image: ed3n/quick-market-health:bun-1.4.4
+    container_name: quick-market-health
+    mem_limit: 256m
+    memswap_limit: 256m
+    pids_limit: 128
+    read_only: true
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
+      - DAC_OVERRIDE
+      - FOWNER
+    tmpfs:
+      - /tmp
+    ports:
+      - "127.0.0.1:${PORT:-3101}:3101"
+    environment:
+      TARGET_URL: ${TARGET_URL:-http://quick-market:3001}
+      INTERNAL_URL: ${INTERNAL_URL:-http://quick-market:3002}
+      AGENT_URL: ${AGENT_URL:-http://quick-market-agent:3011}
+      CHECK_INTERVAL_MS: ${CHECK_INTERVAL_MS:-10000}
+      HISTORY_N: ${HISTORY_N:-180}
+      REFRESH_MS: ${REFRESH_MS:-5000}
+      REQUEST_TIMEOUT_MS: ${REQUEST_TIMEOUT_MS:-8000}
+      # Empty = container/log cards disabled. To enable, uncomment the socket
+      # volume below and set DOCKER_SOCK=/var/run/docker.sock.
+      DOCKER_SOCK: ${DOCKER_SOCK:-}
+      DOCKER_CONTAINERS: ${DOCKER_CONTAINERS:-quick-market,quick-market-agent}
+      DOCKER_TIMEOUT_MS: ${DOCKER_TIMEOUT_MS:-2500}
+      DOCKER_LOGS_TAIL: ${DOCKER_LOGS_TAIL:-200}
+      DOCKER_GID: ${DOCKER_GID:-}
+    # Uncomment to enable the containers/logs cards:
+    # volumes:
+    #   - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - qm
+    healthcheck:
+      test: ["CMD", "bun", "-e", "const r = await fetch('http://127.0.0.1:3101/api/health'); if (!r.ok) process.exit(1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+networks:
+  qm:
+
+volumes:
+  qm_data:
+  qm_agent:
