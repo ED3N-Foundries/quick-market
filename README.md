@@ -52,6 +52,10 @@ The house swarm is that loop across a crowd. Its code is [quick-market-agent](ht
 
 Quick Market already ran on Base Sepolia before this hackathon. That book, the Base grant, and Phantom sign-in are the earlier product. Only the NEAR integration is judged: the QM contract, the NEAR Testnet book, Meteor NEP-413 sign-in, QM grants and withdrawals, and `/mcp`. The NEAR half of the swarm is in [quick-market-agent](https://github.com/ED3N-Foundries/quick-market-agent). There is no mainnet deployment.
 
+Hackathon baseline: tag [`pre-hackathon`](https://github.com/ED3N-Foundries/quick-market/tree/pre-hackathon) is the last commit before the 2026-10-19 announcement window, tag `hackathon-submission` is the submitted tip. The window's work is the [diff between them](https://github.com/ED3N-Foundries/quick-market/compare/pre-hackathon...hackathon-submission).
+
+The project is three repos: this market ([quick-market](https://github.com/ED3N-Foundries/quick-market)), the house swarm ([quick-market-agent](https://github.com/ED3N-Foundries/quick-market-agent)), and the admin page ([quick-market-health](https://github.com/ED3N-Foundries/quick-market-health)).
+
 Libraries, beyond this repo's own code. Versions are in `package.json` and `contracts/near/Cargo.toml`.
 
 - Bun 1.4.4, the runtime. React 19 and Vite draw the screen.
@@ -276,8 +280,9 @@ The page is http://127.0.0.1:3101. It binds `0.0.0.0:3101`, has no password, and
 
 Three repos only, no core-infra: `DEPLOY.md` + `docker-compose.yml` +
 `Dockerfile` + `deploy.env.example` in this directory. Sibling checkouts of
-`quick-market-agent` and `quick-market-health`, `cp deploy.env.example
-deploy.env`, `docker compose up -d --build`.
+[quick-market-agent](https://github.com/ED3N-Foundries/quick-market-agent)
+and [quick-market-health](https://github.com/ED3N-Foundries/quick-market-health),
+`cp deploy.env.example deploy.env`, `docker compose up -d --build`.
 
 ## Architecture
 
