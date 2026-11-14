@@ -109,6 +109,31 @@ function nearFundingFor(chainKey: string): NearFundingState {
   return nearCooldownStatus()
 }
 
+/** Internal health/status are not request-scoped: NEAR telemetry is live
+ *  whenever the NEAR runtime is live, even when BASE is the default chain. */
+function isNearLive(http: Pick<HttpDeps, "liveChains" | "chainKey">): boolean {
+  try {
+    return http.liveChains().includes("near-testnet")
+  } catch {
+    return http.chainKey() === "near-testnet"
+  }
+}
+
+function liveChainKeys(http: Pick<HttpDeps, "liveChains" | "chainKey">): ChainKey[] {
+  try {
+    const live = http.liveChains()
+    if (Array.isArray(live) && live.length > 0) return [...live]
+  } catch {
+    // fall through to the active chain
+  }
+  return [http.chainKey()]
+}
+
+function nearLiveState(http: Pick<HttpDeps, "liveChains" | "chainKey">): { cooling: NearFundingState; rpc: ReturnType<typeof nearRpcStatus> } {
+  if (!isNearLive(http)) return { cooling: { cooling: false, retryAfterMs: 0, untilMs: null, reason: null }, rpc: [] }
+  return { cooling: nearCooldownStatus(), rpc: nearRpcStatus() }
+}
+
 function coolingResponse(funding: NearFundingState): Response {
   return json(
     {
@@ -139,7 +164,9 @@ function getHealth(): Response {
   } catch {
     // ignore
   }
-  const cooling = nearFundingFor(http.chainKey())
+  const live = liveChainKeys(http)
+  const near = nearLiveState(http)
+  const cooling = near.cooling
   const status = proc?.status ?? "ok"
   const reason =
     cooling.cooling && status === "ok"
@@ -150,12 +177,13 @@ function getHealth(): Response {
     ok: true,
     source: priceSource(),
     chain: http.chainKey(),
+    liveChains: live,
     treasury: http.treasuryReport(),
     status: effective,
     reason,
     process: withDisk(proc),
     previous: proc?.previous ?? null,
-    nearRpc: http.chainKey() === "near-testnet" ? nearRpcStatus() : [],
+    nearRpc: near.rpc,
     nearCooldown: cooling,
     stream: http.streamMetrics(),
     orderLatency: orderLatency.snapshot(),
@@ -231,7 +259,9 @@ function getStatus(): Response {
   } catch {
     // ignore
   }
-  const cooling = nearFundingFor(http.chainKey())
+  const live = liveChainKeys(http)
+  const near = nearLiveState(http)
+  const cooling = near.cooling
   const status = proc?.status ?? "ok"
   const reason =
     cooling.cooling && status === "ok"
@@ -243,9 +273,10 @@ function getStatus(): Response {
     status: effective,
     reason,
     feed: feedStatus(now),
+    liveChains: live,
     process: withDisk(proc),
     previous: proc?.previous ?? null,
-    nearRpc: http.chainKey() === "near-testnet" ? nearRpcStatus() : [],
+    nearRpc: near.rpc,
     nearCooldown: cooling,
     orderLatency: orderLatency.snapshot(now),
     selfHealth: self,
