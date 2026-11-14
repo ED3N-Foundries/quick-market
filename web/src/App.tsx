@@ -577,9 +577,7 @@ export function App({
           <p className="reconnect-banner" role="status">
             <span className="wait-spin" aria-hidden="true" />
             <span className="reconnect-title">{text.reconnectingMarket}</span>
-            <span className="reconnect-sub">
-              {text.reconnectingHint} {text.roundTrip} {formatLag(market.link.rttMs)}
-            </span>
+            <span className="reconnect-sub">{text.reconnectingHint}</span>
           </p>
         )}
         {market.feed === "stale" && !handoff && hasPrice && <p className="feed-flag">{text.priceDelayed}</p>}
