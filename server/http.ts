@@ -19,6 +19,7 @@ import {
   routePercentiles,
 } from "./selfHealth"
 import { oracleView } from "./oracle"
+import { orderLatency } from "./orderLatency"
 import { noteRequestError, snapshotProcessHealth } from "./processHealth"
 import { parseMicros } from "./money"
 import { nearRpcStatus } from "./near"
@@ -123,6 +124,7 @@ function getHealth(): Response {
     previous: proc?.previous ?? null,
     nearRpc: http.chainKey() === "near-testnet" ? nearRpcStatus() : [],
     stream: http.streamMetrics(),
+    orderLatency: orderLatency.snapshot(),
     selfHealth: self,
     queryStats: (() => {
       try {
@@ -203,6 +205,7 @@ function getStatus(): Response {
     process: withDisk(proc),
     previous: proc?.previous ?? null,
     nearRpc: http.chainKey() === "near-testnet" ? nearRpcStatus() : [],
+    orderLatency: orderLatency.snapshot(now),
     selfHealth: self,
     hangs,
   })

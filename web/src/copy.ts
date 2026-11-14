@@ -56,7 +56,7 @@ export type Copy = {
   fundAmount: string
   customAmount: string
   confirmPhantom: string
-  waitingConfirmations: string
+  waitingConfirmations: (confirmations: number) => string
   ledgerWait: (brief: string) => string
   depositSent: string
   grantMissed: string
@@ -255,7 +255,7 @@ const en: Copy = {
   fundAmount: "Fund amount",
   customAmount: "Custom amount",
   confirmPhantom: "Confirm in Phantom…",
-  waitingConfirmations: "Waiting for 3 confirmations…",
+  waitingConfirmations: (confirmations) => `Waiting for ${confirmations} confirmation${confirmations === 1 ? "" : "s"}…`,
   ledgerWait: (brief) => `Transfer sent. Waiting for the ledger.${brief ? ` ${brief}` : ""}`,
   depositSent: "Deposit sent. It will show after confirmation.",
   grantMissed: "The grant did not land. Try again.",
@@ -463,7 +463,7 @@ const zhTW: Copy = {
   fundAmount: "存入金額",
   customAmount: "自訂金額",
   confirmPhantom: "請在 Phantom 確認…",
-  waitingConfirmations: "等待 3 次確認…",
+  waitingConfirmations: (confirmations) => `等待 ${confirmations} 次確認…`,
   ledgerWait: (brief) => `轉帳已送出。正在等待入帳。${brief ? ` ${brief}` : ""}`,
   depositSent: "存款已送出。確認後會顯示。",
   grantMissed: "撥款未完成。請再試一次。",

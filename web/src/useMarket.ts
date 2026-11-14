@@ -33,6 +33,14 @@ import type { Handoff, Ticker } from "../../shared/source"
 import { tickerFor } from "../../shared/source"
 import { applySettlement, dismissRound, dueBuyIns, emptyNotices, settleNotice, settlePullDue, SETTLE_PULL_GAP_MS, SETTLE_PULL_MS, tickNotices } from "./resultNotice"
 import { applyBookPatch } from "./boardStream"
+import {
+  acknowledgeOrderTiming,
+  completeOrderTiming,
+  ORDER_BOOK_TIMEOUT_MS,
+  orderTimingExpired,
+  startOrderTiming,
+  type OrderTiming,
+} from "./orderLatency"
 import { acceptStateBoard, missingCardWindow, patchNeedsSnapshot } from "./boardRepair"
 import { tapeLead } from "./tapeLead"
 import type { AccountMessage, Board, Config, ServerStreamMessage, Side, SnapshotMessage, You } from "./types"
@@ -116,6 +124,7 @@ export function useMarket(token: string | null, seed: You | null = null, initial
     sentAt: number
   } | null>(null)
   const sendBetRef = useRef<() => void>(() => {})
+  const orderTimingRef = useRef<OrderTiming | null>(null)
   const epochRef = useRef<string | null>(null)
   const seqRef = useRef(0)
   const needsSnapshotRef = useRef(false)
@@ -478,6 +487,48 @@ export function useMarket(token: string | null, seed: You | null = null, initial
     let generation = 0
     let failures = 0
     let wokeAt = 0
+    let orderReportTimer = 0
+
+    const clearOrderReportTimer = () => {
+      window.clearTimeout(orderReportTimer)
+      orderReportTimer = 0
+    }
+
+    const resetOrderTiming = () => {
+      clearOrderReportTimer()
+      orderTimingRef.current = null
+    }
+
+    const sendOrderReport = (current: WebSocket, report: Record<string, unknown>) => {
+      if (current.readyState !== WebSocket.OPEN) return
+      try {
+        current.send(JSON.stringify({ type: "order-latency", ...report }))
+      } catch {
+        return
+      }
+    }
+
+    const noteOrderBook = (current: WebSocket, next: Board) => {
+      const ms = completeOrderTiming(orderTimingRef.current, next, performance.now())
+      if (ms === null) return
+      const requestId = orderTimingRef.current!.requestId
+      resetOrderTiming()
+      sendOrderReport(current, { requestId, kind: "book", ms })
+    }
+
+    const noteOrderAck = (current: WebSocket, requestId: string) => {
+      const ack = acknowledgeOrderTiming(orderTimingRef.current, requestId, performance.now())
+      if (!ack) return
+      orderTimingRef.current = ack.timing
+      sendOrderReport(current, { requestId, kind: "ack", ms: ack.ms })
+      clearOrderReportTimer()
+      orderReportTimer = window.setTimeout(() => {
+        const timing = orderTimingRef.current
+        if (!orderTimingExpired(timing, requestId, performance.now())) return
+        resetOrderTiming()
+        sendOrderReport(current, { requestId, kind: "missing" })
+      }, ORDER_BOOK_TIMEOUT_MS)
+    }
 
     const detach = (current: WebSocket) => {
       current.onopen = null
@@ -517,6 +568,9 @@ export function useMarket(token: string | null, seed: You | null = null, initial
           stake: bet.stake,
           roundId: bet.roundId,
         }))
+        bet.sentAt = Date.now()
+        resetOrderTiming()
+        orderTimingRef.current = startOrderTiming(bet.requestId, bet.roundId, performance.now())
       } catch {
         connect()
       }
@@ -551,6 +605,7 @@ export function useMarket(token: string | null, seed: You | null = null, initial
 
     function connect() {
       if (stopped) return
+      resetOrderTiming()
       window.clearTimeout(retry)
       window.clearTimeout(snapshotWait)
       retryPendingRef.current = false
@@ -628,6 +683,7 @@ export function useMarket(token: string | null, seed: You | null = null, initial
         }
         if (message.type === "snapshot") {
           acceptSnapshot(message)
+          noteOrderBook(current, message.board)
           return
         }
         if (message.type === "account") {
@@ -648,11 +704,13 @@ export function useMarket(token: string | null, seed: You | null = null, initial
           betLock.current = false
           setPending(false)
           if (message.ok && message.you) {
+            noteOrderAck(current, bet.requestId)
             acceptYou(message.you)
             markConfirmed(true)
             setError(null)
             return
           }
+          resetOrderTiming()
           if (bet.windowOpen) acceptYou(bet.snapshot)
           if (message.code === LATE_BUY_IN_CODE) setLateNotices((current) => (current.length > 0 ? current : [1]))
           else setError(message.error ?? "Buy-in failed")
@@ -706,6 +764,7 @@ export function useMarket(token: string | null, seed: You | null = null, initial
             return
           }
           commitBoard(next, message.serverNow)
+          noteOrderBook(current, next)
           return
         }
         if (needsSnapshotRef.current) return
@@ -789,6 +848,7 @@ export function useMarket(token: string | null, seed: You | null = null, initial
     return () => {
       stopped = true
       generation += 1
+      resetOrderTiming()
       window.clearTimeout(retry)
       window.clearTimeout(snapshotWait)
       retryPendingRef.current = false

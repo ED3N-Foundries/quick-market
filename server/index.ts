@@ -11,10 +11,12 @@ import { startChainRuntime, type ChainRuntime } from "./chainRuntime"
 import { pickChain } from "./markets"
 import { readSessionToken, sessionChainForToken } from "./session"
 import { grantSettings, onGrantNoted } from "./grant"
-import { hub } from "./hub"
+import { hub, type MarketSocket } from "./hub"
 import { bindHttp, handleInternal, handleSafe, json } from "./http"
 import { collectFunding } from "./funding"
 import { MarketStream } from "./stream"
+import { orderLatency } from "./orderLatency"
+import { noteClientOrderReport, rememberOrderReport } from "./orderReports"
 import { lagEcho } from "./lag"
 import { parseMicros } from "./money"
 import {
@@ -200,6 +202,13 @@ function markRoundDirty() {
   publishRound()
 }
 
+function rememberAcceptedOrder(ws: MarketSocket, requestId: string, now: number): void {
+  if (!requestId) return
+  const reports = ws.data.orderReports ?? new Map<string, { at: number; ack: boolean }>()
+  ws.data.orderReports = reports
+  rememberOrderReport(reports, requestId, now)
+}
+
 function publishRound(now = Date.now()) {
   const feed = feedStatus(now)
   lastFeed = feed
@@ -308,6 +317,7 @@ function publicConfig(): PublicConfig {
     tokenLabel: current.tokenLabel,
     grantMicros: grant.amount,
     grantIntervalMs: grant.intervalMs,
+    confirmations: marketPreferences.confirmations,
   }
 }
 
@@ -528,6 +538,7 @@ Bun.serve<{ address: string | null; chain: ChainKey }>({
       if (size > 2_048) return
       const text = typeof raw === "string" ? raw : raw.toString()
       const recv = Date.now()
+      const received = performance.now()
       const reply = lagEcho(text, recv, Date.now())
       if (reply) {
         ws.send(reply)
@@ -561,9 +572,14 @@ Bun.serve<{ address: string | null; chain: ChainKey }>({
         stream.snapshot(ws)
         return
       }
+      if (body.type === "order-latency") {
+        noteClientOrderReport(ws.data.orderReports, body, recv)
+        return
+      }
       if (body.type !== "buy-in") return
       const requestId = typeof body.requestId === "string" ? body.requestId : ""
       const replyTo = (result: { ok: boolean; you?: ReturnType<typeof youFor>; error?: string; code?: string }) => {
+        if (!result.ok) orderLatency.reject("user", recv)
         hub.send(ws, { type: "buy-in-result", requestId, ...result })
       }
       if (!ws.data.address) {
@@ -584,8 +600,16 @@ Bun.serve<{ address: string | null; chain: ChainKey }>({
         requestId,
         now: recv,
       })
+      const accepted = performance.now()
+      if (result.ok) {
+        orderLatency.note("user", "serverAcceptMs", accepted - received, recv)
+        rememberAcceptedOrder(ws, requestId, recv)
+      }
       replyTo(result)
-      if (result.ok) markRoundDirty()
+      if (result.ok) {
+        markRoundDirty()
+        orderLatency.note("user", "serverBookMs", performance.now() - accepted, recv)
+      }
       })
     },
     close(ws) {

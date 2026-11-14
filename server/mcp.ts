@@ -13,6 +13,7 @@ import { addPushSession } from "./accountPush"
 import { chainConfig } from "./env"
 import { grantDue, grantOnSignIn, grantSettings, startGrant } from "./grant"
 import { normalizeAccount, parseMicros } from "./money"
+import { orderLatency } from "./orderLatency"
 import {
   accountResults,
   board,
@@ -405,6 +406,7 @@ function registerTools(server: McpServer, accounts: Map<string, Bound>, deps: Mc
       },
     },
     async (args) => {
+      const received = performance.now()
       const picked = pickAccount(accounts, args.address)
       if (!picked.ok) return fail(picked.error)
       const stake = stakeOf(args.stake, args.stakeMicros)
@@ -417,8 +419,14 @@ function registerTools(server: McpServer, accounts: Map<string, Bound>, deps: Mc
         requestId: args.requestId,
         now: Date.now(),
       })
-      if (!result.ok) return fail(result.error, result.code)
+      const accepted = performance.now()
+      if (!result.ok) {
+        orderLatency.reject("agent")
+        return fail(result.error, result.code)
+      }
+      orderLatency.note("agent", "serverAcceptMs", accepted - received)
       deps.publish()
+      orderLatency.note("agent", "serverBookMs", performance.now() - accepted)
       return textResult({ address: result.you.address, balanceMicros: result.you.balanceMicros, you: result.you })
     },
   )
@@ -442,6 +450,7 @@ function registerTools(server: McpServer, accounts: Map<string, Bound>, deps: Mc
       },
     },
     async (args) => {
+      const received = performance.now()
       refresh(accounts)
       const chain = activeChainKey()
       const orders: BuyInOrder[] = []
@@ -451,8 +460,17 @@ function registerTools(server: McpServer, accounts: Map<string, Bound>, deps: Mc
         orders.push({ address, side: order.side, stakeMicros: order.stakeMicros })
       }
       const result = placeBuyIns({ orders, roundId: args.roundId, now: Date.now() })
-      if (!result.ok) return fail(result.error, result.code)
-      if (result.accepted > 0) deps.publish()
+      const accepted = performance.now()
+      if (!result.ok) {
+        orderLatency.reject("agent")
+        return fail(result.error, result.code)
+      }
+      if (result.accepted === 0) orderLatency.reject("agent")
+      else {
+        orderLatency.note("agent", "serverAcceptMs", accepted - received)
+        deps.publish()
+        orderLatency.note("agent", "serverBookMs", performance.now() - accepted)
+      }
       return textResult({ accepted: result.accepted, results: result.results })
     },
   )

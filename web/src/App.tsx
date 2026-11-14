@@ -913,6 +913,7 @@ export function App({
           treasury={market.config.treasury}
           chainId={market.config.chainId}
           chainName={market.config.chainName}
+          confirmations={market.config.confirmations}
           amount={fundAmount}
           disabled={!session.token || funding || paused}
           customDisabled={!session.token || funding || fundMicros === null || paused}
@@ -935,7 +936,7 @@ export function App({
             setFundPhase("phantom")
             setFundHash(null)
             setFundError(null)
-            void session.deposit(amount, market.config.treasury, market.config.usdc, market.config.chainId).then(async (result) => {
+            void session.deposit(amount, market.config.treasury, market.config.usdc, market.config.chainId, market.config.confirmations).then(async (result) => {
               if (!result.ok) {
                 setFundError(result.message)
                 setFunding(false)

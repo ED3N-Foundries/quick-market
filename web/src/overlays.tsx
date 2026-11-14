@@ -39,6 +39,7 @@ export function FundOverlay({
   treasury,
   chainId,
   chainName,
+  confirmations,
   amount,
   disabled,
   customDisabled,
@@ -56,6 +57,7 @@ export function FundOverlay({
   treasury: string
   chainId: number
   chainName: string
+  confirmations: number
   amount: string
   disabled: boolean
   customDisabled: boolean
@@ -123,11 +125,11 @@ export function FundOverlay({
             disabled={disabled}
           />
           <button type="button" className="primary" onClick={() => onFund(amount)} disabled={customDisabled}>
-            {phase === "phantom" ? text.confirmPhantom : phase === "confirming" || phase === "pending" ? text.waitingConfirmations : text.deposit}
+            {phase === "phantom" ? text.confirmPhantom : phase === "confirming" || phase === "pending" ? text.waitingConfirmations(confirmations) : text.deposit}
           </button>
         </div>
         {phase === "phantom" && <p className="note pending-note">{text.confirmPhantom}</p>}
-        {phase === "confirming" && <p className="note pending-note">{text.waitingConfirmations}</p>}
+        {phase === "confirming" && <p className="note pending-note">{text.waitingConfirmations(confirmations)}</p>}
         {phase === "pending" && (
           <p className="note pending-note" title={hash ?? undefined}>
             {text.ledgerWait(hash ? briefTx(hash) : "")}

@@ -1,6 +1,6 @@
 import { beforeEach, expect, test } from "bun:test"
 import { marketPreferences } from "../shared/market"
-import { applyDeposit, pollDeposits, treasuryFaultMessage } from "./custody"
+import { applyDeposit, pollDeposits, treasuryFaultMessage, withdrawalReceiptWait } from "./custody"
 import { getDb, migrateCustody, useDatabase } from "./db"
 import { credit, youFor } from "./rounds"
 
@@ -9,6 +9,7 @@ const from = `0x${"22".repeat(20)}`
 
 beforeEach(() => {
   marketPreferences.chain = "base-sepolia"
+  marketPreferences.confirmations = 1
   useDatabase(":memory:")
 })
 
@@ -53,6 +54,13 @@ test("custody migration zeros demo balances and drops open bets", () => {
   expect(bets.map((bet) => bet.id)).toEqual(["done"])
 })
 
+test("withdrawal receipts use the configured confirmation target", () => {
+  const hash = `0x${"ab".repeat(32)}` as `0x${string}`
+  expect(withdrawalReceiptWait(hash)).toEqual({ hash, confirmations: 1, timeout: 30_000 })
+  marketPreferences.confirmations = 4
+  expect(withdrawalReceiptWait(hash).confirmations).toBe(4)
+})
+
 test("a treasury with no ETH reports the gas failure", () => {
   expect(treasuryFaultMessage(new Error("insufficient funds for gas * price + value"), "Base Sepolia")).toBe(
     "Treasury needs Base Sepolia ETH for gas.",
@@ -79,7 +87,7 @@ test("pollDeposits credits a transfer that landed ahead of the cursor", async ()
   )
   expect(youFor(from)?.balanceMicros).toBe(20_000_000)
   const saved = db.query("SELECT value FROM meta WHERE key = 'base-sepolia:deposit_block'").get() as { value: string } | null
-  expect(saved?.value).toBe("107")
+  expect(saved?.value).toBe("110")
 })
 
 test("pollDeposits reads only the configured token", async () => {
@@ -119,11 +127,32 @@ test("pollDeposits chunks eth_getLogs into ranges of at most 200 blocks", async 
   expect(ranges).toEqual([
     [101n, 300n],
     [301n, 500n],
-    [501n, 550n],
+    [501n, 553n],
   ])
   for (const [start, end] of ranges) {
     expect(end - start <= 199n).toBe(true)
   }
   const saved = db.query("SELECT value FROM meta WHERE key = 'base-sepolia:deposit_block'").get() as { value: string } | null
-  expect(saved?.value).toBe("550")
+  expect(saved?.value).toBe("553")
+})
+
+test("pollDeposits honors a higher configured confirmation target", async () => {
+  marketPreferences.confirmations = 3
+  const db = getDb()
+  db.query("INSERT INTO meta (key, value) VALUES ('base-sepolia:deposit_block', '100')").run()
+  const ranges: [bigint, bigint][] = []
+  await pollDeposits(
+    {
+      getBlockNumber: async () => 110n,
+      getLogs: (async (params: { fromBlock: bigint; toBlock: bigint }) => {
+        ranges.push([params.fromBlock, params.toBlock])
+        return []
+      }) as never,
+    },
+    { usdc: `0x${"55".repeat(20)}` },
+    treasury as `0x${string}`,
+  )
+  expect(ranges).toEqual([[101n, 108n]])
+  const saved = db.query("SELECT value FROM meta WHERE key = 'base-sepolia:deposit_block'").get() as { value: string } | null
+  expect(saved?.value).toBe("108")
 })

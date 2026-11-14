@@ -14,6 +14,7 @@ import {
   type Holding,
   type TreasuryReport,
 } from "../shared/near"
+import { marketPreferences } from "../shared/market"
 import { MINT_CONFIRMATIONS, MINT_RECEIPT_TIMEOUT_MS } from "../shared/mint"
 import { accountFromSecret, parseNearPublicKey, publicKeyBytes } from "../shared/nearKey"
 import { encodeFunctionCall, jsonArgs, signTransaction } from "./nearTx"
@@ -864,10 +865,14 @@ function refundWithdraw(id: string) {
   tx()
 }
 
+export function nearWithdrawalWait(): "EXECUTED_OPTIMISTIC" | "EXECUTED" {
+  return marketPreferences.confirmations === 1 ? "EXECUTED_OPTIMISTIC" : "EXECUTED"
+}
+
 async function broadcastRaw(raw: string): Promise<void> {
   const result = (await rpc("send_tx", {
     signed_tx_base64: raw,
-    wait_until: "EXECUTED",
+    wait_until: nearWithdrawalWait(),
   })) as { status?: { Failure?: unknown } }
   if (result.status && "Failure" in result.status) throw new Error(JSON.stringify(result.status.Failure))
 }
@@ -1016,8 +1021,13 @@ type NearBlock = {
   chunks: { chunk_hash: string; gas_used: string }[]
 }
 
+export function nearDepositBlockQuery(height?: number): { finality: "optimistic" | "final" } | { block_id: number } {
+  if (height !== undefined) return { block_id: height }
+  return { finality: marketPreferences.confirmations === 1 ? "optimistic" : "final" }
+}
+
 async function nearBlock(height?: number): Promise<NearBlock> {
-  return (await rpc("block", height === undefined ? { finality: "final" } : { block_id: height })) as NearBlock
+  return (await rpc("block", nearDepositBlockQuery(height))) as NearBlock
 }
 
 /** Blocks older than this are gone from the free non-archival nodes. A shorter gap may still be propagating. */

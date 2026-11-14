@@ -99,6 +99,7 @@ The hex pair starts Base Sepolia. These keys do not start a Base mainnet book.
 | `VIEW_SECONDS` | `5` | Width of a struck bet's chart, and how long a quiet socket waits before the tape reloads. Integer 1–120. |
 | `FEE_BPS` | `0` | Fee on a paid two-sided pot. Integer 0–10000. |
 | `PRICE_SOURCE` | `binance` | `binance`, `bybit`, `okx`, `coinbase`, `kraken`, or `bitstamp`. |
+| `CONFIRMATIONS` | `1` | Deposit and withdrawal confirmation target. Base waits this many blocks. NEAR uses optimistic execution at 1 and final execution above 1. Grant mints keep their own target. |
 | `GRANT_MICROS` | `100000000` | Testnet grant. 100 USDC. One USDC is one million micros. |
 | `GRANT_INTERVAL_MS` | `120000` | Gap before the same address can take another grant. |
 | `TOKEN_PRIVATE_KEY` | written by `bun run token` | NEAR contract account key. The server can serve without it. Keep it to redeploy. |
