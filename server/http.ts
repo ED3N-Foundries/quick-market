@@ -21,6 +21,7 @@ import {
 import { oracleView } from "./oracle"
 import { noteRequestError, snapshotProcessHealth } from "./processHealth"
 import { parseMicros } from "./money"
+import { nearRpcStatus } from "./near"
 import {
   board,
   feedStatus,
@@ -120,6 +121,7 @@ function getHealth(): Response {
     reason: proc?.reason ?? null,
     process: withDisk(proc),
     previous: proc?.previous ?? null,
+    nearRpc: http.chainKey() === "near-testnet" ? nearRpcStatus() : [],
     stream: http.streamMetrics(),
     selfHealth: self,
     queryStats: (() => {
@@ -173,6 +175,7 @@ function getHealthHistory(url: URL): Response {
 }
 
 function getStatus(): Response {
+  const http = useDeps()
   const now = Date.now()
   let proc: ReturnType<typeof snapshotProcessHealth> | null = null
   try {
@@ -199,6 +202,7 @@ function getStatus(): Response {
     feed: feedStatus(now),
     process: withDisk(proc),
     previous: proc?.previous ?? null,
+    nearRpc: http.chainKey() === "near-testnet" ? nearRpcStatus() : [],
     selfHealth: self,
     hangs,
   })

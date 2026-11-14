@@ -8,6 +8,7 @@ import {
   nearHistoryMissing,
   nearRpcEndpoints,
   nearRpcOrder,
+  nearRpcStatus,
   nearSendOrder,
   parseNearRpcLine,
   prunedDepositResume,
@@ -56,12 +57,13 @@ test("an unset list prefers dRPC and leaves the official node out", () => {
   expect(nearRpcEndpoints({ RPC_URL: "https://sepolia.base.org" }).map((endpoint) => endpoint.url)).toEqual(urls)
 })
 
-test("a cooling endpoint is skipped and a waiting send starts on a patient node", () => {
+test("a cooling endpoint is deprioritized and a waiting send starts on a patient node", () => {
   const quiet = new Map<string, number>([[drpc.url, 5_000]])
   expect(nearRpcOrder(DEFAULT_NEAR_RPCS, 4_000, quiet).map((endpoint) => endpoint.url)[0]).toBe(NEAR_FALLBACK_RPC)
+  expect(nearRpcOrder(DEFAULT_NEAR_RPCS, 4_000, quiet).at(-1)?.url).toBe(NEAR_DRPC)
   expect(nearRpcOrder(DEFAULT_NEAR_RPCS, 5_000, quiet)[0]?.url).toBe(NEAR_DRPC)
   const allQuiet = new Map(DEFAULT_NEAR_RPCS.map((endpoint, index) => [endpoint.url, 10_000 + index]))
-  expect(nearRpcOrder(DEFAULT_NEAR_RPCS, 1_000, allQuiet)).toEqual([drpc])
+  expect(nearRpcOrder(DEFAULT_NEAR_RPCS, 1_000, allQuiet)).toEqual([...DEFAULT_NEAR_RPCS])
   expect(nearSendOrder([drpc, fastnear], "EXECUTED").map((endpoint) => endpoint.url)).toEqual([fastnear.url, drpc.url])
   expect(nearSendOrder([drpc, fastnear], "NONE").map((endpoint) => endpoint.url)).toEqual([drpc.url, fastnear.url])
   expect(nearSendOrder([drpc, fastnear], "INCLUDED")[0]?.url).toBe(fastnear.url)
@@ -175,6 +177,58 @@ test("a refused hop is parked and the next endpoint answers", async () => {
     resetNearRpcQuiet()
     refused.stop(true)
     ready.stop(true)
+  }
+})
+
+test("a ready endpoint failure still tries a cooling fallback", async () => {
+  resetNearRpcQuiet()
+  const hits: string[] = []
+  let refusePrimary = true
+  let refuseFallback = false
+  const primary = Bun.serve({
+    port: 0,
+    fetch() {
+      hits.push("primary")
+      if (refusePrimary) {
+        refusePrimary = false
+        return new Response("no", { status: 429 })
+      }
+      return Response.json({ jsonrpc: "2.0", id: "quick-market", result: { from: "primary" } })
+    },
+  })
+  const fallback = Bun.serve({
+    port: 0,
+    fetch() {
+      hits.push("fallback")
+      if (refuseFallback) return new Response("no", { status: 429 })
+      return Response.json({ jsonrpc: "2.0", id: "quick-market", result: { from: "fallback" } })
+    },
+  })
+  const endpoints = [
+    { url: `http://127.0.0.1:${primary.port}/near`, timeoutMs: 1_000, sendTimeoutMs: 1_000, backoffMs: 60_000 },
+    { url: `http://127.0.0.1:${fallback.port}/near`, timeoutMs: 1_000, sendTimeoutMs: 1_000, backoffMs: 60_000 },
+  ]
+  try {
+    expect(await callNearRpc(endpoints, "query", {})).toEqual({ from: "fallback" })
+    let status = nearRpcStatus(Date.now(), endpoints)
+    expect(status[0]?.state).toBe("cooling")
+    expect(status[0]?.failures).toBe(1)
+    expect(status[1]?.state).toBe("ready")
+    expect(status[1]?.successes).toBe(1)
+
+    refuseFallback = true
+    hits.length = 0
+    expect(await callNearRpc(endpoints, "query", {})).toEqual({ from: "primary" })
+    expect(hits).toEqual(["fallback", "primary"])
+    status = nearRpcStatus(Date.now(), endpoints)
+    expect(status[0]?.state).toBe("ready")
+    expect(status[0]?.attempts).toBe(2)
+    expect(status[1]?.state).toBe("cooling")
+    expect(status[1]?.lastError).toBe("NEAR RPC returned 429")
+  } finally {
+    resetNearRpcQuiet()
+    primary.stop(true)
+    fallback.stop(true)
   }
 })
 

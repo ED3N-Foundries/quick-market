@@ -148,8 +148,59 @@ const NEAR_RPC_LINE = /^(https?:\/\/\S+)\s+(\d+)\s+(\d+)\s+(\d+)$/
 
 const quietUntil = new Map<string, number>()
 
+type NearRpcAttempt = {
+  attempts: number
+  successes: number
+  failures: number
+  lastAttemptAt: number
+  lastSuccessAt: number | null
+  lastFailureAt: number | null
+  lastMs: number
+  lastMethod: string
+  lastError: string | null
+}
+
+const rpcAttempts = new Map<string, NearRpcAttempt>()
+
+export type NearRpcEndpointStatus = NearRpcEndpoint & {
+  state: "ready" | "cooling" | "error" | "unused"
+  attempts: number
+  successes: number
+  failures: number
+  lastAttemptAt: number | null
+  lastSuccessAt: number | null
+  lastFailureAt: number | null
+  lastMs: number | null
+  lastMethod: string | null
+  lastError: string | null
+  quietForMs: number
+}
+
+export function nearRpcStatus(now = Date.now(), endpoints = nearRpcEndpoints()): NearRpcEndpointStatus[] {
+  return endpoints.map((endpoint) => {
+    const attempt = rpcAttempts.get(endpoint.url)
+    const quietForMs = Math.max(0, (quietUntil.get(endpoint.url) ?? 0) - now)
+    const state = quietForMs > 0 ? "cooling" : attempt?.lastError ? "error" : attempt ? "ready" : "unused"
+    return {
+      ...endpoint,
+      state,
+      attempts: attempt?.attempts ?? 0,
+      successes: attempt?.successes ?? 0,
+      failures: attempt?.failures ?? 0,
+      lastAttemptAt: attempt?.lastAttemptAt ?? null,
+      lastSuccessAt: attempt?.lastSuccessAt ?? null,
+      lastFailureAt: attempt?.lastFailureAt ?? null,
+      lastMs: attempt?.lastMs ?? null,
+      lastMethod: attempt?.lastMethod ?? null,
+      lastError: attempt?.lastError ?? null,
+      quietForMs,
+    }
+  })
+}
+
 export function resetNearRpcQuiet(): void {
   quietUntil.clear()
+  rpcAttempts.clear()
 }
 
 function blankEnv(value: string | undefined): string | undefined {
@@ -193,25 +244,17 @@ export function nearRpcEndpoints(env: Record<string, string | undefined> = proce
   return DEFAULT_NEAR_RPCS.map((endpoint) => ({ ...endpoint }))
 }
 
-/** Skip endpoints that are still in backoff. If every one is cooling, try the one that returns first. */
+/** Prefer ready endpoints, but keep cooling endpoints available as fallbacks within the same call. */
 export function nearRpcOrder(
   endpoints: readonly NearRpcEndpoint[],
   now: number,
   quiet: ReadonlyMap<string, number>,
 ): NearRpcEndpoint[] {
   const ready = endpoints.filter((endpoint) => (quiet.get(endpoint.url) ?? 0) <= now)
-  if (ready.length > 0) return [...ready]
-  if (endpoints.length === 0) return []
-  let soonest = endpoints[0]
-  let soonestAt = quiet.get(soonest.url) ?? 0
-  for (const endpoint of endpoints) {
-    const at = quiet.get(endpoint.url) ?? 0
-    if (at < soonestAt) {
-      soonest = endpoint
-      soonestAt = at
-    }
-  }
-  return [soonest]
+  const cooling = endpoints
+    .filter((endpoint) => (quiet.get(endpoint.url) ?? 0) > now)
+    .sort((a, b) => (quiet.get(a.url) ?? 0) - (quiet.get(b.url) ?? 0))
+  return [...ready, ...cooling]
 }
 
 /** A waiting send starts on a patient endpoint. A broadcast (NONE) keeps preference order, so dRPC can accept it. */
@@ -296,10 +339,36 @@ export async function callNearRpc(
     const timeoutMs = send
       ? Math.min(endpoint.sendTimeoutMs, remaining)
       : Math.min(endpoint.timeoutMs, options?.timeoutMs ?? endpoint.timeoutMs)
+    const attemptStarted = Date.now()
+    const previous = rpcAttempts.get(endpoint.url)
     try {
-      return await rpcOnce(endpoint.url, method, params, timeoutMs)
+      const result = await rpcOnce(endpoint.url, method, params, timeoutMs)
+      quietUntil.delete(endpoint.url)
+      rpcAttempts.set(endpoint.url, {
+        attempts: (previous?.attempts ?? 0) + 1,
+        successes: (previous?.successes ?? 0) + 1,
+        failures: previous?.failures ?? 0,
+        lastAttemptAt: attemptStarted,
+        lastSuccessAt: Date.now(),
+        lastFailureAt: previous?.lastFailureAt ?? null,
+        lastMs: Date.now() - attemptStarted,
+        lastMethod: method,
+        lastError: null,
+      })
+      return result
     } catch (error) {
       last = rpcFailureText(error)
+      rpcAttempts.set(endpoint.url, {
+        attempts: (previous?.attempts ?? 0) + 1,
+        successes: previous?.successes ?? 0,
+        failures: (previous?.failures ?? 0) + 1,
+        lastAttemptAt: attemptStarted,
+        lastSuccessAt: previous?.lastSuccessAt ?? null,
+        lastFailureAt: Date.now(),
+        lastMs: Date.now() - attemptStarted,
+        lastMethod: method,
+        lastError: last.slice(0, 300),
+      })
       if (!nearRpcBusy(error) && !nearRpcBusy(new Error(last))) break
       quietUntil.set(endpoint.url, Date.now() + endpoint.backoffMs)
     }

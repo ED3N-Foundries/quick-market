@@ -111,6 +111,8 @@ test("the public health route is liveness only", async () => {
   expect((await handle(new Request("http://market/api/health/history"))).status).toBe(404)
   const funding = await handleInternal(new Request("http://market/api/funding"))
   expect(await funding.json()).toEqual({ at: 1, chains: [{ treasury: "treasury.testnet" }] })
+  const status = await handleInternal(new Request("http://market/api/status"))
+  expect((await status.json()).nearRpc).toEqual([])
 })
 
 test("removed ops routes do not fall through to the player page", async () => {
