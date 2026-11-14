@@ -4,11 +4,13 @@ import { useI18n } from "./i18n"
 
 export function TestnetBrief({
   chainName,
+  tokenLabel,
   grantMicros,
   grantIntervalMs,
   onDismiss,
 }: {
   chainName: string
+  tokenLabel: string
   grantMicros: number
   grantIntervalMs: number
   onDismiss: () => void
@@ -36,7 +38,7 @@ export function TestnetBrief({
         </div>
         <div className="brief-copy">
           <p>{text.briefSignIn}</p>
-          <p>{text.briefTrades}</p>
+          <p>{text.briefTrades(tokenLabel)}</p>
           <p>{text.briefWallet}</p>
           <p>{briefGrantLine(grantMicros, grantIntervalMs, lang)}</p>
         </div>

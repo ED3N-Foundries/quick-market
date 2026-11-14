@@ -124,7 +124,7 @@ export type Copy = {
   grantSentence: (amount: string, pace: string) => string
   briefKicker: string
   briefSignIn: string
-  briefTrades: string
+  briefTrades: (token: string) => string
   briefWallet: string
   briefContinue: string
   briefHour: string
@@ -324,7 +324,7 @@ const en: Copy = {
     `Quick Market adds ${amount} QM USDC to this balance ${pace}. The wallet is not charged, and Phantom is not involved.`,
   briefKicker: "Testnet",
   briefSignIn: "Sign in with your wallet.",
-  briefTrades: "Trades use QM USDC.",
+  briefTrades: (token) => `Trades use ${token}.`,
   briefWallet: "Your wallet is not charged.",
   briefContinue: "Continue",
   briefHour: "every hour",
@@ -532,7 +532,7 @@ const zhTW: Copy = {
     `Quick Market ${pace}，把 ${amount} QM USDC 加進這個餘額。不會向錢包扣款，也不經過 Phantom。`,
   briefKicker: "測試網",
   briefSignIn: "用錢包登入。",
-  briefTrades: "交易使用 QM USDC。",
+  briefTrades: (token) => `交易使用 ${token}。`,
   briefWallet: "不會向錢包扣款。",
   briefContinue: "繼續",
   briefHour: "每小時",

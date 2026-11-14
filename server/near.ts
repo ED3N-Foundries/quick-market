@@ -1,6 +1,6 @@
 import bs58 from "bs58"
 import { activeChainKey, withChain } from "./activeChain"
-import { loadEnv, nearTreasurySecret } from "./env"
+import { loadEnv, nearTreasuryId, nearTreasurySecret } from "./env"
 import { getDb } from "./db"
 import { normalizeAccount } from "./money"
 import { credit, withdraw, youFor, type You } from "./rounds"
@@ -15,7 +15,7 @@ import {
   type TreasuryReport,
 } from "../shared/near"
 import { MINT_CONFIRMATIONS, MINT_RECEIPT_TIMEOUT_MS } from "../shared/mint"
-import { accountFromSecret, parseNearPublicKey, publicKeyBytes } from "../shared/nearKey"
+import { parseNearPublicKey, publicKeyBytes } from "../shared/nearKey"
 import { encodeFunctionCall, jsonArgs, signTransaction } from "./nearTx"
 
 /** A missing key or invalid NEAR token stops the process before it listens. */
@@ -819,7 +819,7 @@ export async function mintNearToTreasury(
 ): Promise<void> {
   if (!Number.isSafeInteger(amountMicros) || amountMicros <= 0) throw new Error("Amount is invalid")
   const env = loadEnv()
-  const treasury = await accountFromSecret(signingKey())
+  const treasury = await nearTreasuryId()
   if (!treasury) throw new Error("TREASURY_PRIVATE_KEY must be an ed25519 NEAR secret key")
   const hash = await submit({
     signerId: treasury,
@@ -882,7 +882,7 @@ export async function requestNearWithdraw(
   if (!Number.isSafeInteger(amountMicros) || amountMicros <= 0) return { ok: false, error: "Amount is invalid" }
   if (amountMicros > you.balanceMicros) return { ok: false, error: "Insufficient balance" }
   const env = loadEnv()
-  const treasury = await accountFromSecret(signingKey())
+  const treasury = await nearTreasuryId()
   if (!treasury) return { ok: false, error: "TREASURY_PRIVATE_KEY must be an ed25519 NEAR secret key" }
   const transfer = {
     signerId: treasury,

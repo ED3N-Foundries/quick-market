@@ -4,6 +4,8 @@ contracts/near/target
 data/*.sqlite
 data/*.sqlite-wal
 data/*.sqlite-shm
+data/archives/
+data/process-health.json
 .DS_Store
 .env
 .env.*

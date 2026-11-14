@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test"
 import { marketPreferences } from "../shared/market"
 import { generateNearSecret } from "../shared/nearKey"
-import { enabledMarketKeys, loadEnv, nearTreasurySecret, parseNearTreasuryKey, parseTokenAccount, parseTreasuryKey, rpcFor } from "./env"
+import { enabledMarketKeys, loadEnv, nearTreasuryId, nearTreasurySecret, parseNearTreasuryKey, parseTokenAccount, parseTreasuryKey, rpcFor } from "./env"
 
 const hex = "ab".repeat(32)
 
@@ -59,6 +59,14 @@ test("each market turns on only from its own keys", async () => {
   expect(() => parseNearTreasuryKey(`0x${hex}`)).toThrow("NEAR_TREASURY_PRIVATE_KEY")
   expect(rpcFor("near-testnet", { ...both, rpcUrl: "https://sepolia.base.org" })).toBe("https://rpc.testnet.near.org")
   expect(rpcFor("base-sepolia", { ...both, rpcUrl: "https://rpc.testnet.near.org" })).not.toContain("near")
+})
+
+test("a named NEAR treasury overrides the derived implicit account", async () => {
+  const made = await generateNearSecret()
+  const named = loadEnv({ NEAR_TREASURY_PRIVATE_KEY: made.secretKey, NEAR_TREASURY_ACCOUNT: "qm.testnet" })
+  expect(await nearTreasuryId(named)).toBe("qm.testnet")
+  expect(await nearTreasuryId(loadEnv({ NEAR_TREASURY_PRIVATE_KEY: made.secretKey }))).toBe(made.account)
+  expect(() => loadEnv({ NEAR_TREASURY_ACCOUNT: "not an account" })).toThrow("NEAR_TREASURY_ACCOUNT")
 })
 
 test("deployment defaults fill blank process settings", () => {

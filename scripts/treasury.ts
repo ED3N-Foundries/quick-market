@@ -5,8 +5,8 @@ import { createPublicClient, http, parseAbiItem, type Address } from "viem"
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts"
 import { base, baseSepolia } from "viem/chains"
 import { CHAINS, chainFromEnv, type ChainConfig, type ChainKey } from "../shared/chain"
-import { formatQm, formatYocto, isImplicitAccount } from "../shared/near"
-import { accountFromSecret, generateNearSecret } from "../shared/nearKey"
+import { formatQm, formatYocto, isImplicitAccount, isNearAccountId } from "../shared/near"
+import { accountFromSecret, bs58, generateNearSecret, publicKeyBytes } from "../shared/nearKey"
 import { loadMarket, marketPreferences } from "../shared/market"
 import { usdcAbi } from "../shared/usdc"
 import { tuneDatabase } from "../server/db"
@@ -16,6 +16,7 @@ import { readNearBalance, readTokenBalance } from "../server/near"
 const EXAMPLE_PATH = join(process.cwd(), ".env.example")
 const NAME = "TREASURY_PRIVATE_KEY"
 const NEAR_NAME = "NEAR_TREASURY_PRIVATE_KEY"
+const NEAR_ACCOUNT = "NEAR_TREASURY_ACCOUNT"
 
 function envPath(): string {
   const override = process.env.QUICK_MARKET_ENV_FILE?.trim()
@@ -174,6 +175,14 @@ function fillNamedLine(source: string, name: string, secret: string): string {
   return `${body}${name}=${secret}\n`
 }
 
+export function planNearTreasuryAccount(source: string, account: string): string {
+  return firstValue(source, NEAR_ACCOUNT) ? source : fillNamedLine(source, NEAR_ACCOUNT, account)
+}
+
+export function newNearAccountName(random: Uint8Array): string {
+  return `qm-${[...random].map((byte) => byte.toString(16).padStart(2, "0")).join("")}.testnet`
+}
+
 export async function planNearTreasury(
   source: string,
   envKey: string | undefined,
@@ -200,6 +209,28 @@ export async function planNearTreasury(
   return { action: "write", text: fillNamedLine(source, NEAR_NAME, generated), account }
 }
 
+async function createNamedTreasury(secretKey: string): Promise<string> {
+  const publicKey = await publicKeyBytes(secretKey)
+  if (!publicKey) throw new Error("NEAR_TREASURY_PRIVATE_KEY must be an ed25519 NEAR secret key")
+  const account = newNearAccountName(crypto.getRandomValues(new Uint8Array(8)))
+  console.log(`creating ${account} through the NEAR testnet helper`)
+  const response = await fetch("https://helper.nearprotocol.com/account", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ newAccountId: account, newAccountPublicKey: `ed25519:${bs58.encode(publicKey)}` }),
+    signal: AbortSignal.timeout(30_000),
+  })
+  if (!response.ok) {
+    const detail = (await response.text()).replace(/\s+/g, " ").slice(0, 300)
+    throw new Error(`NEAR testnet helper returned ${response.status}${detail ? `: ${detail}` : ""}`)
+  }
+  for (let attempt = 0; attempt < 30; attempt++) {
+    if ((await readNearBalance(account)).exists) return account
+    await new Promise((resolve) => setTimeout(resolve, 1_000))
+  }
+  throw new Error(`${account} was not visible after the helper replied`)
+}
+
 async function runNearTreasury(source: string) {
   const generated = await generateNearSecret()
   const decision = await planNearTreasury(source, process.env.NEAR_TREASURY_PRIVATE_KEY, generated.secretKey)
@@ -214,13 +245,26 @@ async function runNearTreasury(source: string) {
   } else if (decision.action === "refuse") {
     console.log("NEAR_TREASURY_PRIVATE_KEY is already set. The env file was not changed.")
   }
-  console.log(`treasury ${decision.account}`)
-  console.log("This account needs testnet NEAR from the faucet before it can pay gas.")
+  let account = process.env.NEAR_TREASURY_ACCOUNT?.trim() || firstValue(source, NEAR_ACCOUNT)
+  if (account && !isNearAccountId(account)) throw new Error("NEAR_TREASURY_ACCOUNT must be a NEAR account id")
+  if (!account) {
+    if ((await readNearBalance(decision.account)).exists) {
+      account = decision.account
+    } else {
+      const secret = decision.action === "write" ? generated.secretKey : process.env.NEAR_TREASURY_PRIVATE_KEY || firstValue(source, NEAR_NAME)
+      account = await createNamedTreasury(secret)
+      const current = existsSync(envPath()) ? readFileSync(envPath(), "utf8") : source
+      writeFileSync(envPath(), planNearTreasuryAccount(current, account), { mode: 0o600 })
+      chmodSync(envPath(), 0o600)
+      console.log("wrote NEAR_TREASURY_ACCOUNT")
+    }
+  }
+  console.log(`treasury ${account}`)
   try {
-    const balance = await readNearBalance(decision.account)
+    const balance = await readNearBalance(account)
     console.log(`NEAR ${formatYocto(balance.yocto)}`)
     const token = loadEnv().tokenAccount.trim()
-    if (token) console.log(`QM ${formatQm(await readTokenBalance(token, decision.account))}`)
+    if (token) console.log(`QM ${formatQm(await readTokenBalance(token, account))}`)
   } catch (error) {
     console.error(error instanceof Error ? error.message : error)
   }

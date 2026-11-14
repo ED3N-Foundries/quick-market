@@ -1,10 +1,9 @@
 import { moneyLabel, requireSepoliaToken, tokenKind, tokenLabel, type ChainConfig, type ChainKey } from "../shared/chain"
 import { requireNearToken, type TreasuryReport } from "../shared/near"
-import { accountFromSecret } from "../shared/nearKey"
 import { withChain } from "./activeChain"
 import { mintToTreasury, requestWithdraw, startCustody, treasuryAddress, watchMint } from "./custody"
 import { getDb } from "./db"
-import { chainConfig, loadEnv, nearTreasurySecret } from "./env"
+import { chainConfig, loadEnv, nearTreasuryId } from "./env"
 import { grantSettings, resumePendingGrants } from "./grant"
 import {
   assertLedgerChain,
@@ -42,8 +41,7 @@ async function startScoped(key: ChainKey): Promise<ChainRuntime> {
   const env = loadEnv()
   if (chain.key === "near-testnet") {
     requireNearToken(chain.key, env.tokenAccount)
-    const secret = nearTreasurySecret(env)
-    const treasury = await accountFromSecret(secret)
+    const treasury = await nearTreasuryId(env)
     if (!treasury) throw new Error("NEAR_TREASURY_PRIVATE_KEY must be an ed25519 NEAR secret key")
     getDb()
     await bootNear(treasury)

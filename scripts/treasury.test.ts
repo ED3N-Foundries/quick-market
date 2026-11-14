@@ -10,6 +10,8 @@ import {
   formatEth,
   formatUsd,
   latestMovements,
+  newNearAccountName,
+  planNearTreasuryAccount,
   movementsFromFeeds,
   movementsFromUsdcLogs,
   planNearTreasury,
@@ -74,6 +76,15 @@ test("planNearTreasury writes NEAR_TREASURY_PRIVATE_KEY and leaves the Base key"
   expect(plan.text).toContain(`TREASURY_PRIVATE_KEY=${generated}`)
   expect(plan.text).not.toMatch(/^TREASURY_PRIVATE_KEY=ed25519:/m)
   expect(await planNearTreasury(source, generated, made.secretKey)).toEqual({ action: "invalid" })
+})
+
+test("named treasury setup writes only the blank account line", () => {
+  const source = `NEAR_TREASURY_PRIVATE_KEY=${generated}\nNEAR_TREASURY_ACCOUNT=\n`
+  const next = planNearTreasuryAccount(source, "qm-example.testnet")
+  expect(next).toContain("NEAR_TREASURY_ACCOUNT=qm-example.testnet")
+  expect(next).toContain(`NEAR_TREASURY_PRIVATE_KEY=${generated}`)
+  expect(planNearTreasuryAccount(next, "other.testnet")).toBe(next)
+  expect(newNearAccountName(Uint8Array.from([0, 15, 255]))).toBe("qm-000fff.testnet")
 })
 
 test("planTreasury does not overwrite a damaged key", () => {

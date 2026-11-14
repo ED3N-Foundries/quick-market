@@ -4,13 +4,14 @@ import { CHAINS, chainFromEnv, type ChainConfig, type ChainKey } from "../shared
 import type { Assert, Equal } from "../shared/exact"
 import { marketPreferences } from "../shared/market"
 import { isNearAccountId } from "../shared/near"
-import { seedFromSecret } from "../shared/nearKey"
+import { accountFromSecret, seedFromSecret } from "../shared/nearKey"
 import { activeChainKey } from "./activeChain"
 
 /** Secrets and machine settings. Nothing here is hardcoded. */
 export type Env = {
   treasuryPrivateKey: string
   nearTreasuryPrivateKey: string
+  nearTreasuryAccount: string
   rpcUrl: string
   usdcAddress: string
   tokenAccount: string
@@ -23,6 +24,7 @@ export type Env = {
 type EnvSource = {
   TREASURY_PRIVATE_KEY?: string
   NEAR_TREASURY_PRIVATE_KEY?: string
+  NEAR_TREASURY_ACCOUNT?: string
   RPC_URL?: string
   USDC_ADDRESS?: string
   TOKEN_ACCOUNT?: string
@@ -70,6 +72,13 @@ export function parseTokenAccount(value: unknown): string {
   return raw
 }
 
+export function parseNearTreasuryAccount(value: unknown): string {
+  const raw = unset(value)
+  if (raw === undefined) return ""
+  if (typeof raw !== "string" || !isNearAccountId(raw)) throw new Error("NEAR_TREASURY_ACCOUNT must be a NEAR account id")
+  return raw
+}
+
 const treasuryKey = z.preprocess((value) => {
   const raw = unset(value)
   if (typeof raw === "string" && raw.startsWith("ed25519:")) return parseTreasuryKey(raw, "near-testnet")
@@ -88,6 +97,7 @@ const address = z.preprocess((value) => {
 const envSchema = z.object({
   treasuryPrivateKey: treasuryKey,
   nearTreasuryPrivateKey: nearTreasuryKey,
+  nearTreasuryAccount: z.preprocess((value) => parseNearTreasuryAccount(value), z.string()),
   rpcUrl: z.preprocess((value) => {
     const raw = unset(value)
     return raw === undefined ? "" : raw
@@ -119,6 +129,7 @@ export function loadEnv(env: EnvSource = process.env): Env {
   return envSchema.parse({
     treasuryPrivateKey: env.TREASURY_PRIVATE_KEY,
     nearTreasuryPrivateKey: env.NEAR_TREASURY_PRIVATE_KEY,
+    nearTreasuryAccount: env.NEAR_TREASURY_ACCOUNT,
     rpcUrl: env.RPC_URL,
     usdcAddress: env.USDC_ADDRESS,
     tokenAccount: env.TOKEN_ACCOUNT,
@@ -143,6 +154,10 @@ export function nearTreasurySecret(env: Env = loadEnv()): string {
   if (env.nearTreasuryPrivateKey) return env.nearTreasuryPrivateKey
   if (env.treasuryPrivateKey.startsWith("ed25519:")) return env.treasuryPrivateKey
   return ""
+}
+
+export async function nearTreasuryId(env: Env = loadEnv()): Promise<string | null> {
+  return env.nearTreasuryAccount || accountFromSecret(nearTreasurySecret(env))
 }
 
 /** A market is on only when its keys are filled. `CHAIN` does not turn the other one off. */

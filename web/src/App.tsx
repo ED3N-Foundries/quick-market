@@ -1019,6 +1019,7 @@ export function App({
       {briefOpen && (
         <TestnetBrief
           chainName={market.config.chainName}
+          tokenLabel={market.config.tokenLabel}
           grantMicros={market.config.grantMicros}
           grantIntervalMs={market.config.grantIntervalMs}
           onDismiss={() => {

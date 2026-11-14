@@ -3,11 +3,11 @@ import { join } from "node:path"
 import { createPublicClient, createWalletClient, http, type Abi, type Address, type Hex } from "viem"
 import { baseSepolia } from "viem/chains"
 import { formatYocto } from "../shared/near"
-import { accountFromSecret, generateNearSecret } from "../shared/nearKey"
+import { generateNearSecret } from "../shared/nearKey"
 import { loadMarket, marketPreferences } from "../shared/market"
 import { mintToTreasury, treasuryAccount } from "../server/custody"
 import { getDb } from "../server/db"
-import { loadEnv, nearTreasurySecret } from "../server/env"
+import { loadEnv, nearTreasuryId, nearTreasurySecret } from "../server/env"
 import { nearRpcUrl, readNearBalance, readTokenMetadata, sendNearActions } from "../server/near"
 import { encodeDeploy, encodeFunctionCall, encodeTransfer, jsonArgs } from "../server/nearTx"
 import { cutoverAmount } from "../server/grant"
@@ -147,7 +147,7 @@ async function deployNear() {
     process.exit(1)
   }
   const treasuryKey = nearTreasurySecret(env)
-  const treasury = await accountFromSecret(treasuryKey)
+  const treasury = await nearTreasuryId(env)
   if (!treasury) {
     console.error("NEAR_TREASURY_PRIVATE_KEY must be an ed25519 NEAR secret key")
     process.exit(1)
