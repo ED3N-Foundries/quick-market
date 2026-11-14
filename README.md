@@ -69,7 +69,7 @@ The command deploys the committed WASM and writes `TOKEN_ACCOUNT` and `TOKEN_PRI
 bun run demo
 ```
 
-This one command starts the market, a NEAR-only swarm capped at 30 online wallets, and the health page. It reuses the market `.env`; do not create or synchronize agent and health `.env` files.
+This one command starts the market, a NEAR-only swarm capped at 30 online wallets, and the health page. It pins `CHAIN` to `near-testnet` regardless of the `CHAIN` value left in `.env`. It reuses the market `.env`; do not create or synchronize agent and health `.env` files.
 
 | Service | URL | Expected result |
 |---|---|---|
@@ -90,7 +90,7 @@ curl -sf http://127.0.0.1:3011/api/health
 curl -sf 'http://127.0.0.1:3101/api/check?fresh=1'
 ```
 
-You should see NEAR listed in `markets`, a live feed in `state`, treasury balances in `funding`, agent activity in the stats response, and successful critical checks in health. Then connect a NEAR testnet wallet on the game page and repeat the hosted-demo buy/settle/withdraw loop.
+You should see NEAR listed in `markets`, a live feed in `state`, treasury balances in `funding`, agent activity in the stats response, and successful critical checks in health. Agent judges without a wallet can stop here: bot rows in the pools, accumulating settled rounds, and the agent stats response already prove the loop. To drive it directly, use an MCP client (Streamable HTTP handshake) against `/mcp?chain=near-testnet` per the [agent and MCP flow](ARCHITECTURE.md#agent-and-mcp-flow); raw `tools/call` posts without a session will not answer. A NEAR testnet wallet connect on the game page is optional; it repeats the hosted-demo buy/settle/withdraw loop.
 
 ## Agents
 

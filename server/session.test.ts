@@ -192,6 +192,8 @@ test("a NEAR sign-in names the check that failed", async () => {
 test("a NEAR account key that is not on the account says so", async () => {
   const previousRpc = process.env.RPC_URL
   const previousChain = process.env.CHAIN
+  const previousSlots = [1, 2, 3, 4].map((slot) => process.env[`NEAR_RPC_${slot}`])
+  for (let slot = 1; slot <= 4; slot++) delete process.env[`NEAR_RPC_${slot}`]
   const server = Bun.serve({
     port: 0,
     fetch() {
@@ -221,12 +223,18 @@ test("a NEAR account key that is not on the account says so", async () => {
     process.env.CHAIN = previousChain
     if (previousRpc === undefined) delete process.env.RPC_URL
     else process.env.RPC_URL = previousRpc
+    previousSlots.forEach((value, index) => {
+      if (value === undefined) delete process.env[`NEAR_RPC_${index + 1}`]
+      else process.env[`NEAR_RPC_${index + 1}`] = value
+    })
   }
 })
 
 test("a refused NEAR access-key check is a busy sign-in", async () => {
   const previousRpc = process.env.RPC_URL
   const previousChain = process.env.CHAIN
+  const previousSlots = [1, 2, 3, 4].map((slot) => process.env[`NEAR_RPC_${slot}`])
+  for (let slot = 1; slot <= 4; slot++) delete process.env[`NEAR_RPC_${slot}`]
   const server = Bun.serve({
     port: 0,
     fetch() {
@@ -253,5 +261,9 @@ test("a refused NEAR access-key check is a busy sign-in", async () => {
     process.env.CHAIN = previousChain
     if (previousRpc === undefined) delete process.env.RPC_URL
     else process.env.RPC_URL = previousRpc
+    previousSlots.forEach((value, index) => {
+      if (value === undefined) delete process.env[`NEAR_RPC_${index + 1}`]
+      else process.env[`NEAR_RPC_${index + 1}`] = value
+    })
   }
 }, 20_000)
