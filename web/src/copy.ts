@@ -199,6 +199,9 @@ export type Copy = {
   phantomConnectFailed: string
   errorDetails: string
   stepOf: (current: number, total: number) => string
+  nearPaused: string
+  nearRetry: (wait: string) => string
+  nearContinues: string
 }
 
 const en: Copy = {
@@ -407,6 +410,9 @@ const en: Copy = {
   phantomConnectFailed: "Phantom connection failed",
   errorDetails: "Error details",
   stepOf: (current, total) => `Step ${current} of ${total}`,
+  nearPaused: "NEAR funding paused — RPC cooling.",
+  nearRetry: (wait) => `Try again in ~${wait}.`,
+  nearContinues: "Trading and settlement continue.",
 }
 
 const zhTW: Copy = {
@@ -615,6 +621,9 @@ const zhTW: Copy = {
   phantomConnectFailed: "Phantom 連線失敗",
   errorDetails: "錯誤詳情",
   stepOf: (current, total) => `步驟 ${current}／${total}`,
+  nearPaused: "NEAR 資金暫停 — RPC 冷卻中。",
+  nearRetry: (wait) => `約 ${wait} 後再試一次。`,
+  nearContinues: "交易和結算不受影響。",
 }
 
 export function copy(lang: Lang): Copy {
@@ -663,6 +672,7 @@ const zhFixed: Record<string, string> = {
   "Server error": "伺服器錯誤",
   "The browser blocked Meteor's sign-in window. Allow popups, then tap again.": "瀏覽器封鎖了 Meteor 的登入視窗。請允許彈出視窗後再點一次。",
   "NEAR is busy. Try again.": "NEAR 忙碌，請再試一次。",
+  "NEAR funding paused — RPC cooling. Try again shortly.": "NEAR 資金暫停 — RPC 冷卻中，請稍後再試。",
 }
 
 /** Translate a stored English sentence. Unknown text stays as it is. */

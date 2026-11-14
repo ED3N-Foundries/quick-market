@@ -29,7 +29,10 @@ export type ChainRuntime = {
   withdraw: (
     address: string,
     amount: number,
-  ) => Promise<{ ok: true; you: You; txHash: string } | { ok: false; error: string; you?: You }>
+  ) => Promise<
+    | { ok: true; you: You; txHash: string }
+    | { ok: false; error: string; you?: You; code?: string; retryAfterMs?: number; coolingUntil?: number | null }
+  >
   treasuryReport: () => TreasuryReport | null
 }
 

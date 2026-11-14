@@ -7,7 +7,7 @@ import { activeChainKey } from "./activeChain"
 import { chainConfig } from "./env"
 import { getDb } from "./db"
 import { normalizeAccount } from "./money"
-import { accessKeyOnAccount, nearRpcBusy } from "./near"
+import { accessKeyOnAccount, isNearCooling, nearRpcBusy } from "./near"
 
 export const NEAR_BUSY = "NEAR is busy. Try again."
 import { ensureUser, youFor, type You } from "./rounds"
@@ -100,7 +100,7 @@ export async function openSession(input: {
         publicKey: input.publicKey,
       })
     } catch (error) {
-      if (nearRpcBusy(error)) return { ok: false, error: NEAR_BUSY }
+      if (isNearCooling(error) || nearRpcBusy(error)) return { ok: false, error: NEAR_BUSY }
       throw error
     }
     if (ok !== true) return { ok: false, error: nearSignError(ok) }

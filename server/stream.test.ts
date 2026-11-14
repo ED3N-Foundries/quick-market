@@ -47,6 +47,7 @@ function stream(results: AccountResult[] = []) {
     handoff: () => null,
     youFor: () => you,
     accountResults: () => results,
+    nearFunding: () => ({ cooling: false, retryAfterMs: 0, untilMs: null, reason: null }),
   })
 }
 
@@ -154,6 +155,7 @@ test("settlement does not build an account message for a quiet address", () => {
       return you
     },
     accountResults: () => [],
+    nearFunding: () => ({ cooling: false, retryAfterMs: 0, untilMs: null, reason: null }),
   })
   market.settled(
     {

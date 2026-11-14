@@ -9,11 +9,13 @@ import { NEP413_RECIPIENT, bs58, generateNearSecret, nep413Bytes, seedFromSecret
 import * as ed from "@noble/ed25519"
 import { useDatabase } from "./db"
 import { NEAR_BUSY, openSession, readSessionToken } from "./session"
+import { resetNearRpcQuiet } from "./near"
 
 
 beforeEach(() => {
   marketPreferences.chain = "base-sepolia"
   process.env.CHAIN = "base-sepolia"
+  resetNearRpcQuiet()
   useDatabase(":memory:")
 })
 

@@ -29,12 +29,16 @@ import {
   type BuyInOrder,
 } from "./rounds"
 import { endSessionToken, openSession, readSessionToken } from "./session"
+import { NEAR_COOLDOWN_CODE, nearCooldownStatus } from "./near"
 
 export type McpDeps = {
   markets: () => { defaultChainKey: ChainKey; markets: PublicConfig[] }
   grantsOpen: () => boolean
   mint: (amount: number, report?: (progress: { txHash?: string; seen: number }) => void) => Promise<void>
-  withdraw: (address: string, amount: number) => Promise<{ ok: boolean; error?: string; you?: unknown; txHash?: string }>
+  withdraw: (
+    address: string,
+    amount: number,
+  ) => Promise<{ ok: boolean; error?: string; you?: unknown; txHash?: string; code?: string; retryAfterMs?: number; coolingUntil?: number | null }>
   publish: () => void
 }
 
@@ -78,8 +82,20 @@ function textResult(body: Record<string, unknown>, isError = false) {
   }
 }
 
-function fail(error: string, code?: string) {
-  return textResult(code ? { error, code } : { error }, true)
+function fail(error: string, code?: string, extra?: Record<string, unknown>) {
+  return textResult(code ? { error, code, ...extra } : { error }, true)
+}
+
+function nearCooling(): { error: string; code: string; retryAfterMs: number; coolingUntil: number | null } | null {
+  if (activeChainKey() !== "near-testnet") return null
+  const status = nearCooldownStatus()
+  if (!status.cooling) return null
+  return {
+    error: "NEAR funding paused — RPC cooling. Try again shortly.",
+    code: NEAR_COOLDOWN_CODE,
+    retryAfterMs: status.retryAfterMs,
+    coolingUntil: status.untilMs,
+  }
 }
 
 function rpcError(status: number, message: string): Response {
@@ -143,6 +159,7 @@ function grantView(address: string, now = Date.now()) {
 
 function beginGrant(deps: McpDeps, address: string) {
   if (!deps.grantsOpen()) return
+  if (nearCooling()) return
   const you = youFor(address)
   if (!grantOnSignIn(you?.grantAt ?? null)) return
   const settings = grantSettings()
@@ -498,10 +515,20 @@ function registerTools(server: McpServer, accounts: Map<string, Bound>, deps: Mc
     async (args) => {
       const picked = pickAccount(accounts, args.address)
       if (!picked.ok) return fail(picked.error)
+      const cooling = nearCooling()
+      if (cooling) return fail(cooling.error, cooling.code, { retryAfterMs: cooling.retryAfterMs, coolingUntil: cooling.coolingUntil })
       const amount = args.amountMicros !== undefined ? (Number.isSafeInteger(args.amountMicros) && args.amountMicros > 0 ? args.amountMicros : null) : parseMicros(args.amount)
       if (amount === null) return fail("Amount is invalid")
       const result = await deps.withdraw(picked.bound.address, amount)
-      if (!result.ok) return fail(result.error ?? "Withdrawal failed")
+      if (!result.ok) {
+        if (result.code === NEAR_COOLDOWN_CODE) {
+          return fail(result.error ?? "NEAR funding paused — RPC cooling. Try again shortly.", NEAR_COOLDOWN_CODE, {
+            retryAfterMs: result.retryAfterMs ?? 0,
+            coolingUntil: result.coolingUntil ?? null,
+          })
+        }
+        return fail(result.error ?? "Withdrawal failed")
+      }
       const you = youFor(picked.bound.address)
       return textResult({
         address: picked.bound.address,
@@ -517,6 +544,8 @@ async function claimGrant(accounts: Map<string, Bound>, deps: McpDeps, raw: stri
   if (!deps.grantsOpen()) return fail("Grants are only on testnet.")
   const picked = pickAccount(accounts, raw)
   if (!picked.ok) return fail(picked.error)
+  const cooling = nearCooling()
+  if (cooling) return fail(cooling.error, cooling.code, { retryAfterMs: cooling.retryAfterMs, coolingUntil: cooling.coolingUntil })
   const address = picked.bound.address
   const now = Date.now()
   const settings = grantSettings()

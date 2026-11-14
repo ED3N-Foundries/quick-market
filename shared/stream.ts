@@ -51,6 +51,13 @@ export type GrantPending = {
   confirmations: number
 }
 
+export type NearFunding = {
+  cooling: boolean
+  retryAfterMs: number
+  untilMs: number | null
+  reason: string | null
+}
+
 export type You = {
   address: string
   balanceMicros: number
@@ -108,6 +115,7 @@ export type SnapshotMessage = PublicFrame & {
   tape: WireTapePoint[]
   you?: You | null
   results?: AccountResult[]
+  nearFunding?: NearFunding
 }
 
 export type TickMessage = PublicFrame & {

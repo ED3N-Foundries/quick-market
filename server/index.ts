@@ -1,6 +1,6 @@
 import { dirname, join } from "node:path"
 import type { ChainKey } from "../shared/chain"
-import { loadMarket, requireExplicitChain, TICK_MS, type PublicConfig } from "../shared/market"
+import { loadMarket, marketPreferences, requireExplicitChain, TICK_MS, type PublicConfig } from "../shared/market"
 import { feeBps, marketMs, MIN_STAKE_MICROS, priceSource, viewMs, windowMs, type PriceSource } from "./config"
 import { nextMarketAt, planWake, rollMarketAt, runWake, type MarketTiming } from "./clock"
 import { takeTick } from "./tick"
@@ -47,6 +47,7 @@ import {
   tickerNow,
   youFor,
 } from "./rounds"
+import { nearCooldownStatus } from "./near"
 
 
 const runtimes = new Map<ChainKey, ChainRuntime>()
@@ -146,6 +147,14 @@ const stream = new MarketStream({
   handoff: handoffNow,
   youFor: (address) => youFor(address),
   accountResults: (address) => accountResults(address),
+  nearFunding: () => {
+    try {
+      if (activeChainKey() !== "near-testnet") return { cooling: false, retryAfterMs: 0, untilMs: null, reason: null }
+      return nearCooldownStatus()
+    } catch {
+      return { cooling: false, retryAfterMs: 0, untilMs: null, reason: null }
+    }
+  },
 })
 
 const runtime = globalThis as unknown as {
@@ -345,6 +354,7 @@ bindHttp({
         token: current.token,
         tokenLabel: current.tokenLabel,
         near: current.treasuryReport(),
+        cooling: key === "near-testnet" ? nearCooldownStatus() : null,
       }
     }),
     db: getDb(),
