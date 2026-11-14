@@ -77,10 +77,9 @@ test("sign-in status names Phantom, then the signature, then the grant", () => {
   expect(loginStepState(2, "session")).toBe("now")
   expect(loginStepState(1, "session")).toBe("done")
   expect(grantWaitStatus()).toBe("Minting the grant on Base Sepolia. This can take a bit.")
-  expect(grantWaitStatus({ seen: 0, needed: 3 })).toBe("Minting the grant on Base Sepolia. This can take a bit.")
-  expect(grantWaitStatus({ seen: 0, needed: 3 }, "en", "near-testnet")).toBe("Minting the grant on NEAR Testnet. This can take a bit.")
-  expect(grantWaitStatus({ seen: 2, needed: 3 })).toBe("Waiting on 1 confirmation")
-  expect(grantWaitStatus({ seen: 3, needed: 3 })).toBe("Confirmations in. Crediting the balance.")
+  expect(grantWaitStatus({ seen: 0, needed: 1 })).toBe("Minting the grant on Base Sepolia. This can take a bit.")
+  expect(grantWaitStatus({ seen: 0, needed: 1 }, "en", "near-testnet")).toBe("Minting the grant on NEAR Testnet. This can take a bit.")
+  expect(grantWaitStatus({ seen: 1, needed: 1 })).toBe("Confirmations in. Crediting the balance.")
 })
 
 test("a matching session does not prompt again", () => {

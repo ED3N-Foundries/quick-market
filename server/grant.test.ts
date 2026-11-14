@@ -202,7 +202,7 @@ test("a grant that finishes without a hash is done", async () => {
   expect(settled).toEqual({ kind: "done", value: false })
 })
 
-test("grant progress moves from zero to the hash and then up to three", async () => {
+test("grant progress moves from zero to the hash and stays at one confirmation", async () => {
   const hash = `0x${"cd".repeat(32)}`
   let release: () => void = () => {}
   const gate = new Promise<void>((resolve) => {
@@ -217,15 +217,15 @@ test("grant progress moves from zero to the hash and then up to three", async ()
     mint: async (_amount, progress) => {
       expect(youFor(who)?.grantPending).toEqual({ startedAt: 0, txHash: null, seen: 0, confirmations: MINT_CONFIRMATIONS })
       progress({ txHash: hash, seen: 1 })
-      progress({ seen: 2 })
       progress({ seen: 1 })
-      expect(youFor(who)?.grantPending?.seen).toBe(2)
+      progress({ seen: 1 })
+      expect(youFor(who)?.grantPending?.seen).toBe(1)
       await gate
-      progress({ seen: 3 })
+      progress({ seen: 1 })
     },
   })
   await new Promise((resolve) => setTimeout(resolve, 0))
-  expect(youFor(who)?.grantPending?.seen).toBe(2)
+  expect(youFor(who)?.grantPending?.seen).toBe(1)
   expect(youFor(who)?.grantPending?.txHash).toBe(hash)
   release()
   expect(await done).toBe(true)
@@ -278,9 +278,9 @@ test("a resumed hash is watched and credited without minting again", async () =>
     amount: 100_000_000,
     watch: async (got, report) => {
       watched = got
-      report({ seen: 2 })
-      expect(youFor(who)?.grantPending?.seen).toBe(2)
-      report({ seen: 3 })
+      report({ seen: 1 })
+      expect(youFor(who)?.grantPending?.seen).toBe(1)
+      report({ seen: 1 })
     },
   })
   expect(watched).toBe(hash)

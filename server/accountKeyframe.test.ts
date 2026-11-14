@@ -179,7 +179,7 @@ test("a grant meter bump, then a credit, arrives as pending and then as the clea
       amount: 100 * USDC,
       intervalMs: 60_000,
       mint: async (_amount, report) => {
-        report({ txHash: hash, seen: 2 })
+        report({ txHash: hash, seen: 1 })
         await gate
       },
     })
@@ -191,7 +191,7 @@ test("a grant meter bump, then a credit, arrives as pending and then as the clea
         type: "account",
         you: expect.objectContaining({
           balanceMicros: 0,
-          grantPending: { startedAt: 0, txHash: hash, seen: 2, confirmations: MINT_CONFIRMATIONS },
+          grantPending: { startedAt: 0, txHash: hash, seen: 1, confirmations: MINT_CONFIRMATIONS },
         }),
       }),
     ])

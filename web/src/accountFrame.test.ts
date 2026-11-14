@@ -20,7 +20,7 @@ test("an account frame updates balance, grant, and buy-ins, and leaves a held bu
   const incoming = you({
     balanceMicros: 12_000_000,
     grantAt: 50,
-    grantPending: { startedAt: 40, txHash: "0xabc", seen: 1, confirmations: 3 },
+    grantPending: { startedAt: 40, txHash: "0xabc", seen: 1, confirmations: 1 },
     openBuyIns: [{ roundId: 4, side: "down", stakeMicros: 2_000_000 }],
   })
   expect(mergeAccountYou(before, incoming, null)).toEqual(incoming)

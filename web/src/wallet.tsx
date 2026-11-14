@@ -87,7 +87,7 @@ function sessionYou(value: unknown): You | null {
         startedAt,
         txHash: typeof pending.txHash === "string" ? pending.txHash : null,
         seen: typeof seen === "number" && Number.isSafeInteger(seen) ? seen : 0,
-        confirmations: typeof confirmations === "number" && Number.isSafeInteger(confirmations) ? confirmations : 3,
+        confirmations: typeof confirmations === "number" && Number.isSafeInteger(confirmations) ? confirmations : 1,
       }
     }
   }

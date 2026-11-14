@@ -1,5 +1,5 @@
-/** Blocks a grant mint must sit before the ledger is credited. */
-export const MINT_CONFIRMATIONS = 3
+/** Blocks a grant mint must sit before the ledger is credited. One confirmation is enough on both chains. */
+export const MINT_CONFIRMATIONS = 1
 
 /**
  * How long a mint may wait for those blocks.
@@ -20,13 +20,10 @@ export function confirmationDepth(head: bigint | null, minedAt: bigint | null): 
 }
 
 /**
- * Shared grant meter. A known hash is already step 1, before the first block.
- * Later steps are the block depth, capped at the confirmation target.
+ * Shared grant meter. One confirmation is enough, so a known hash is done.
  */
-export function grantStep(depth: number, hasHash: boolean): number {
-  if (!hasHash) return 0
-  const blocks = Number.isFinite(depth) ? Math.max(0, Math.floor(depth)) : 0
-  return Math.max(1, Math.min(MINT_CONFIRMATIONS, blocks))
+export function grantStep(_depth: number, hasHash: boolean): number {
+  return hasHash ? MINT_CONFIRMATIONS : 0
 }
 
 export function mintReceiptWait(hash: `0x${string}`) {

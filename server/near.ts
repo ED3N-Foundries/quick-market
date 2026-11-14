@@ -784,25 +784,18 @@ function nearTxFailed(result: NearGrantStatus): boolean {
 }
 
 /**
- * Step 1 is a known hash. Execution is step 2. Final is step 3.
- * A success value with no finality field is already executed.
+ * One confirmation is enough. A known hash is step 1 and done.
+ * Execution and finality both report the same single step.
  */
 export function nearGrantSeen(result: NearGrantStatus | null): { failed: boolean; seen: number } {
   if (!result) return { failed: false, seen: 1 }
   if (nearTxFailed(result)) return { failed: true, seen: 1 }
-  const level = typeof result.final_execution_status === "string" ? result.final_execution_status : ""
-  if (level === "FINAL") return { failed: false, seen: MINT_CONFIRMATIONS }
-  if (level === "EXECUTED" || level === "EXECUTED_OPTIMISTIC") return { failed: false, seen: MINT_CONFIRMATIONS - 1 }
-  const status = result.status
-  if (status && typeof status === "object" && ("SuccessValue" in status || "SuccessReceiptId" in status)) {
-    return { failed: false, seen: MINT_CONFIRMATIONS - 1 }
-  }
   return { failed: false, seen: 1 }
 }
 
 /**
- * One poll of a grant. Execution credits it. Finality is not another wait.
- * A timeout before execution does not credit.
+ * One confirmation credits the grant. A known hash is done; finality is not another wait.
+ * A timeout before the hash is known does not credit.
  */
 export function nextNearGrantWatch(input: {
   elapsedMs: number
@@ -813,8 +806,8 @@ export function nextNearGrantWatch(input: {
   const step = nearGrantSeen(input.status)
   if (step.failed) return { seen: input.seen, done: false, failed: true }
   const seen = Math.max(input.seen, step.seen)
-  // Execution credits the grant. Finality is not another wait.
-  if (seen >= MINT_CONFIRMATIONS - 1) return { seen: MINT_CONFIRMATIONS, done: true, failed: false }
+  // One confirmation credits the grant. Finality is not another wait.
+  if (seen >= MINT_CONFIRMATIONS) return { seen: MINT_CONFIRMATIONS, done: true, failed: false }
   if (input.elapsedMs >= input.deadlineMs) return { seen, done: false, failed: true }
   return { seen, done: false, failed: false }
 }

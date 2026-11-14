@@ -3,17 +3,16 @@ import { MINT_CONFIRMATIONS, MINT_RECEIPT_TIMEOUT_MS } from "../shared/mint"
 import { nearExecutionFailed, nearGrantSeen, nearNonceRejected, nearRpcBusy, nextNearGrantWatch, nonceCacheFresh, signingKeyQuery } from "./near"
 
 const deadline = MINT_RECEIPT_TIMEOUT_MS
-const executed = MINT_CONFIRMATIONS - 1
 
-test("grant status maps inclusion, execution, finality, and failure", () => {
+test("grant status maps inclusion, execution, finality, and failure to one confirmation", () => {
   expect(nearGrantSeen(null)).toEqual({ failed: false, seen: 1 })
   expect(nearGrantSeen({})).toEqual({ failed: false, seen: 1 })
   expect(nearGrantSeen({ final_execution_status: "INCLUDED" })).toEqual({ failed: false, seen: 1 })
-  expect(nearGrantSeen({ final_execution_status: "EXECUTED_OPTIMISTIC" })).toEqual({ failed: false, seen: executed })
-  expect(nearGrantSeen({ final_execution_status: "EXECUTED" })).toEqual({ failed: false, seen: executed })
-  expect(nearGrantSeen({ final_execution_status: "FINAL" })).toEqual({ failed: false, seen: MINT_CONFIRMATIONS })
+  expect(nearGrantSeen({ final_execution_status: "EXECUTED_OPTIMISTIC" })).toEqual({ failed: false, seen: 1 })
+  expect(nearGrantSeen({ final_execution_status: "EXECUTED" })).toEqual({ failed: false, seen: 1 })
+  expect(nearGrantSeen({ final_execution_status: "FINAL" })).toEqual({ failed: false, seen: 1 })
   expect(nearGrantSeen({ status: { Failure: { ActionError: "mint failed" } } })).toEqual({ failed: true, seen: 1 })
-  expect(nearGrantSeen({ status: { SuccessValue: "" } })).toEqual({ failed: false, seen: executed })
+  expect(nearGrantSeen({ status: { SuccessValue: "" } })).toEqual({ failed: false, seen: 1 })
   expect(nearGrantSeen({ status: "NotStarted" as unknown as { Failure?: unknown }, final_execution_status: "INCLUDED" })).toEqual({
     failed: false,
     seen: 1,
@@ -31,7 +30,7 @@ test("an included NEAR reply is not an execution failure", () => {
   })
 })
 
-test("a grant finishes when the mint has executed and times out before that", () => {
+test("a grant finishes on the first confirmation and times out without a hash", () => {
   expect(
     nextNearGrantWatch({ elapsedMs: 0, deadlineMs: deadline, seen: 1, status: { final_execution_status: "FINAL" } }),
   ).toEqual({ seen: MINT_CONFIRMATIONS, done: true, failed: false })
@@ -41,13 +40,13 @@ test("a grant finishes when the mint has executed and times out before that", ()
   expect(
     nextNearGrantWatch({ elapsedMs: 0, deadlineMs: deadline, seen: 1, status: { final_execution_status: "EXECUTED_OPTIMISTIC" } }),
   ).toEqual({ seen: MINT_CONFIRMATIONS, done: true, failed: false })
-  expect(nextNearGrantWatch({ elapsedMs: deadline, deadlineMs: deadline, seen: executed, status: null })).toEqual({
+  expect(nextNearGrantWatch({ elapsedMs: deadline, deadlineMs: deadline, seen: 0, status: null })).toEqual({
     seen: MINT_CONFIRMATIONS,
     done: true,
     failed: false,
   })
-  expect(nextNearGrantWatch({ elapsedMs: deadline, deadlineMs: deadline, seen: 1, status: null })).toEqual({
-    seen: 1,
+  expect(nextNearGrantWatch({ elapsedMs: 0, deadlineMs: deadline, seen: 0, status: { status: { Failure: { ActionError: "x" } } } })).toEqual({
+    seen: 0,
     done: false,
     failed: true,
   })

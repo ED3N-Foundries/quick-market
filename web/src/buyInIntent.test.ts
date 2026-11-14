@@ -31,7 +31,7 @@ test("a same-side add increases the open stake", () => {
 })
 
 test("a bet keeps the in-flight grant", () => {
-  const pending = { startedAt: 5, txHash: null, seen: 0, confirmations: 3 }
+  const pending = { startedAt: 5, txHash: null, seen: 0, confirmations: 1 }
   const next = applyBuyIn(you({ grantPending: pending }), { side: "up", stakeMicros: 1_000_000, roundId: 3 })
   expect(next.grantPending).toEqual(pending)
 })
