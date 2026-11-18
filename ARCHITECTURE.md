@@ -37,20 +37,17 @@ The game is also available as separate processes: `bun run dev` starts only the 
 
 ## Optimization
 
-The current release removes the startup active-five aggregate, resets the local round epoch, adds a fresh-database path that keeps wallet identities and session tokens, and adds fast `resume_sessions` repair. The items below are still unaddressed, roughly in priority order.
+The current release removes the startup active-five aggregate, resets the local round epoch, adds a fresh-database path that keeps wallet identities and session tokens, and adds fast `resume_sessions` repair. The reliability hotfix adds indexed open-round reads, a bounded feed handoff with an all-down pin reset, and a once-per-second agent write batch. The items below are still unaddressed, roughly in priority order.
 
 ### Reliability and market continuity
 
 - **Every venue is connected and parsed all the time.** On constrained machines `quick-market` sits near one CPU core; JSON parsing and reconnect churn are the likely cost. Keep the active venue plus two standbys hot and warm the rest only when a switch fails, or move feed parsing off the main event loop. Profile the `hangs` samples after that.
-- **`board()` has no `ends_at` index.** It scans the chain’s rounds for `ends_at > now - TAPE_MS`. Add `rounds(chain_key, ends_at)` (or a partial index) before increasing traffic.
 - **Snapshots and tape payloads are rebuilt frequently.** Cap or sample the tape tail and avoid rebuilding unchanged bands. The agent only needs the recent tape and the open book.
-- **The fixed feed handoff pauses the whole market.** A per-venue readiness signal (first print after adoption) would resume buy-ins as soon as the new venue is actually live.
+- **The fixed feed handoff pauses the whole market.** The wait is now bounded to 30 seconds and an all-down reset reconnects once, but a per-venue readiness signal (first print after adoption) would resume buy-ins as soon as the new venue is actually live.
 
 ### Agent startup and local database
 
 - **Fresh-database reset is a manual one-off.** Add a documented reset path that creates the new file, copies only `wallets`, sets `agent_swarm_v1`, initializes `settle_cursor`, and deletes the legacy `swarm.sqlite`. The current reset was performed by hand.
-- **Startup re-derives every NEAR key.** `growNearKeys` validates all 12,000 ed25519 keys on boot even though the key file already carries the implicit accounts. Cache the derived addresses or validate lazily on first use.
-- **The runner writes `meta` four extra times per lane every 250 ms** for `book_join`, `book_at`, `last_error`, and `bound`. Lower the diagnostic cadence to about once a second and persist wallets only on real changes to reduce WAL churn.
 - **No compaction or vacuum policy.** Rolling stake deletion keeps the row count bounded, but the file and WAL fragment. Add an incremental-vacuum or periodic-checkpoint job, or run `VACUUM` in the quiet window.
 - **Re-enabling active-five needs an index or aggregate.** The weekly `GROUP BY` over `stakes` caused the startup OOM. If it returns, use `stakes(chain_key, address, round_id)` or a rolling weekly table, exclude the prior epoch, and never run it on the startup path.
 - **The fresh database starts with no replay history.** That is correct for a reset, but a short warm replay of recent settled rounds would restore the local win/loss memory sooner.

@@ -3,6 +3,8 @@ import tls from "node:tls"
 
 const GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 const MAX_FRAME = 1_000_000
+/** A pinned connect may wait behind the same event-loop stall as the native open arm. */
+const PINNED_CONNECT_MS = 10_000
 
 export type FeedHandlers = {
   onOpen: (send: (text: string) => void) => void
@@ -52,10 +54,38 @@ export function readFrame(buf: Buffer): Frame | null {
 const pinnedHosts = new Set<string>()
 const addressCache = new Map<string, { ips: string[]; exp: number }>()
 
+/** Only a real certificate/TLS validation failure earns the pinned DNS path. */
+const PIN_REASON = /certificate|cert_/i
+
+export function pinHostForFailure(reason: string): boolean {
+  return PIN_REASON.test(reason)
+}
+
+/** Clear fallback pins after every venue has been unreachable for a while. */
+export function resetFeedPins(): void {
+  pinnedHosts.clear()
+  addressCache.clear()
+}
+
+export function failureText(event: unknown): string {
+  if (typeof event === "string") return event
+  if (!event || typeof event !== "object") return ""
+  const row = event as { message?: unknown; reason?: unknown; code?: unknown; error?: unknown }
+  const error = row.error
+  const cause =
+    error instanceof Error
+      ? `${error.name}: ${error.message}`
+      : error && typeof error === "object" && "message" in error
+        ? String((error as { message?: unknown }).message ?? "")
+        : error
+  return [row.message, row.reason, cause, row.code].filter((part) => part != null && part !== "").map(String).join(" ")
+}
+
 /**
- * Public trade socket. Uses the platform client first. A handshake that fails
- * before open (a DNS answer whose certificate does not match) is retried against
- * addresses from public DNS, with the real hostname as the TLS server name.
+ * Public trade socket. Uses the platform client first. Only an explicit
+ * certificate/TLS validation failure switches the host to public DNS with the
+ * real hostname as the TLS server name. Timeouts and ordinary closes retry the
+ * native socket instead.
  */
 export function openFeed(url: string, handlers: FeedHandlers): FeedConn {
   let current: FeedConn = { close() {} }
@@ -76,11 +106,11 @@ export function openFeed(url: string, handlers: FeedHandlers): FeedConn {
   }
 }
 
-function openNative(url: string, handlers: FeedHandlers, onEarlyFail: () => void): FeedConn {
+function openNative(url: string, handlers: FeedHandlers, onPin: () => void): FeedConn {
   const ws = new WebSocket(url)
   let opened = false
   let handed = false
-  const early = () => {
+  const early = (reason: string) => {
     if (opened || handed) return
     handed = true
     try {
@@ -88,7 +118,10 @@ function openNative(url: string, handlers: FeedHandlers, onEarlyFail: () => void
     } catch {
       /* already closing */
     }
-    onEarlyFail()
+    // A timeout or an ordinary early close retries the native socket. Only a
+    // TLS name/certificate mismatch can benefit from pinned DNS addresses.
+    if (pinHostForFailure(reason)) onPin()
+    else handlers.onDown()
   }
   ws.addEventListener("open", () => {
     if (handed) return
@@ -100,11 +133,11 @@ function openNative(url: string, handlers: FeedHandlers, onEarlyFail: () => void
   ws.addEventListener("message", (event) => {
     if (!handed) handlers.onMessage(String(event.data))
   })
-  ws.addEventListener("error", early)
-  ws.addEventListener("close", () => {
+  ws.addEventListener("error", (event) => early(failureText(event)))
+  ws.addEventListener("close", (event) => {
     if (handed) return
     if (opened) handlers.onDown()
-    else early()
+    else early(failureText(event))
   })
   return {
     close() {
@@ -173,7 +206,7 @@ function openPinned(url: string, handlers: FeedHandlers, isClosed: () => boolean
         if (!ok) socket.destroy()
         resolve(ok)
       }
-      timer = setTimeout(() => settle(false), 2_000)
+      timer = setTimeout(() => settle(false), PINNED_CONNECT_MS)
       socket.on("error", () => {
         if (!upgraded) settle(false)
         else if (!dead) {

@@ -361,9 +361,10 @@ export function board(now = Date.now()): Board {
   reviveJoin(now)
   if (clock.joinId >= 0) ensureRound(clock.joinId)
   if (clock.liveId >= 0) ensureRound(clock.liveId)
-  const rows = getDb()
-    .query("SELECT * FROM rounds WHERE chain_key = ? AND ends_at > ? ORDER BY id ASC")
-    .all(activeChainKey(), now - TAPE_MS) as RoundRow[]
+  const rows = getDb().query(BOARD_ROUNDS_SQL).all(activeChainKey(), now - TAPE_MS) as RoundRow[]
+  // The tape window is small. Sorting here keeps the planner on rounds_ends
+  // instead of walking the primary key to satisfy ORDER BY id.
+  rows.sort((left, right) => left.id - right.id)
   return {
     blockStart: clock.blockStart,
     blockEnd: clock.blockEnd,
@@ -375,16 +376,29 @@ export function board(now = Date.now()): Board {
   }
 }
 
+/** Exported for the plan regression tests so they exercise the shipped SQL verbatim. */
+export const OPEN_BUY_INS_SQL = `SELECT r.id, b.side, b.stake_micros
+  FROM rounds r
+  JOIN buy_ins b
+    ON b.chain_key = r.chain_key AND b.round_id = r.id AND b.address = ?
+  WHERE r.chain_key = ? AND r.status = 'open'
+  ORDER BY r.id`
+
+export const BOARD_ROUNDS_SQL = "SELECT * FROM rounds WHERE chain_key = ? AND ends_at > ?"
+
+export const DUE_ROUNDS_SQL = "SELECT * FROM rounds WHERE chain_key = ? AND status = 'open' AND ends_at <= ? ORDER BY id ASC"
+
+export const STRIKE_ROUNDS_SQL = "SELECT * FROM rounds WHERE chain_key = ? AND status = 'open' AND strike IS NULL AND starts_at <= ?"
+
+export const OPEN_ROUNDS_SQL = "SELECT * FROM rounds WHERE chain_key = ? AND status = 'open' ORDER BY id ASC"
+
 function openBuyInsFor(address: string): OpenBuyIn[] {
-  const rows = getDb()
-    .query(
-      `SELECT b.round_id, b.side, b.stake_micros
-       FROM buy_ins b JOIN rounds r ON r.chain_key = b.chain_key AND r.id = b.round_id
-       WHERE b.chain_key = ? AND b.address = ? AND r.status = 'open'
-       ORDER BY b.round_id ASC`,
-    )
-    .all(activeChainKey(), address) as { round_id: number; side: Side; stake_micros: number }[]
-  return rows.map((row) => ({ roundId: row.round_id, side: row.side, stakeMicros: row.stake_micros }))
+  const rows = getDb().query(OPEN_BUY_INS_SQL).all(address, activeChainKey()) as {
+    id: number
+    side: Side
+    stake_micros: number
+  }[]
+  return rows.map((row) => ({ roundId: row.id, side: row.side, stakeMicros: row.stake_micros }))
 }
 
 function grantPendingFrom(pendingAt: number | null, txHash: string | null, seen: number | null): GrantPending | null {
@@ -605,9 +619,7 @@ function loadBets(roundId: number): BetRow[] {
 }
 
 function voidOpenRounds(): SettledEvent[] {
-  const open = getDb()
-    .query("SELECT * FROM rounds WHERE chain_key = ? AND status = 'open' ORDER BY id ASC")
-    .all(activeChainKey()) as RoundRow[]
+  const open = getDb().query(OPEN_ROUNDS_SQL).all(activeChainKey()) as RoundRow[]
   return open.map((round) => closeRound(round, true))
 }
 
@@ -714,18 +726,14 @@ export function advance(now: number): { settled: SettledEvent[]; broadcastRound:
 
   reviveJoin(now)
 
-  const due = getDb()
-    .query("SELECT * FROM rounds WHERE chain_key = ? AND status = 'open' AND ends_at <= ? ORDER BY id ASC")
-    .all(activeChainKey(), now) as RoundRow[]
+  const due = getDb().query(DUE_ROUNDS_SQL).all(activeChainKey(), now) as RoundRow[]
   for (const round of due) settled.push(closeRound(round))
   if (settled.length) broadcastRound = true
 
   if (clock.joinId >= 0) ensureRound(clock.joinId)
   if (clock.liveId >= 0) ensureRound(clock.liveId)
 
-  const locking = getDb()
-    .query("SELECT * FROM rounds WHERE chain_key = ? AND status = 'open' AND strike IS NULL AND starts_at <= ?")
-    .all(activeChainKey(), now) as RoundRow[]
+  const locking = getDb().query(STRIKE_ROUNDS_SQL).all(activeChainKey(), now) as RoundRow[]
   let awaitingPrice = false
   for (const round of locking) {
     const print = priceAt(round.starts_at, round.ends_at - round.starts_at)

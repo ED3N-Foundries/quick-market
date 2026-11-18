@@ -15,6 +15,7 @@ import {
   feedIdleMs,
   fillSwitch,
   formatSwing,
+  idleCheck,
   MOVE_MS,
   moveBreak,
   switchClockAt,
@@ -294,4 +295,47 @@ test("the switch log keeps five rows and an adopt fills the open one", () => {
   const filled = fillSwitch(log, "okx")
   expect(filled[0]).toEqual({ at: 6, from: "binance", to: "okx", reason: "r6" })
   expect(filled[1]?.to).toBe("bybit")
+})
+
+test("an idle timer that fired late gives a queued frame one more window", () => {
+  const armedAt = 10_000
+  const armedFor = OPEN_ARM_MS
+  // Fired on time with no frame: the socket is dead.
+  expect(idleCheck({ now: armedAt + armedFor + 20, armedAt, armedFor, heardAt: 0 })).toEqual({ action: "expire" })
+  // Fired early: wait for the remainder.
+  expect(idleCheck({ now: armedAt + 100, armedAt, armedFor, heardAt: 0 })).toEqual({
+    action: "rearm",
+    ms: armedFor - 100,
+  })
+  // A frame landed inside the window even though the timer callback was queued.
+  expect(idleCheck({ now: armedAt + armedFor + 20, armedAt, armedFor, heardAt: armedAt + 500 })).toEqual({
+    action: "rearm",
+    ms: armedFor,
+  })
+  // The event loop stalled past the deadline. Do not kill a socket that may
+  // already have a data callback waiting behind the timer.
+  expect(idleCheck({ now: armedAt + armedFor + 5_000, armedAt, armedFor, heardAt: 0 })).toEqual({
+    action: "rearm",
+    ms: armedFor,
+  })
+})
+
+test("a flat but live standby is adoptable", () => {
+  const now = 20_000
+  // Same price as the anchor: the old movedAt rule rejected this.
+  expect(pickStandby("binance", "100", [{ venue: "kraken", price: "100", at: now }], now)).toBe("kraken")
+  // A moving venue still outranks it when both are live and near.
+  expect(
+    pickStandby(
+      "binance",
+      "100",
+      [
+        { venue: "kraken", price: "100", at: now, swing: "0" },
+        { venue: "bybit", price: "100", at: now, swing: "8" },
+      ],
+      now,
+    ),
+  ).toBe("bybit")
+  // A venue that has not been heard from inside the window is not fresh.
+  expect(pickStandby("binance", "100", [{ venue: "okx", price: "100", at: now - STANDBY_MS - 1 }], now)).toBeNull()
 })

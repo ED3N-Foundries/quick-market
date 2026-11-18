@@ -6,6 +6,7 @@ import {
   nearCooldownStatus,
   nearCustodyIntervalMs,
   nearDepositBatch,
+  nearDepositLag,
   nearRpcGapMs,
   requestNearWithdraw,
   resetNearCooldownForTest,
@@ -125,4 +126,59 @@ test("a withdraw during cooling keeps the ledger and reports the code", async ()
   }
   const balance = withChain("near-testnet", () => youFor(sender)?.balanceMicros)
   expect(balance).toBe(5_000_000)
+})
+
+test("a background read keeps working during funding cooldown and never trips it", async () => {
+  resetNearRpcQuiet()
+  resetNearCooldownForTest()
+  let hits = 0
+  const server = Bun.serve({
+    port: 0,
+    fetch() {
+      hits += 1
+      return Response.json({ jsonrpc: "2.0", id: "quick-market", result: { height: 7 } })
+    },
+  })
+  try {
+    const endpoints = [{ url: `http://127.0.0.1:${server.port}/near`, timeoutMs: 500, sendTimeoutMs: 500, backoffMs: 1_000 }]
+    tripNearCooldown("funding only")
+    await expect(callNearRpc(endpoints, "block", {}, { background: true })).resolves.toEqual({ height: 7 })
+    expect(hits).toBe(1)
+    // A background success must not clear an active funding cooldown.
+    expect(nearCooldownStatus().cooling).toBe(true)
+  } finally {
+    server.stop(true)
+  }
+})
+
+test("a failing background walk does not trip the funding breaker", async () => {
+  resetNearRpcQuiet()
+  resetNearCooldownForTest()
+  const server = Bun.serve({
+    port: 0,
+    fetch() {
+      return new Response("busy", { status: 503 })
+    },
+  })
+  try {
+    const endpoints = [{ url: `http://127.0.0.1:${server.port}/near`, timeoutMs: 500, sendTimeoutMs: 500, backoffMs: 1_000 }]
+    await expect(callNearRpc(endpoints, "block", {}, { background: true })).rejects.toThrow()
+    expect(nearCooldownStatus().cooling).toBe(false)
+  } finally {
+    server.stop(true)
+  }
+})
+
+test("deposit lag reads the stored cursor without touching history", () => {
+  getDb()
+    .query("INSERT INTO meta (key, value) VALUES (?, ?)")
+    .run("near-testnet:near_deposit_height", "111326")
+  expect(nearDepositLag("near-testnet")).toEqual({
+    chain: "near-testnet",
+    cursor: 111326,
+    head: null,
+    lag: null,
+    batch: 12,
+    updatedAt: null,
+  })
 })

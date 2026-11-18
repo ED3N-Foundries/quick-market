@@ -22,7 +22,7 @@ import { oracleView } from "./oracle"
 import { orderLatency } from "./orderLatency"
 import { noteRequestError, snapshotProcessHealth } from "./processHealth"
 import { parseMicros } from "./money"
-import { NEAR_COOLDOWN_CODE, isNearCooling, nearCooldownStatus, nearRpcStatus, type NearFundingState } from "./near"
+import { NEAR_COOLDOWN_CODE, isNearCooling, nearCooldownStatus, nearDepositLag, nearRpcStatus, type NearFundingState } from "./near"
 import {
   board,
   feedStatus,
@@ -185,6 +185,7 @@ function getHealth(): Response {
     previous: proc?.previous ?? null,
     nearRpc: near.rpc,
     nearCooldown: cooling,
+    nearDeposit: isNearLive(http) ? nearDepositLag("near-testnet") : null,
     stream: http.streamMetrics(),
     orderLatency: orderLatency.snapshot(),
     selfHealth: self,
@@ -278,6 +279,7 @@ function getStatus(): Response {
     previous: proc?.previous ?? null,
     nearRpc: near.rpc,
     nearCooldown: cooling,
+    nearDeposit: isNearLive(http) ? nearDepositLag("near-testnet") : null,
     orderLatency: orderLatency.snapshot(now),
     selfHealth: self,
     hangs,

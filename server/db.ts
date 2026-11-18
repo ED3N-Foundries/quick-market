@@ -433,6 +433,21 @@ function ensureBuyInIndexes(db: Database) {
 /** Closed markets are read by start time. Round ids are not time order across a window change. */
 function ensureRoundIndexes(db: Database) {
   db.exec("CREATE INDEX IF NOT EXISTS rounds_closed_starts ON rounds(chain_key, starts_at DESC) WHERE status != 'open'")
+  // The open set is tiny, so these partial indexes answer the settle and
+  // strike walks without adding a write to every closed round.
+  db.exec("CREATE INDEX IF NOT EXISTS rounds_open_ends ON rounds(chain_key, ends_at) WHERE status = 'open'")
+  db.exec("CREATE INDEX IF NOT EXISTS rounds_open_strike ON rounds(chain_key, starts_at) WHERE status = 'open' AND strike IS NULL")
+  // board() reads a short ends_at window. Without this it scans every round.
+  db.exec("CREATE INDEX IF NOT EXISTS rounds_ends ON rounds(chain_key, ends_at)")
+  analyzeRoundIndexes(db)
+}
+
+/** Refresh sqlite_stat1 once so the planner knows the new round indexes exist. */
+function analyzeRoundIndexes(db: Database) {
+  const marker = db.query("SELECT value FROM meta WHERE key = 'round_indexes_v1'").get()
+  if (marker) return
+  db.exec("ANALYZE")
+  db.query("INSERT INTO meta (key, value) VALUES ('round_indexes_v1', '1')").run()
 }
 
 function ensureHealthIndexes(db: Database) {

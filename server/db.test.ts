@@ -175,6 +175,15 @@ test("a new database indexes buy-ins and permits the same market id on two chain
   expect(getDb().query("SELECT id FROM buy_ins WHERE chain_key = 'base-sepolia' AND address = '0xabc'").get()).toEqual({ id: "b1" })
 })
 
+test("round indexes cover open settle, open strike, and board reads", () => {
+  useDatabase(":memory:")
+  const names = indexNames("rounds")
+  expect(names).toContain("rounds_open_ends")
+  expect(names).toContain("rounds_open_strike")
+  expect(names).toContain("rounds_ends")
+  expect(getDb().query("SELECT value FROM meta WHERE key = 'round_indexes_v1'").get()).toEqual({ value: "1" })
+})
+
 test("opening drops swarm tables, agent meta, and is_bot without touching balances", () => {
   dir = mkdtempSync(join(tmpdir(), "qm-db-"))
   const path = join(dir, "market.sqlite")

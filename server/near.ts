@@ -1,4 +1,5 @@
 import bs58 from "bs58"
+import type { ChainKey } from "../shared/chain"
 import { activeChainKey, withChain } from "./activeChain"
 import { loadEnv, nearTreasuryId, nearTreasurySecret } from "./env"
 import { getDb } from "./db"
@@ -35,6 +36,8 @@ export type ParsedDeposit = {
 
 let latest: TreasuryReport | null = null
 let polling = false
+/** Last block head seen by the deposit scanner, for the lag metric. */
+let depositHead: { chain: ChainKey; head: number; at: number } | null = null
 /** Nonce allocation. A broadcast must not sit in front of the next signature. */
 let signQueue: Promise<void> = Promise.resolve()
 /** In-order submission. The next transaction can already be signed. */
@@ -220,11 +223,43 @@ export function nearRpcGapMs(env: Record<string, string | undefined> = process.e
   return NEAR_RPC_GAP_DEFAULT_MS
 }
 
+export type NearDepositLag = {
+  chain: ChainKey
+  cursor: number | null
+  head: number | null
+  lag: number | null
+  batch: number
+  updatedAt: number | null
+}
+
+/** Deposit cursor against the last observed head. Health-only; never scans history. */
+export function nearDepositLag(chain: ChainKey = activeChainKey()): NearDepositLag {
+  const batch = nearDepositBatch()
+  let cursor: number | null = null
+  try {
+    const row = getDb().query("SELECT value FROM meta WHERE key = ?").get(`${chain}:near_deposit_height`) as {
+      value: string
+    } | null
+    const parsed = Number(row?.value)
+    cursor = Number.isSafeInteger(parsed) ? parsed : null
+  } catch {
+    cursor = null
+  }
+  const head = depositHead?.chain === chain ? depositHead.head : null
+  return {
+    chain,
+    cursor,
+    head,
+    lag: cursor != null && head != null ? Math.max(0, head - cursor) : null,
+    batch,
+    updatedAt: depositHead?.chain === chain ? depositHead.at : null,
+  }
+}
+
 type NearCooldown = { untilMs: number; reason: string; trippedAt: number }
 let nearCooldown: NearCooldown | null = null
 let nearLastCooldownMs = NEAR_COOLDOWN_DEFAULT_MS
 let busyCallAt: number[] = []
-let lastCooldownLogAt = 0
 
 function pruneBusyCalls(now: number): void {
   while (busyCallAt.length > 0 && now - (busyCallAt[0] ?? 0) > NEAR_COOLDOWN_STREAK_WINDOW_MS) {
@@ -267,7 +302,6 @@ export function resetNearCooldownForTest(): void {
   nearCooldown = null
   nearLastCooldownMs = NEAR_COOLDOWN_DEFAULT_MS
   busyCallAt = []
-  lastCooldownLogAt = 0
 }
 
 function noteBusyCall(now: number): void {
@@ -473,16 +507,20 @@ export async function callNearRpc(
   endpoints: readonly NearRpcEndpoint[],
   method: string,
   params: unknown,
-  options?: { timeoutMs?: number },
+  options?: { timeoutMs?: number; background?: boolean },
 ): Promise<unknown> {
+  const background = options?.background === true
   const entry = nearCooldownStatus()
-  if (entry.cooling) {
+  // Background work (the deposit scanner) must keep making progress while the
+  // funding plane is cooling, and must never trip the funding breaker itself.
+  if (entry.cooling && !background) {
     throw new NearCoolingError(entry.retryAfterMs, entry.untilMs, entry.reason ?? undefined)
   }
   if (endpoints.length > 0) {
     const at = Date.now()
     const allCooling = endpoints.every((endpoint) => (quietUntil.get(endpoint.url) ?? 0) > at)
     if (allCooling) {
+      if (background) throw new Error("NEAR RPC endpoints cooling")
       const tripped = tripNearCooldown("all endpoints cooling", at)
       throw new NearCoolingError(tripped.retryAfterMs, tripped.untilMs, tripped.reason ?? undefined)
     }
@@ -539,6 +577,7 @@ export async function callNearRpc(
     }
   }
   const failedAt = Date.now()
+  if (background) throw new Error(last)
   const allNowCooling =
     endpoints.length > 0 && endpoints.every((endpoint) => (quietUntil.get(endpoint.url) ?? 0) > failedAt)
   if (rateLimitedInCall >= 2) {
@@ -557,7 +596,7 @@ export async function callNearRpc(
 async function rpc(
   method: string,
   params: unknown,
-  options?: { attempts?: number; timeoutMs?: number },
+  options?: { attempts?: number; timeoutMs?: number; background?: boolean },
 ): Promise<unknown> {
   return callNearRpc(nearRpcEndpoints(), method, params, options)
 }
@@ -1238,8 +1277,8 @@ export function nearDepositBlockQuery(height?: number): { finality: "optimistic"
   return { finality: marketPreferences.confirmations === 1 ? "optimistic" : "final" }
 }
 
-async function nearBlock(height?: number): Promise<NearBlock> {
-  return (await rpc("block", nearDepositBlockQuery(height))) as NearBlock
+async function nearBlock(height?: number, background = false): Promise<NearBlock> {
+  return (await rpc("block", nearDepositBlockQuery(height), { background })) as NearBlock
 }
 
 /** Blocks older than this are gone from the free non-archival nodes. A shorter gap may still be propagating. */
@@ -1275,18 +1314,13 @@ function saveDepositCursor(cursorKey: string, height: number) {
 }
 
 async function pollNearDeposits(treasury: string) {
-  const cooling = nearCooldownStatus()
-  if (cooling.cooling) {
-    if (Date.now() - lastCooldownLogAt > 30_000) {
-      lastCooldownLogAt = Date.now()
-      console.error(`near deposits paused, cooling ${Math.round(cooling.retryAfterMs / 1000)}s`)
-    }
-    return
-  }
+  // Background reads are deliberately outside the funding breaker. They fail
+  // over and back off on their own without pausing withdrawals or grants.
   const token = loadEnv().tokenAccount.trim()
   const cursorKey = `${activeChainKey()}:near_deposit_height`
   const cursorRow = getDb().query("SELECT value FROM meta WHERE key = ?").get(cursorKey) as { value: string } | null
-  const latest = await nearBlock()
+  const latest = await nearBlock(undefined, true)
+  depositHead = { chain: activeChainKey(), head: latest.header.height, at: Date.now() }
   if (!cursorRow) {
     getDb().query("INSERT INTO meta (key, value) VALUES (?, ?)").run(cursorKey, String(latest.header.height))
     return
@@ -1299,7 +1333,7 @@ async function pollNearDeposits(treasury: string) {
   for (let height = cursor + 1; height <= end; height += 1) {
     let block: NearBlock
     try {
-      block = await nearBlock(height)
+      block = await nearBlock(height, true)
     } catch (error) {
       if (isNearCooling(error)) return
       const resume = nearHistoryMissing(error) ? prunedDepositResume(cursor, latest.header.height) : null
@@ -1316,7 +1350,7 @@ async function pollNearDeposits(treasury: string) {
         transactions?: { hash: string; signer_id: string; receiver_id: string; actions?: { FunctionCall?: { method_name?: string } }[] }[]
       }
       try {
-        chunk = (await rpc("chunk", { chunk_id: header.chunk_hash })) as {
+        chunk = (await rpc("chunk", { chunk_id: header.chunk_hash }, { background: true })) as {
           transactions?: { hash: string; signer_id: string; receiver_id: string; actions?: { FunctionCall?: { method_name?: string } }[] }[]
         }
       } catch (error) {
@@ -1329,11 +1363,15 @@ async function pollNearDeposits(treasury: string) {
         if (!transaction.actions?.some((action) => action.FunctionCall?.method_name === "ft_transfer")) continue
         let payload: unknown
         try {
-          payload = await rpc("EXPERIMENTAL_tx_status", {
-            tx_hash: transaction.hash,
-            sender_account_id: transaction.signer_id,
-            wait_until: "NONE",
-          })
+          payload = await rpc(
+            "EXPERIMENTAL_tx_status",
+            {
+              tx_hash: transaction.hash,
+              sender_account_id: transaction.signer_id,
+              wait_until: "NONE",
+            },
+            { background: true },
+          )
         } catch (error) {
           if (isNearCooling(error)) return
           throw error

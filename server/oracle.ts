@@ -1,6 +1,6 @@
 import { addDecimal, compareDecimal, compareGap, dollarGap, microPrice, movedAtLeast, subDecimal, withinDollars } from "./blend"
 import { priceSource, type PriceSource } from "./config"
-import { openFeed, type FeedConn } from "./feedSocket"
+import { openFeed, resetFeedPins, type FeedConn } from "./feedSocket"
 import type { Print } from "./rounds"
 
 const PRICE = /^\d+(\.\d+)?$/
@@ -9,12 +9,22 @@ const PRICE = /^\d+(\.\d+)?$/
 export const BREAK_MS = 3_000
 /** No price change for this long leaves the active venue. A quiet tape is not a dead feed. */
 export const MOVE_MS = 15_000
-/** A standby still has to have moved recently to be a valid replacement. */
+/** A standby has to have heard from the venue recently, even if its price did not move. */
 export const STANDBY_MS = 5_000
 export const RATE_MS = 30_000
 export const RECOVERY_MS = 2_000
-export const PRINTED_IDLE_MS = 8_000
-export const OPEN_ARM_MS = 2_000
+/** A printed stream may sit quiet this long while a stalled event loop unblocks. */
+export const PRINTED_IDLE_MS = 30_000
+/** First frame after connect gets a patient handshake window. */
+export const OPEN_ARM_MS = 10_000
+/** A socket-down edge is not a switch edge until the venue stays quiet this long. */
+export const DOWN_GRACE_MS = 2_000
+/** When no standby can be adopted, hold the market no longer than this before reporting. */
+export const HANDOFF_DEADLINE_MS = 30_000
+/** Every venue down this long earns one oracle-level pin reset and reconnect. */
+export const ALL_DOWN_RESET_MS = 30_000
+/** A timer that fires this far past its deadline may have queued frames behind it. */
+export const LATE_TIMER_MS = 250
 export const SWITCH_DOLLARS = 25
 export const COALESCE_MS = 100
 export const SWITCH_LOG = 5
@@ -98,6 +108,21 @@ export function priceChanged(left: string, right: string): boolean {
 /** A socket that has printed may sit quiet longer than the switch clock. A silent open still fails fast. */
 export function feedIdleMs(printed: boolean): number {
   return printed ? PRINTED_IDLE_MS : OPEN_ARM_MS
+}
+
+export type IdleCheck = { action: "rearm"; ms: number } | { action: "expire" }
+
+/**
+ * Decide an idle timer firing. A timer that fired early re-arms for the
+ * remainder. A timer that fired late may have a data callback queued behind an
+ * event-loop stall, so it re-arms once instead of killing a live socket.
+ */
+export function idleCheck(input: { now: number; armedAt: number; armedFor: number; heardAt: number }): IdleCheck {
+  const deadline = input.armedAt + input.armedFor
+  if (input.now < deadline) return { action: "rearm", ms: Math.max(1, deadline - input.now) }
+  if (input.heardAt > input.armedAt) return { action: "rearm", ms: input.armedFor }
+  if (input.now - deadline > LATE_TIMER_MS) return { action: "rearm", ms: input.armedFor }
+  return { action: "expire" }
 }
 
 /** First price starts the clock and adds no dollars. Later changes add the absolute gap. */
@@ -206,8 +231,10 @@ export function nextFeedStep(input: { printed: boolean; retries: number; index: 
 }
 
 /**
- * Freshest changing book, weighted by swing.
- * Inside $25 wins over a wider quote. Equal swings prefer the configured venue, then the smaller gap.
+ * Freshest live book, weighted by swing.
+ * Freshness is the last message, not the last price change, so a flat but live
+ * venue is adoptable. Inside $25 wins over a wider quote. Equal swings prefer
+ * the configured venue, then the smaller gap.
  */
 export function rankStandbys(
   from: PriceSource,
@@ -497,8 +524,15 @@ export function startOracle(handlers: OracleHandlers): () => void {
   let pendingPrint: Print | null = null
   let pendingTimer: ReturnType<typeof setTimeout> | null = null
   let breakTimer: ReturnType<typeof setTimeout> | null = null
+  let downTimer: ReturnType<typeof setTimeout> | null = null
+  let downVenue: PriceSource | null = null
+  let deadlineTimer: ReturnType<typeof setTimeout> | null = null
+  let watchdog: ReturnType<typeof setInterval> | null = null
+  let allDownAt: number | null = null
+  let resetDone = false
   let switches: SwitchEvent[] = []
   let binanceAttempts: BinanceAttempt[] = []
+  const walkers: { stop: () => void; reconnect: () => void }[] = []
   const legs = Object.fromEntries(
     VENUE_ORDER.map((venue) => [venue, { price: null, at: 0, bookAt: 0, movedAt: 0, samples: [], swing: "0", head: 0 }]),
   ) as unknown as Record<PriceSource, Leg>
@@ -595,11 +629,15 @@ export function startOracle(handlers: OracleHandlers): () => void {
       return {
         venue,
         price: leg.price,
-        at: leg.movedAt,
+        // Freshness is the last message. A flat live venue is still adoptable.
+        at: leg.at,
         swing: legSwing(leg, now),
       }
     })
   }
+
+  /** A down socket is not a standby even when its last quote is still fresh. */
+  const standbys = (): Standby[] => snapshot().filter((row) => sockets[row.venue].up)
 
   const armBreak = (fromAt: number) => {
     if (fromAt <= 0) return
@@ -642,22 +680,80 @@ export function startOracle(handlers: OracleHandlers): () => void {
     }, Math.max(0, COALESCE_MS - (now - lastEmitAt)))
   }
 
-  const tryAdopt = (now: number) => {
-    if (stopped || !waiting || !brokeFrom) return
-    const ranked = rankStandbys(brokeFrom, anchor, snapshot(), now)
-    const to = ranked[0]?.venue
-    if (!to) return
+  function clearHandoffDeadline() {
+    if (deadlineTimer) clearTimeout(deadlineTimer)
+    deadlineTimer = null
+  }
+
+  function armHandoffDeadline() {
+    clearHandoffDeadline()
+    deadlineTimer = setTimeout(handoffDeadline, HANDOFF_DEADLINE_MS)
+  }
+
+  function adopt(to: PriceSource, now: number) {
     waiting = false
     active = to
     clearPending()
+    clearHandoffDeadline()
     switches = fillSwitch(switches, to)
     console.log(`price feed: ${to}`)
     handlers.onAdopt({ to, at: now })
-    armBreak(legs[to].movedAt)
+    // The adopted venue just printed; mark the feed alive at its message time
+    // so the first buy-in after the 5s hold does not race the next quote.
+    handlers.onAlive(legs[to].at || now)
+    // Give the newly adopted venue a full quiet window. Its last price change
+    // may be old even though its socket is live and printing a flat quote.
+    armBreak(now)
     publish()
   }
 
-  const fireBreak = () => {
+  function tryAdopt(now: number) {
+    if (stopped || !waiting || !brokeFrom) return
+    const ranked = rankStandbys(brokeFrom, anchor, standbys(), now)
+    const to = ranked[0]?.venue
+    if (!to) return
+    adopt(to, now)
+  }
+
+  function handoffDeadline() {
+    deadlineTimer = null
+    if (stopped || !waiting) return
+    const now = Date.now()
+    const ranked = rankStandbys(brokeFrom ?? active ?? "binance", anchor, standbys(), now)
+    const to = ranked[0]?.venue
+    if (to) {
+      adopt(to, now)
+      return
+    }
+    console.error(`price feed: still waiting after ${Math.round(HANDOFF_DEADLINE_MS / 1_000)}s; no fresh venue`)
+    armHandoffDeadline()
+  }
+
+  function switchVenue(from: PriceSource, reason: string, ranked: readonly RankedStandby[]) {
+    const now = Date.now()
+    const to = ranked[0]?.venue ?? null
+    brokeFrom = from
+    active = to
+    waiting = to == null
+    recoveryTried = false
+    clearPending()
+    switches = pushSwitch(switches, { at: now, from, to, reason })
+    console.log(`price feed: ${from} dropped, ${to ?? "waiting"} (${reason})`)
+    handlers.onBreak({ from, to, at: now })
+    if (to) {
+      recoveryTried = false
+      clearHandoffDeadline()
+      // A fresh socket can be printing a still quote. Start its 15s move clock
+      // at the switch, not at the last change (which may be long past).
+      handlers.onAlive(legs[to].at || now)
+      armBreak(now)
+    } else {
+      armHandoffDeadline()
+    }
+    publish()
+  }
+
+  function fireBreak() {
     if (stopped || !active) return
     const now = Date.now()
     if (!moveBreak(lastMoveAt, now)) {
@@ -681,19 +777,42 @@ export function startOracle(handlers: OracleHandlers): () => void {
       publish()
       return
     }
-    recoveryTried = false
-    const ranked = rankStandbys(from, anchor ?? legs[from].price, snapshot(), now)
-    const to = ranked[0]?.venue ?? null
-    const reason = switchReason(decision.reason, ranked)
-    brokeFrom = from
-    active = to
-    waiting = to == null
-    clearPending()
-    switches = pushSwitch(switches, { at: now, from, to, reason })
-    console.log(`price feed: ${from} dropped, ${to ?? "waiting"} (${reason})`)
-    handlers.onBreak({ from, to, at: now })
-    if (to) armBreak(legs[to].movedAt)
-    publish()
+    const ranked = rankStandbys(from, anchor ?? legs[from].price, standbys(), now)
+    switchVenue(from, switchReason(decision.reason, ranked), ranked)
+  }
+
+  function clearDownCheck() {
+    if (downTimer) clearTimeout(downTimer)
+    downTimer = null
+    downVenue = null
+  }
+
+  function armDownCheck(venue: PriceSource) {
+    // Repeated failed retries also report up:false. Keep the first down edge's
+    // deadline instead of restarting the 2s grace on every retry.
+    if (downTimer && downVenue === venue) return
+    if (downTimer) clearTimeout(downTimer)
+    downVenue = venue
+    downTimer = setTimeout(checkDown, DOWN_GRACE_MS)
+  }
+
+  /** A socket-down edge alone is not a switch. Keep the venue if it is printing. */
+  function checkDown() {
+    downTimer = null
+    const venue = downVenue
+    downVenue = null
+    if (stopped || !venue || active !== venue) return
+    if (sockets[venue].up) return
+    const now = Date.now()
+    const leg = legs[venue]
+    const silent = leg.at > 0 ? now - leg.at : DOWN_GRACE_MS
+    if (silent < DOWN_GRACE_MS) {
+      downVenue = venue
+      downTimer = setTimeout(checkDown, DOWN_GRACE_MS - silent)
+      return
+    }
+    const ranked = rankStandbys(venue, anchor ?? leg.price, standbys(), now)
+    switchVenue(venue, switchReason(`socket down for ${(DOWN_GRACE_MS / 1_000).toFixed(1)}s`, ranked), ranked)
   }
 
   const note = (venue: PriceSource, quote: Quote) => {
@@ -725,7 +844,7 @@ export function startOracle(handlers: OracleHandlers): () => void {
   }
 
   let reconnectBinance = () => {}
-  const stops = VENUE_ORDER.map((venue) => {
+  VENUE_ORDER.forEach((venue) => {
     const walker = startWalker(
       FEEDS[venue],
       (feed, quote) => {
@@ -738,12 +857,38 @@ export function startOracle(handlers: OracleHandlers): () => void {
       (status) => {
         sockets[venue] = status
         publish()
+        if (venue !== active) return
+        if (status.up) clearDownCheck()
+        else armDownCheck(venue)
       },
       venue === "binance" ? gate : null,
     )
     if (venue === "binance") reconnectBinance = walker.reconnect
-    return walker.stop
+    walkers.push(walker)
   })
+
+  /** One pin reset per all-down outage, after every venue has been quiet for 30s. */
+  const checkAllDown = () => {
+    if (stopped) return
+    const now = Date.now()
+    if (VENUE_ORDER.some((venue) => sockets[venue].up)) {
+      allDownAt = null
+      resetDone = false
+      return
+    }
+    if (allDownAt == null) {
+      allDownAt = now
+      return
+    }
+    if (resetDone || now - allDownAt < ALL_DOWN_RESET_MS) return
+    resetDone = true
+    console.error(`price feed: every venue down ${Math.round(ALL_DOWN_RESET_MS / 1_000)}s, resetting pins`)
+    resetFeedPins()
+    // The Binance attempt ledger lives on `gate`; a reset must not erase it.
+    for (const walker of walkers) walker.reconnect()
+  }
+  watchdog = setInterval(checkAllDown, 5_000)
+  watchdog.unref?.()
 
   armBreak(switchClockAt(lastMoveAt, Date.now()))
   publish()
@@ -756,7 +901,10 @@ export function startOracle(handlers: OracleHandlers): () => void {
     if (breakTimer) clearTimeout(breakTimer)
     if (pendingTimer) clearTimeout(pendingTimer)
     if (publishTimer) clearTimeout(publishTimer)
-    for (const stop of stops) stop()
+    if (downTimer) clearTimeout(downTimer)
+    if (deadlineTimer) clearTimeout(deadlineTimer)
+    if (watchdog) clearInterval(watchdog)
+    for (const walker of walkers) walker.stop()
   }
 }
 
@@ -777,6 +925,9 @@ function startWalker(
   let beat: ReturnType<typeof setInterval> | null = null
   let quiet = false
   let openAt: number | null = null
+  let armedAt = 0
+  let armedFor = 0
+  let heardAt = 0
 
   const clearTimer = () => {
     if (!timer) return
@@ -826,7 +977,7 @@ function startWalker(
     let printed = false
     let send: (text: string) => void = () => {}
 
-    const giveUp = () => {
+    const drop = () => {
       if (stopped || gen !== generation) return
       generation++
       markDeath()
@@ -854,9 +1005,21 @@ function startWalker(
       schedule(wait)
     }
 
+    const idleExpired = () => {
+      if (stopped || gen !== generation) return
+      const verdict = idleCheck({ now: Date.now(), armedAt, armedFor, heardAt })
+      if (verdict.action === "rearm") {
+        arm(verdict.ms)
+        return
+      }
+      drop()
+    }
+
     const arm = (ms: number) => {
       clearTimer()
-      timer = setTimeout(giveUp, ms)
+      armedAt = Date.now()
+      armedFor = ms
+      timer = setTimeout(idleExpired, ms)
     }
 
     socket = openFeed(feed.url, {
@@ -866,24 +1029,24 @@ function startWalker(
         onStatus({ feed: feed.name, up: true })
         feed.subscribe?.(send)
         if (feed.beat && feed.heartbeatMs) beat = setInterval(() => feed.beat?.(send), feed.heartbeatMs)
+        heardAt = Date.now()
         arm(feedIdleMs(printed))
       },
       onMessage: (data) => {
         if (gen !== generation) return
-        if (feed.consume?.(data, send)) {
-          arm(feedIdleMs(printed))
-          return
-        }
+        heardAt = Date.now()
+        // A frame is liveness even when it parses to null (heartbeat/control).
+        arm(feedIdleMs(printed))
+        if (feed.consume?.(data, send)) return
         const quote = feed.parse(data)
         if (!quote) return
         printed = true
         retries = 0
         delay = 200
         quiet = false
-        arm(feedIdleMs(printed))
         onQuote(feed, quote)
       },
-      onDown: giveUp,
+      onDown: drop,
     })
     arm(feedIdleMs(false))
   }
