@@ -48,7 +48,7 @@ The current release removes the startup active-five aggregate, resets the local 
 ### Agent startup and local database
 
 - **Fresh-database reset is a manual one-off.** Add a documented reset path that creates the new file, copies only `wallets`, sets `agent_swarm_v1`, initializes `settle_cursor`, and deletes the legacy `swarm.sqlite`. The current reset was performed by hand.
-- **No compaction or vacuum policy.** Rolling stake deletion keeps the row count bounded, but the file and WAL fragment. Add an incremental-vacuum or periodic-checkpoint job, or run `VACUUM` in the quiet window.
+- **No compaction or vacuum policy (market side addressed on this branch).** P3-3 archives settled rounds and their buy-ins behind `ROUND_RETENTION_MS` (default 3 days), which bounds the live set; the `db` object in `/api/health` and `/api/status` reports `autoVacuum`/`freelistPages`/`pageCount`, so the one-time maintenance `VACUUM` that shrinks the file itself is an informed operator call. The agent file still has no compaction policy.
 - **Re-enabling active-five needs an index or aggregate.** The weekly `GROUP BY` over `stakes` caused the startup OOM. If it returns, use `stakes(chain_key, address, round_id)` or a rolling weekly table, exclude the prior epoch, and never run it on the startup path.
 - **The fresh database starts with no replay history.** That is correct for a reset, but a short warm replay of recent settled rounds would restore the local win/loss memory sooner.
 

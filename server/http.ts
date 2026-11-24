@@ -5,7 +5,7 @@ import { parseLang, stampHtml, type Lang } from "../shared/lang"
 import { MINT_CONFIRMATIONS } from "../shared/mint"
 import type { PublicConfig } from "../shared/market"
 import { priceSource, viewMs, windowMs } from "./config"
-import { getDb } from "./db"
+import { dbShapeStats, getDb } from "./db"
 import { feedsNow } from "./feeds"
 import { grantOnSignIn, grantSettings, startGrant } from "./grant"
 import { listArchives } from "./archive"
@@ -190,6 +190,13 @@ function getHealth(): Response {
     orderLatency: orderLatency.snapshot(),
     mcp: mcpSessionStats(),
     auth: lastAuthPrune(),
+    db: (() => {
+      try {
+        return dbShapeStats(getDb())
+      } catch {
+        return null
+      }
+    })(),
     selfHealth: self,
     queryStats: (() => {
       try {
@@ -285,6 +292,13 @@ function getStatus(): Response {
     orderLatency: orderLatency.snapshot(now),
     mcp: mcpSessionStats(),
     auth: lastAuthPrune(),
+    db: (() => {
+      try {
+        return dbShapeStats(getDb())
+      } catch {
+        return null
+      }
+    })(),
     selfHealth: self,
     hangs,
   })

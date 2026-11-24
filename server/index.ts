@@ -31,7 +31,7 @@ import {
   snapshotProcessHealth,
 } from "./processHealth"
 import { flushHealthSample, HEALTH_SAMPLE_MS, startLagWatchdog } from "./selfHealth"
-import { archiveOldHealth, archiveOldTicks, archivesSizeBytes, ticksArchiveRemains } from "./archive"
+import { archiveOldHealth, archiveOldRounds, archiveOldTicks, archivesSizeBytes, roundsArchiveRemains, ticksArchiveRemains } from "./archive"
 import { getDb } from "./db"
 import { startOracle } from "./oracle"
 import {
@@ -447,7 +447,12 @@ if (process.env.QM_HEALTH_LOG !== "0") {
       } catch {
         // ignore
       }
-      if (!ticksArchiveRemains(db, at)) return
+      try {
+        archiveOldRounds(db, dir, at)
+      } catch {
+        // ignore
+      }
+      if (!ticksArchiveRemains(db, at) && !roundsArchiveRemains(db, at)) return
       archivePump = setTimeout(pumpArchive, 250)
       ;(archivePump as unknown as { unref?: () => void }).unref?.()
     } catch {

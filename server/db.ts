@@ -317,6 +317,34 @@ export function tuneDatabase(db: Database, options: { readonly?: boolean; memory
   if (!options.readonly && !options.memory) db.exec("PRAGMA wal_autocheckpoint = 1000;")
 }
 
+/** P3-3 observability: the honest size gauges, all O(1) PRAGMAs — safe per
+ *  request, unlike COUNT(*) over millions of ledger rows. freelistPages against
+ *  pageCount shows whether archive deletes are returning pages, and autoVacuum
+ *  tells the operator whether a one-time maintenance VACUUM is needed to
+ *  shrink the file itself. */
+export function dbShapeStats(db: Database): {
+  pageBytes: number
+  pageCount: number
+  freelistPages: number
+  pageSize: number
+  autoVacuum: number
+} {
+  const one = (sql: string): number => {
+    const row = db.query(sql).get() as Record<string, number> | null
+    if (!row) return 0
+    return Number(Object.values(row)[0] ?? 0)
+  }
+  const pageCount = one("PRAGMA page_count")
+  const pageSize = one("PRAGMA page_size")
+  return {
+    pageBytes: pageCount * pageSize,
+    pageCount,
+    freelistPages: one("PRAGMA freelist_count"),
+    pageSize,
+    autoVacuum: one("PRAGMA auto_vacuum"),
+  }
+}
+
 function openDatabase(path: string): Database {
   if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true })
   const db = new Database(path)
