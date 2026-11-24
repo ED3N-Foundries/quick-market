@@ -37,7 +37,7 @@ The game is also available as separate processes: `bun run dev` starts only the 
 
 ## Optimization
 
-The current release removes the startup active-five aggregate, resets the local round epoch, adds a fresh-database path that keeps wallet identities and session tokens, and adds fast `resume_sessions` repair. The reliability hotfix adds indexed open-round reads, a bounded feed handoff with an all-down pin reset, and a once-per-second agent write batch. The items below are still unaddressed, roughly in priority order.
+The current release removes the startup active-five aggregate, resets the local round epoch, adds a fresh-database path that keeps wallet identities and session tokens, and adds fast `resume_sessions` repair. The reliability hotfix adds indexed open-round reads, a bounded feed handoff with an all-down pin reset, and a once-per-second agent write batch. Phase 1 lands MCP session TTL, auth pruning, and tape caps; the `buy_ins` rebuild (P1-6) replaces the UUID primary key with the composite `(chain_key, round_id, address)` key, dropping two of four per-insert index writes and refreshing planner statistics behind a one-shot migration. The items below are still unaddressed, roughly in priority order.
 
 ### Reliability and market continuity
 
