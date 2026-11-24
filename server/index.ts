@@ -9,7 +9,7 @@ import { pumpAccountKeyframe, pushAccountNow } from "./accountKeyframe"
 import { activeChainKey, withChain } from "./activeChain"
 import { startChainRuntime, type ChainRuntime } from "./chainRuntime"
 import { pickChain } from "./markets"
-import { readSessionToken, sessionChainForToken } from "./session"
+import { readSessionToken, pruneExpiredAuth, sessionChainForToken } from "./session"
 import { grantSettings, onGrantNoted } from "./grant"
 import { hub, type MarketSocket } from "./hub"
 import { bindHttp, handleInternal, handleSafe, json } from "./http"
@@ -50,6 +50,7 @@ import {
   youFor,
 } from "./rounds"
 import { nearCooldownStatus } from "./near"
+import { sweepMcpSessions } from "./mcp"
 
 
 const runtimes = new Map<ChainKey, ChainRuntime>()
@@ -415,6 +416,18 @@ const selfHealthRuntime = globalThis as unknown as {
   qmSelfHealthTimer?: ReturnType<typeof setInterval>
 }
 if (selfHealthRuntime.qmSelfHealthTimer) clearInterval(selfHealthRuntime.qmSelfHealthTimer)
+
+// Expired sessions and sign-in signatures are pruned on boot and then from the
+// health interval every 10 minutes. A request never prunes: the DELETEs stay
+// off the hot path.
+let lastAuthPruneAt = 0
+try {
+  lastAuthPruneAt = Date.now()
+  pruneExpiredAuth(lastAuthPruneAt)
+} catch {
+  // boot prune is best effort
+}
+
 if (process.env.QM_HEALTH_LOG !== "0") {
   let lastArchive = 0
   let archivePump: ReturnType<typeof setTimeout> | null = null
@@ -473,6 +486,14 @@ if (process.env.QM_HEALTH_LOG !== "0") {
         })(),
         onDiskPressure: noteDiskPressure,
       })
+      if (now - lastAuthPruneAt >= 10 * 60 * 1000) {
+        lastAuthPruneAt = now
+        try {
+          pruneExpiredAuth(now)
+        } catch {
+          // ignore
+        }
+      }
       if (now - lastArchive >= 60 * 60 * 1000) {
         lastArchive = now
         if (!archivePump) {
@@ -496,6 +517,19 @@ if (process.env.QM_HEALTH_LOG !== "0") {
     // stall probe is best effort
   }
 }
+
+// --- MCP session sweep: the TTL backstop for dropped agent connections. ---
+
+const mcpSweepRuntime = globalThis as unknown as { quickMarketMcpSweepTimer?: ReturnType<typeof setInterval> }
+if (mcpSweepRuntime.quickMarketMcpSweepTimer) clearInterval(mcpSweepRuntime.quickMarketMcpSweepTimer)
+mcpSweepRuntime.quickMarketMcpSweepTimer = setInterval(() => {
+  try {
+    sweepMcpSessions()
+  } catch {
+    // the sweep must never break the market
+  }
+}, 60_000)
+;(mcpSweepRuntime.quickMarketMcpSweepTimer as unknown as { unref?: () => void }).unref?.()
 
 const host = process.env.HOST?.trim() || "127.0.0.1"
 
@@ -543,7 +577,9 @@ Bun.serve<{ address: string | null; chain: ChainKey }>({
     // The browser answers without page timers. A frozen tab cannot, and the socket closes.
     idleTimeout: 48,
     sendPings: true,
-    perMessageDeflate: true,
+    // One shared deflate context for every peer. Client frames are ≤2 KB, so
+    // the server never needs to decompress anything.
+    perMessageDeflate: { compress: "shared", decompress: false },
     open(ws) {
       wsPeers += 1
       hub.add(ws)

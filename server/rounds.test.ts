@@ -6,7 +6,7 @@ import { parseMicros } from "./money"
 import { handoffBanner } from "../shared/source"
 import { marketPreferences } from "../shared/market"
 import { withChain } from "./activeChain"
-import { adoptFeed, advance, board, credit, ensureUser, failFeed, feedStatus, handoffNow, listRounds, noteAlive, notePrint, placeBuyIn, placeBuyIns, recentSettles, resetRuntime, resumeAtFor, roundDetail, tapePoints, tickerNow, withdraw, youFor, type Print, type Side } from "./rounds"
+import { adoptFeed, advance, board, credit, ensureUser, failFeed, feedStatus, handoffNow, listRounds, noteAlive, notePrint, placeBuyIn, placeBuyIns, recentSettles, resetRuntime, resumeAtFor, roundDetail, TAPE_POINTS_MAX, tapePoints, tapeRange, tapeTail, tickerNow, withdraw, youFor, type Print, type Side } from "./rounds"
 
 const USDC = 1_000_000
 const T = 10_000_000_000_000
@@ -520,6 +520,32 @@ test("a quiet book still counts as a live feed", () => {
   noteAlive(T)
   expect(feedStatus(T)).toBe("live")
   expect(tapePoints()).toEqual([{ t: T - 6_000, price: "100" }])
+})
+
+test("a long tape is capped but keeps the newest prints", () => {
+  for (let index = 10_000; index > 0; index--) notePrint(print(String(index), T - index * 50))
+  const tail = tapeTail(T, 60 * 60 * 1000)
+  expect(tail.length).toBeLessThanOrEqual(TAPE_POINTS_MAX)
+  expect(tail.length).toBeGreaterThan(1_000)
+  expect(tail[tail.length - 1]?.t).toBe(T - 50)
+  const range = tapeRange(T - 900_000, T)
+  expect(range.length).toBeLessThanOrEqual(TAPE_POINTS_MAX)
+  expect(range[range.length - 1]?.t).toBe(T - 50)
+  const points = tapePoints()
+  expect(points.length).toBeLessThanOrEqual(TAPE_POINTS_MAX)
+  expect(points[points.length - 1]?.t).toBe(T - 50)
+  expect(points[0]?.t).toBeLessThan(points[1]?.t ?? Infinity)
+})
+
+test("a round detail tape is capped but keeps the newest prints", () => {
+  for (let index = 1; index <= 10_000; index++) notePrint(print(String(index), T + index * 50))
+  getDb()
+    .query("INSERT INTO rounds (chain_key, id, starts_at, ends_at, status) VALUES ('base-sepolia', ?, ?, ?, 'settled')")
+    .run(MARKET_ID, T, T + 500_000)
+  const tape = roundDetail(MARKET_ID)?.tape ?? []
+  expect(tape.length).toBeLessThanOrEqual(TAPE_POINTS_MAX)
+  expect(tape.length).toBeGreaterThan(1_000)
+  expect(tape[tape.length - 1]?.t).toBe(T + 500_000)
 })
 
 test("insufficient balance does not open a bet", () => {

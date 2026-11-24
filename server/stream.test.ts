@@ -4,6 +4,7 @@ import { tickerFor } from "../shared/source"
 import type { AccountResult, Board, ServerStreamMessage, SettlementEvent, You } from "../shared/stream"
 import { withChain } from "./activeChain"
 import { hub, type MarketSocket } from "./hub"
+import { capTape } from "./rounds"
 import { MarketStream } from "./stream"
 
 const board: Board = {
@@ -66,6 +67,30 @@ test("snapshots establish sequence and books publish compact deltas", () => {
   expect(first?.type === "book" && "bands" in first.board).toBe(true)
   expect(second?.type === "book" && "bands" in second.board).toBe(false)
   expect(market.metrics().messages.book?.bytes).toBeGreaterThan(0)
+  hub.remove(peer)
+})
+
+test("a snapshot over a long tape stays valid JSON and keeps the newest point", () => {
+  const sent: ServerStreamMessage[] = []
+  const peer = socket(null, sent)
+  const points = Array.from({ length: 10_000 }, (_, index) => ({ t: index + 1, price: "100" }))
+  const market = new MarketStream({
+    board: () => board,
+    tape: () => capTape(points),
+    feed: () => "live",
+    ticker: () => tickerFor("binance"),
+    handoff: () => null,
+    youFor: () => you,
+    accountResults: () => [],
+    nearFunding: () => ({ cooling: false, retryAfterMs: 0, untilMs: null, reason: null }),
+  })
+  market.snapshot(peer)
+  // The fake socket JSON.parses every frame, so a broken payload fails here.
+  const frame = sent[0] as { type: string; tape?: { t: number }[] }
+  expect(frame.type).toBe("snapshot")
+  const tape = frame.tape ?? []
+  expect(tape.length).toBeLessThanOrEqual(2_000)
+  expect(tape[tape.length - 1]?.t).toBe(10_000)
   hub.remove(peer)
 })
 

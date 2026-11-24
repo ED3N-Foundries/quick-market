@@ -6,8 +6,10 @@ import { chainFromEnv } from "../shared/chain"
 import { loginMessage, nearLoginMessage } from "../shared/login"
 import { NEP413_RECIPIENT } from "../shared/nearKey"
 import { marketPreferences } from "../shared/market"
-import { bindHttp, handle } from "./http"
+import { bindHttp, handle, handleInternal } from "./http"
 import { getDb, useDatabase } from "./db"
+import { mcpIdleMs, mcpSessions, sweepMcpSessions, type LiveSession } from "./mcp"
+import { openSession, pruneExpiredAuth } from "./session"
 import { advance, board, credit, notePrint, resetRuntime, youFor, type Print } from "./rounds"
 
 let server: ReturnType<typeof Bun.serve> | null = null
@@ -18,6 +20,7 @@ const previousChain = marketPreferences.chain
 const previousGrant = marketPreferences.grantMicros
 const previousGrantInterval = marketPreferences.grantIntervalMs
 const previousEnvChain = process.env.CHAIN
+const previousMaxAccounts = process.env.MCP_MAX_ACCOUNTS
 let releaseMint: (() => void) | null = null
 
 afterEach(async () => {
@@ -30,6 +33,8 @@ afterEach(async () => {
   marketPreferences.grantIntervalMs = previousGrantInterval
   if (previousEnvChain === undefined) delete process.env.CHAIN
   else process.env.CHAIN = previousEnvChain
+  if (previousMaxAccounts === undefined) delete process.env.MCP_MAX_ACCOUNTS
+  else process.env.MCP_MAX_ACCOUNTS = previousMaxAccounts
   await client?.close().catch(() => undefined)
   client = null
   server?.stop(true)
@@ -37,6 +42,26 @@ afterEach(async () => {
   resetRuntime()
   useDatabase(":memory:")
 })
+
+function bindTestHttp() {
+  bindHttp({
+    config: () => {
+      throw new Error("config")
+    },
+    markets: () => ({ defaultChainKey: "base-sepolia", markets: [] }),
+    liveChains: () => ["base-sepolia"],
+    chainKey: () => "base-sepolia",
+    treasuryReport: () => null,
+    fundingReport: async () => null,
+    grantsOpen: () => false,
+    mint: async () => {},
+    withdraw: async () => ({ ok: true }),
+    publish: () => {},
+    streamMetrics: () => ({}),
+    serveUi: false,
+    distDir: "",
+  })
+}
 
 function payload(result: unknown) {
   const content = result && typeof result === "object" && "content" in result ? result.content : null
@@ -350,4 +375,149 @@ test("NEAR login_message returns the NEP-413 nonce", async () => {
   const described = (await client.listTools()).tools.find((tool) => tool.name === "login_message")?.description ?? ""
   expect(described).toContain("NEP-413")
   expect(described).toContain("publicKey")
+})
+
+test("the sweep removes only old idle sessions and closes them after the map entry", () => {
+  mcpSessions.clear()
+  const at = Date.now()
+  const idle = mcpIdleMs()
+  const closed: string[] = []
+  const order: string[] = []
+  const live = (id: string, lastSeenAt: number, inFlight: number): LiveSession => ({
+    transport: {
+      close: () => {
+        order.push(mcpSessions.has(id) ? "close-before-delete" : "close-after-delete")
+        closed.push(id)
+        return Promise.resolve()
+      },
+    } as unknown as LiveSession["transport"],
+    accounts: new Map(),
+    chain: "base-sepolia",
+    createdAt: at,
+    lastSeenAt,
+    inFlight,
+  })
+  mcpSessions.set("gone", live("gone", at - idle - 1, 0))
+  mcpSessions.set("young", live("young", at - idle + 60_000, 0))
+  mcpSessions.set("busy", live("busy", at - idle - 1, 1))
+  expect(sweepMcpSessions(at)).toBe(1)
+  expect([...mcpSessions.keys()].sort()).toEqual(["busy", "young"])
+  expect(closed).toEqual(["gone"])
+  expect(order).toEqual(["close-after-delete"])
+  mcpSessions.clear()
+})
+
+test("the account cap stops new addresses and keeps the bound ones", async () => {
+  process.env.MCP_MAX_ACCOUNTS = "2"
+  marketPreferences.chain = "base-sepolia"
+  process.env.CHAIN = "base-sepolia"
+  process.env.PRICE_SOURCE = "binance"
+  resetRuntime()
+  useDatabase(":memory:")
+  bindTestHttp()
+  server = Bun.serve({ port: 0, fetch: handle })
+  const port = server.port
+  client = new Client({ name: "quick-market-test", version: "1.0.0" })
+  await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}/mcp?chain=base-sepolia`)))
+  const signIn = async () => {
+    const account = privateKeyToAccount(generatePrivateKey())
+    const login = payload(await client.callTool({ name: "login_message", arguments: { address: account.address } }))
+    const signature = await account.signMessage({ message: String(login.message) })
+    const result = payload(
+      await client.callTool({ name: "sign_in", arguments: { address: account.address, signature, issued: login.issued } }),
+    )
+    return { account, token: result.token as string | undefined, result }
+  }
+  const first = await signIn()
+  const second = await signIn()
+  expect(first.result.capped).toBeUndefined()
+  expect(second.result.capped).toBeUndefined()
+  const third = await signIn()
+  expect(third.result.capped).toBe(true)
+  expect(third.result.code).toBe("ACCOUNT_CAP")
+  expect(third.result.address).toBeUndefined()
+  // An address already on the connection still resolves at the cap.
+  const rebind = payload(await client.callTool({ name: "sign_in", arguments: { token: first.token } }))
+  expect(rebind.address).toBe(first.account.address.toLowerCase())
+  expect(rebind.capped).toBeUndefined()
+  // A token minted elsewhere is still new here: resume_sessions counts it as capped.
+  const issued = Date.now()
+  const outsider = privateKeyToAccount(generatePrivateKey())
+  const outsiderSignature = await outsider.signMessage({
+    message: loginMessage(chainFromEnv("base-sepolia").id, outsider.address, issued),
+  })
+  const opened = await openSession({ address: outsider.address, signature: outsiderSignature, issued, now: issued })
+  expect(opened.ok).toBe(true)
+  const resumed = payload(
+    await client.callTool({ name: "resume_sessions", arguments: { tokens: [first.token!, opened.ok ? opened.token : "", "nope"] } }),
+  )
+  expect(resumed.accepted).toContain(first.account.address.toLowerCase())
+  expect(resumed.capped).toBe(1)
+  expect(resumed.rejected).toBe(1)
+})
+
+test("internal health reports the mcp session stats and the last auth prune", async () => {
+  marketPreferences.chain = "base-sepolia"
+  process.env.CHAIN = "base-sepolia"
+  process.env.PRICE_SOURCE = "binance"
+  resetRuntime()
+  useDatabase(":memory:")
+  bindTestHttp()
+  server = Bun.serve({ port: 0, fetch: handle })
+  const port = server.port
+  client = new Client({ name: "quick-market-test", version: "1.0.0" })
+  await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}/mcp?chain=base-sepolia`)))
+  const account = privateKeyToAccount(generatePrivateKey())
+  const login = payload(await client.callTool({ name: "login_message", arguments: { address: account.address } }))
+  const signature = await account.signMessage({ message: String(login.message) })
+  const signed = payload(
+    await client.callTool({ name: "sign_in", arguments: { address: account.address, signature, issued: login.issued } }),
+  )
+  expect(signed.capped).toBeUndefined()
+  const prunedAt = Date.now()
+  expect(pruneExpiredAuth(prunedAt)).toBe(0)
+  const health = await handleInternal(new Request("http://localhost/api/health"))
+  const body = (await health.json()) as {
+    mcp?: { sessions?: number; accounts?: number; oldestIdleMs?: number; oldestAgeMs?: number }
+    auth?: { deleted?: number; at?: number }
+  }
+  expect(body.mcp?.sessions).toBeGreaterThanOrEqual(1)
+  expect(body.mcp?.accounts).toBeGreaterThanOrEqual(1)
+  expect(typeof body.mcp?.oldestIdleMs).toBe("number")
+  expect(typeof body.mcp?.oldestAgeMs).toBe("number")
+  expect(body.auth).toEqual({ deleted: 0, at: prunedAt })
+  const status = await handleInternal(new Request("http://localhost/api/status"))
+  const statusBody = (await status.json()) as { mcp?: { sessions?: number }; auth?: { deleted?: number; at?: number } }
+  expect(statusBody.mcp?.sessions).toBeGreaterThanOrEqual(1)
+  expect(statusBody.auth).toEqual({ deleted: 0, at: prunedAt })
+  // The public health route stays a fixed body for the load balancer.
+  const publicHealth = await handle(new Request("http://localhost/api/health?chain=base-sepolia"))
+  expect(await publicHealth.json()).toEqual({ ok: true })
+})
+
+test("book clamps a huge tail to fifteen minutes", async () => {
+  marketPreferences.chain = "base-sepolia"
+  process.env.CHAIN = "base-sepolia"
+  process.env.PRICE_SOURCE = "binance"
+  resetRuntime()
+  useDatabase(":memory:")
+  bindTestHttp()
+  server = Bun.serve({ port: 0, fetch: handle })
+  const port = server.port
+  client = new Client({ name: "quick-market-test", version: "1.0.0" })
+  await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}/mcp?chain=base-sepolia`)))
+  // The feed went quiet five minutes ago. The tape memory still holds twenty
+  // minutes of prints anchored to the last print, not to the request clock.
+  const now = Date.now()
+  for (let index = 1; index <= 9_000; index++) {
+    const at = now - 20 * 60 * 1000 + index * 100
+    notePrint({ price: "100", exchangeTs: at, receivedAt: at, source: "binance" })
+  }
+  const book = payload(await client.callTool({ name: "book", arguments: { tailMs: 24 * 60 * 60 * 1000 } }))
+  const tape = book.tape as { t: number }[]
+  expect(tape.length).toBeLessThanOrEqual(2_000)
+  expect(tape.length).toBeGreaterThan(1_000)
+  expect(tape[0]?.t).toBeGreaterThanOrEqual(now - 15 * 60 * 1000)
+  expect(tape.some((point) => point.t < now - 15 * 60 * 1000)).toBe(false)
+  expect(tape[tape.length - 1]?.t).toBe(now - 5 * 60 * 1000)
 })

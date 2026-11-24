@@ -7,8 +7,8 @@ import { loginMessage, nearLoginMessage, SESSION_MS } from "../shared/login"
 import { marketPreferences } from "../shared/market"
 import { NEP413_RECIPIENT, bs58, generateNearSecret, nep413Bytes, seedFromSecret } from "../shared/nearKey"
 import * as ed from "@noble/ed25519"
-import { useDatabase } from "./db"
-import { NEAR_BUSY, openSession, readSessionToken } from "./session"
+import { useDatabase, getDb } from "./db"
+import { lastAuthPrune, NEAR_BUSY, openSession, pruneExpiredAuth, readSessionToken } from "./session"
 import { resetNearRpcQuiet } from "./near"
 
 
@@ -62,6 +62,29 @@ test("a missing hello token is anonymous and a bad token is rejected", async () 
   expect(readSessionToken("nope", issued)).toEqual({ address: null, rejected: true })
   expect(readSessionToken(opened.token, issued)).toEqual({ address, rejected: false })
   expect(readSessionToken(opened.token, issued + SESSION_MS)).toEqual({ address: null, rejected: true })
+})
+
+test("pruneExpiredAuth deletes expired rows, keeps fresh ones, and is idempotent", () => {
+  const db = getDb()
+  const now = Date.now()
+  db.query("INSERT INTO sessions (chain_key, token, address, expires_at) VALUES ('base-sepolia', 'gone', '0x1', ?)").run(now - 1)
+  db.query("INSERT INTO sessions (chain_key, token, address, expires_at) VALUES ('base-sepolia', 'kept', '0x2', ?)").run(now + SESSION_MS)
+  db.query("INSERT INTO login_sigs (chain_key, signature, expires_at) VALUES ('base-sepolia', 'gone-sig', ?)").run(now - 1)
+  db.query("INSERT INTO login_sigs (chain_key, signature, expires_at) VALUES ('base-sepolia', 'kept-sig', ?)").run(now + 60_000)
+  expect(pruneExpiredAuth(now)).toBe(2)
+  expect(lastAuthPrune()).toEqual({ deleted: 2, at: now })
+  expect(db.query("SELECT token FROM sessions").all()).toEqual([{ token: "kept" }])
+  expect(db.query("SELECT signature FROM login_sigs").all()).toEqual([{ signature: "kept-sig" }])
+  expect(pruneExpiredAuth(now)).toBe(0)
+  expect(lastAuthPrune()).toEqual({ deleted: 0, at: now })
+})
+
+test("the auth prune is index-backed", () => {
+  const now = Date.now()
+  const sessions = getDb().query("EXPLAIN QUERY PLAN DELETE FROM sessions WHERE expires_at <= ?").all(now) as { detail: string }[]
+  expect(sessions.some((row) => row.detail.includes("sessions_expires"))).toBe(true)
+  const sigs = getDb().query("EXPLAIN QUERY PLAN DELETE FROM login_sigs WHERE expires_at <= ?").all(now) as { detail: string }[]
+  expect(sigs.some((row) => row.detail.includes("login_sigs_expires"))).toBe(true)
 })
 
 async function meteorSignature(account: string, secretKey: string, issued: number, nonce: Uint8Array) {

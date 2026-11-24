@@ -330,6 +330,7 @@ function openDatabase(path: string): Database {
   migrateRoundSource(db)
   ensureRoundIndexes(db)
   ensureHealthIndexes(db)
+  ensureAuthIndexes(db)
   ensureHealthPxxColumns(db)
   migrateCustody(db)
   ensureGrantSeen(db)
@@ -448,6 +449,23 @@ function analyzeRoundIndexes(db: Database) {
   if (marker) return
   db.exec("ANALYZE")
   db.query("INSERT INTO meta (key, value) VALUES ('round_indexes_v1', '1')").run()
+}
+
+/** Expired sign-in rows are deleted on a schedule, never per request. */
+function ensureAuthIndexes(db: Database) {
+  db.exec("CREATE INDEX IF NOT EXISTS sessions_expires ON sessions(expires_at)")
+  db.exec("CREATE INDEX IF NOT EXISTS login_sigs_expires ON login_sigs(expires_at)")
+  analyzeAuthIndexes(db)
+}
+
+/** Refresh the expiry-index stats once. ANALYZE is table-scoped so the boot
+ *  cost stays off the big ledger tables. */
+function analyzeAuthIndexes(db: Database) {
+  const marker = db.query("SELECT value FROM meta WHERE key = 'auth_indexes_v1'").get()
+  if (marker) return
+  db.exec("ANALYZE sessions")
+  db.exec("ANALYZE login_sigs")
+  db.query("INSERT INTO meta (key, value) VALUES ('auth_indexes_v1', '1')").run()
 }
 
 function ensureHealthIndexes(db: Database) {

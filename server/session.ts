@@ -171,6 +171,23 @@ export function endSession(req: Request) {
   endSessionToken(match[1]!)
 }
 
+/** The last scheduled prune, for the internal health routes. Requests never prune. */
+let lastPrune: { deleted: number; at: number } | null = null
+
+export function lastAuthPrune(): { deleted: number; at: number } | null {
+  return lastPrune
+}
+
+/** Delete expired session tokens and sign-in signatures. Boot and the health
+ *  interval call this; the expiry indexes keep both deletes off table scans. */
+export function pruneExpiredAuth(now = Date.now()): number {
+  const db = getDb()
+  const expired = db.query("DELETE FROM sessions WHERE expires_at <= ?").run(now).changes
+  const sigs = db.query("DELETE FROM login_sigs WHERE expires_at <= ?").run(now).changes
+  lastPrune = { deleted: expired + sigs, at: now }
+  return expired + sigs
+}
+
 function randomToken(): string {
   const bytes = new Uint8Array(32)
   crypto.getRandomValues(bytes)

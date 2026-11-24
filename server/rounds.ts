@@ -141,25 +141,43 @@ export function feedStatus(now: number): "live" | "stale" {
   return now - lastReceivedAt <= LIVE_MS ? "live" : "stale"
 }
 
-export function tapePoints(): { t: number; price: string }[] {
-  const map = (print: Print) => ({ t: print.exchangeTs, price: print.price })
-  if (prints.length <= 4_000) return prints.map(map)
-  const lastTs = prints[prints.length - 1]?.exchangeTs ?? 0
-  const recentCut = lastTs - 60_000
-  const older: Print[] = []
-  const recent: Print[] = []
-  for (const print of prints) {
-    if (print.exchangeTs >= recentCut) recent.push(print)
-    else older.push(print)
+/** The most tape points one reply may carry. */
+export const TAPE_POINTS_MAX = 2_000
+
+/** Keep the newest minute whole and uniformly sample the rest, so a long hold
+ *  or a wide replay cannot balloon a snapshot or a tool reply. */
+export function capTape<T extends { t: number }>(points: T[], max = TAPE_POINTS_MAX): T[] {
+  if (points.length <= max) return points
+  const newest = points[points.length - 1]!
+  const recent: T[] = []
+  const older: T[] = []
+  for (const point of points) {
+    if (point.t < newest.t - 60_000) older.push(point)
+    else recent.push(point)
   }
-  const out: { t: number; price: string }[] = []
-  const step = Math.max(1, older.length / 800)
-  for (let i = 0; i < older.length; i += step) {
-    const print = older[Math.floor(i)]
-    if (print) out.push(map(print))
+  const out: T[] = []
+  const sample = (from: T[], keep: number): void => {
+    if (keep >= from.length) {
+      out.push(...from)
+      return
+    }
+    if (keep <= 0) return
+    if (keep === 1) {
+      out.push(from[from.length - 1]!)
+      return
+    }
+    for (let index = 0; index < keep; index++) {
+      out.push(from[Math.floor((index * (from.length - 1)) / (keep - 1))]!)
+    }
   }
-  for (const print of recent) out.push(map(print))
+  const recentKeep = Math.min(recent.length, max)
+  sample(older, max - recentKeep)
+  sample(recent, recentKeep)
   return out
+}
+
+export function tapePoints(): { t: number; price: string }[] {
+  return capTape(prints.map((print) => ({ t: print.exchangeTs, price: print.price })))
 }
 
 function priceAt(boundary: number, maxAge: number): Print | null {
@@ -202,7 +220,7 @@ export function tapeRange(from: number, to: number): { t: number; price: string 
     if (print.exchangeTs < from || print.exchangeTs > to) continue
     byTime.set(print.exchangeTs, print.price)
   }
-  return [...byTime.entries()].sort((left, right) => left[0] - right[0]).map(([t, price]) => ({ t, price }))
+  return capTape([...byTime.entries()].sort((left, right) => left[0] - right[0]).map(([t, price]) => ({ t, price })))
 }
 
 function recordSecond(print: Print) {
@@ -891,7 +909,7 @@ function roundTape(round: RoundRow): { t: number; price: string }[] {
   const windowSpan = Math.max(0, round.starts_at - bounds.buyInOpen)
   const held = priceAt(round.starts_at, Math.max(life, windowSpan + 1_000))
   if (held) byTime.set(held.exchangeTs, held.price)
-  return [...byTime.entries()].sort((left, right) => left[0] - right[0]).map(([t, price]) => ({ t, price }))
+  return capTape([...byTime.entries()].sort((left, right) => left[0] - right[0]).map(([t, price]) => ({ t, price })))
 }
 
 export function roundDetail(id: number) {
@@ -1025,7 +1043,7 @@ export function tapeTail(now: number, tailMs: number): { t: number; price: strin
     if (print.exchangeTs < from || print.exchangeTs > now) continue
     out.push({ t: print.exchangeTs, price: print.price })
   }
-  return out
+  return capTape(out)
 }
 
 export function openBook(now: number): {

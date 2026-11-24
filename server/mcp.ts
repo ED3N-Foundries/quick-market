@@ -42,13 +42,69 @@ export type McpDeps = {
 
 type Bound = { address: string; token: string }
 
-type LiveSession = {
+export type LiveSession = {
   transport: WebStandardStreamableHTTPServerTransport
   accounts: Map<string, Bound>
   chain: ChainKey
+  createdAt: number
+  lastSeenAt: number
+  inFlight: number
 }
 
-const sessions = new Map<string, LiveSession>()
+/** Idle sessions are swept after this long without a request. Env override: MCP_IDLE_MS. */
+const MCP_IDLE_DEFAULT_MS = 60 * 60 * 1000
+/** One connection cannot bind more accounts than this. Env override: MCP_MAX_ACCOUNTS. */
+const MCP_MAX_ACCOUNTS_DEFAULT = 20_000
+
+export function mcpIdleMs(env: Record<string, string | undefined> = process.env): number {
+  const raw = Number(env.MCP_IDLE_MS)
+  if (Number.isInteger(raw)) return Math.min(24 * 60 * 60 * 1000, Math.max(60_000, raw))
+  return MCP_IDLE_DEFAULT_MS
+}
+
+export function mcpMaxAccounts(env: Record<string, string | undefined> = process.env): number {
+  const raw = Number(env.MCP_MAX_ACCOUNTS)
+  if (Number.isInteger(raw)) return Math.min(1_000_000, Math.max(1, raw))
+  return MCP_MAX_ACCOUNTS_DEFAULT
+}
+
+/** A market restart must not be the only thing that clears dead agent connections. */
+export const mcpSessions = new Map<string, LiveSession>()
+
+/** Close sessions idle past the TTL. In-flight work is never interrupted, and the
+ *  map entry goes before transport.close() so a closing transport cannot re-enter. */
+export function sweepMcpSessions(now = Date.now()): number {
+  const idleMs = mcpIdleMs()
+  let swept = 0
+  for (const [id, live] of [...mcpSessions]) {
+    if (live.inFlight !== 0) continue
+    if (now - live.lastSeenAt <= idleMs) continue
+    mcpSessions.delete(id)
+    void live.transport.close().catch(() => {})
+    swept += 1
+  }
+  return swept
+}
+
+/** Live-session totals for the internal health routes. */
+export function mcpSessionStats(now = Date.now()): {
+  sessions: number
+  accounts: number
+  oldestIdleMs: number
+  oldestAgeMs: number
+} {
+  let accounts = 0
+  let oldestIdleMs = 0
+  let oldestAgeMs = 0
+  for (const live of mcpSessions.values()) {
+    accounts += live.accounts.size
+    const idle = now - live.lastSeenAt
+    if (idle > oldestIdleMs) oldestIdleMs = idle
+    const age = now - live.createdAt
+    if (age > oldestAgeMs) oldestAgeMs = age
+  }
+  return { sessions: mcpSessions.size, accounts, oldestIdleMs, oldestAgeMs }
+}
 
 const readOnly = { readOnlyHint: true }
 
@@ -115,6 +171,15 @@ function pickAccount(
   if (accounts.size === 1) return { ok: true, bound: [...accounts.values()][0]! }
   if (accounts.size === 0) return { ok: false, error: "Sign in first" }
   return { ok: false, error: "Name the account" }
+}
+
+/** Re-signing an address already on this connection always works; new addresses stop at the cap. */
+function canAddAccount(accounts: Map<string, Bound>, address: string): boolean {
+  return accounts.has(address) || accounts.size < mcpMaxAccounts()
+}
+
+function accountCapFailure() {
+  return fail("This connection is at its account cap", "ACCOUNT_CAP", { capped: true })
 }
 
 function stakeOf(stake: string | undefined, stakeMicros: number | undefined): number | null {
@@ -239,6 +304,7 @@ function registerTools(server: McpServer, accounts: Map<string, Bound>, deps: Mc
       if (args.token && !args.signature) {
         const session = readSessionToken(args.token)
         if (!session.address) return fail("Sign in again")
+        if (!canAddAccount(accounts, session.address)) return accountCapFailure()
         accounts.set(session.address, { address: session.address, token: args.token })
         beginGrant(deps, session.address)
         const you = youFor(session.address)
@@ -259,6 +325,7 @@ function registerTools(server: McpServer, accounts: Map<string, Bound>, deps: Mc
         publicKey: args.publicKey,
       })
       if (!opened.ok) return fail(opened.error)
+      if (!canAddAccount(accounts, opened.you.address)) return accountCapFailure()
       accounts.set(opened.you.address, { address: opened.you.address, token: opened.token })
       beginGrant(deps, opened.you.address)
       const you = youFor(opened.you.address)
@@ -276,17 +343,20 @@ function registerTools(server: McpServer, accounts: Map<string, Bound>, deps: Mc
     "resume_sessions",
     {
       description:
-        "Re-establish up to 2000 stored session tokens on this connection in one call. This does not mint or open a grant. It is the fast path after the market restarts or the connection drops.",
+        "Re-establish up to 2000 stored session tokens on this connection in one call. This does not mint or open a grant. It is the fast path after the market restarts or the connection drops. New addresses past this connection's account cap are counted as capped.",
       inputSchema: { tokens: z.array(z.string().min(1)).min(1).max(2_000) },
     },
     async ({ tokens }) => {
       const accepted: string[] = []
       let rejected = 0
+      let capped = 0
       for (let index = 0; index < tokens.length; index++) {
         const token = tokens[index]!
         const session = readSessionToken(token)
         if (!session.address) {
           rejected += 1
+        } else if (!canAddAccount(accounts, session.address)) {
+          capped += 1
         } else {
           accounts.set(session.address, { address: session.address, token })
           accepted.push(session.address)
@@ -294,7 +364,7 @@ function registerTools(server: McpServer, accounts: Map<string, Bound>, deps: Mc
         // A 1000-token batch must not freeze the book/round loop for seconds.
         if ((index & 63) === 63) await new Promise((resolve) => setTimeout(resolve, 0))
       }
-      return textResult({ accepted, rejected, acceptedCount: accepted.length })
+      return textResult({ accepted, rejected, capped, acceptedCount: accepted.length })
     },
   )
 
@@ -333,7 +403,7 @@ function registerTools(server: McpServer, accounts: Map<string, Bound>, deps: Mc
     },
     async ({ tailMs }) => {
       const now = Date.now()
-      const tail = tailMs === undefined ? 1_000 : Math.min(120_000, Math.max(1_000, tailMs))
+      const tail = tailMs === undefined ? 1_000 : Math.min(15 * 60 * 1000, Math.max(1_000, tailMs))
       return textResult({
         serverNow: now,
         board: board(now),
@@ -597,11 +667,18 @@ export async function handleMcp(req: Request, deps: McpDeps): Promise<Response> 
   }
   const sessionId = req.headers.get("mcp-session-id")
   if (sessionId) {
-    const live = sessions.get(sessionId)
+    const live = mcpSessions.get(sessionId)
     if (!live) return rpcError(404, "Session not found")
+    // Every request carrying the id proves the client still holds the session.
+    live.lastSeenAt = Date.now()
     const asked = new URL(req.url).searchParams.get("chain")
     if (asked !== null && asked !== live.chain) return rpcError(400, "This connection is on another market")
-    return withChain(live.chain, () => live.transport.handleRequest(req))
+    live.inFlight += 1
+    try {
+      return await withChain(live.chain, () => live.transport.handleRequest(req))
+    } finally {
+      live.inFlight -= 1
+    }
   }
   if (req.method !== "POST") return rpcError(400, "Bad Request: Mcp-Session-Id header is required")
   let body: unknown
@@ -626,10 +703,11 @@ export async function handleMcp(req: Request, deps: McpDeps): Promise<Response> 
       // MCP connections are agent/batch clients. They poll account state and
       // do not need a per-account push stream; fanning 9k accounts into SSE
       // notifications is what starved the market loop.
-      sessions.set(id, { transport, accounts, chain })
+      const now = Date.now()
+      mcpSessions.set(id, { transport, accounts, chain, createdAt: now, lastSeenAt: now, inFlight: 0 })
     },
     onsessionclosed: (id) => {
-      sessions.delete(id)
+      mcpSessions.delete(id)
     },
   })
   const server = new McpServer({ name: "quick-market", version: "1.0.0" })

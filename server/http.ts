@@ -36,8 +36,8 @@ import {
 } from "./rounds"
 import { withChain } from "./activeChain"
 import { pickChain } from "./markets"
-import { handleMcp } from "./mcp"
-import { endSession, NEAR_BUSY, openSession, readSession, sessionChainForToken } from "./session"
+import { handleMcp, mcpSessionStats } from "./mcp"
+import { endSession, lastAuthPrune, NEAR_BUSY, openSession, readSession, sessionChainForToken } from "./session"
 
 export type HttpDeps = {
   config: () => PublicConfig
@@ -188,6 +188,8 @@ function getHealth(): Response {
     nearDeposit: isNearLive(http) ? nearDepositLag("near-testnet") : null,
     stream: http.streamMetrics(),
     orderLatency: orderLatency.snapshot(),
+    mcp: mcpSessionStats(),
+    auth: lastAuthPrune(),
     selfHealth: self,
     queryStats: (() => {
       try {
@@ -281,6 +283,8 @@ function getStatus(): Response {
     nearCooldown: cooling,
     nearDeposit: isNearLive(http) ? nearDepositLag("near-testnet") : null,
     orderLatency: orderLatency.snapshot(now),
+    mcp: mcpSessionStats(),
+    auth: lastAuthPrune(),
     selfHealth: self,
     hangs,
   })

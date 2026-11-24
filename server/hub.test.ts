@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { HUB_BUFFER_LIMIT, publishTo, type HubPeer, type MarketSocket } from "./hub"
+import { HUB_BUFFER_LIMIT, publishTo, WS_COMPRESS_MIN_BYTES, type HubPeer, type MarketSocket } from "./hub"
 
 let closed: string[] = []
 
@@ -110,4 +110,18 @@ test("a send failure closes only that client", () => {
   expect(closed).toEqual(["a"])
   expect(result.sent).toBe(1)
   expect([...peers].map((item) => item.id)).toEqual(["b"])
+})
+
+test("compression is offered only at the configured threshold", () => {
+  closed = []
+  const offered: boolean[] = []
+  const peers = new Set([
+    peer("a", 0, (_data, compress) => {
+      offered.push(Boolean(compress))
+      return 1
+    }),
+  ])
+  publishTo(peers, "x".repeat(WS_COMPRESS_MIN_BYTES - 1))
+  publishTo(peers, "x".repeat(WS_COMPRESS_MIN_BYTES))
+  expect(offered).toEqual([false, true])
 })

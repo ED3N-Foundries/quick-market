@@ -184,6 +184,13 @@ test("round indexes cover open settle, open strike, and board reads", () => {
   expect(getDb().query("SELECT value FROM meta WHERE key = 'round_indexes_v1'").get()).toEqual({ value: "1" })
 })
 
+test("auth expiry indexes cover the scheduled prune", () => {
+  useDatabase(":memory:")
+  expect(indexNames("sessions")).toContain("sessions_expires")
+  expect(indexNames("login_sigs")).toContain("login_sigs_expires")
+  expect(getDb().query("SELECT value FROM meta WHERE key = 'auth_indexes_v1'").get()).toEqual({ value: "1" })
+})
+
 test("opening drops swarm tables, agent meta, and is_bot without touching balances", () => {
   dir = mkdtempSync(join(tmpdir(), "qm-db-"))
   const path = join(dir, "market.sqlite")

@@ -2,6 +2,8 @@ import type { ServerWebSocket } from "bun"
 import type { ChainKey } from "../shared/chain"
 
 export const HUB_BUFFER_LIMIT = 256 * 1024
+/** Frames at least this big are offered to the websocket compressor. */
+export const WS_COMPRESS_MIN_BYTES = 4096
 const RECOVER_BUFFER_LIMIT = 16 * 1024
 const COALESCE_BUFFER_LIMIT = 64 * 1024
 
@@ -57,7 +59,7 @@ function closePeer<T extends HubPeer>(peers: Set<T>, peer: T, result: PublishRep
 export function publishTo<T extends HubPeer>(peers: Set<T>, data: string, options: PublishOptions = {}): PublishReport {
   const result = report(Buffer.byteLength(data))
   const limit = options.limit ?? HUB_BUFFER_LIMIT
-  const compress = options.compress ?? result.bytes >= 1024
+  const compress = options.compress ?? result.bytes >= WS_COMPRESS_MIN_BYTES
   for (const peer of [...peers]) {
     if (options.filter && !options.filter(peer as T & MarketSocket)) continue
     let buffered = 0
