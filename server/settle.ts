@@ -3,7 +3,6 @@ import { comparePrice } from "./money"
 export type Side = "up" | "down"
 
 export type BuyInInput = {
-  id: string
   address: string
   side: Side
   stakeMicros: number

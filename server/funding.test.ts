@@ -29,8 +29,8 @@ test("funding shows public addresses, the gap, and no key material", async () =>
     "INSERT INTO rounds (chain_key, id, starts_at, ends_at, status) VALUES (?, ?, ?, ?, ?)",
   ).run("base-sepolia", 1, 1, 2, "open")
   db.query(
-    "INSERT INTO buy_ins (chain_key, id, round_id, address, side, stake_micros, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-  ).run("base-sepolia", "b1", 1, "0x1111111111111111111111111111111111111111", "up", 2_000_000, 1)
+    "INSERT INTO buy_ins (chain_key, round_id, address, side, stake_micros, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+  ).run("base-sepolia", 1, "0x1111111111111111111111111111111111111111", "up", 2_000_000, 1)
 
   const treasury = "0x826020c36F4e1b6320e5E3dCade1a888E9fbDeF6"
   const token = "0x036CbD53842c5426634e7929541eC2318f3dCF7e"

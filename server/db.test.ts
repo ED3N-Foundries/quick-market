@@ -72,7 +72,13 @@ test("legacy Base rows keep their balances and history under the chain-scoped sc
   const names = indexNames("buy_ins")
   expect(names).toContain("buy_ins_round_time")
   expect(names).toContain("buy_ins_address")
-  expect(getDb().query("SELECT id FROM buy_ins WHERE chain_key = 'base-sepolia' AND round_id = 7").get()).toEqual({ id: "b1" })
+  expect(
+    getDb().query("SELECT stake_micros FROM buy_ins WHERE chain_key = 'base-sepolia' AND round_id = 7 AND address = '0xabc'").get(),
+  ).toEqual({ stake_micros: 100 })
+  const betColumns = (getDb().query("PRAGMA table_info(buy_ins)").all() as { name: string }[]).map(
+    (column) => column.name,
+  )
+  expect(betColumns).not.toContain("id")
   expect(getDb().query("SELECT source FROM rounds WHERE chain_key = 'base-sepolia' AND id = 7").get()).toEqual({ source: "binance" })
   expect(getDb().query("SELECT balance_micros FROM users WHERE chain_key = 'base-sepolia' AND address = '0xabc'").get()).toEqual({
     balance_micros: 42_000_000,
@@ -145,6 +151,9 @@ test("the production Base schema preserves balances, open activity, sessions, an
     grant_tx: "grant-tx",
   })
   expect(db.query("SELECT COUNT(*) AS n FROM buy_ins WHERE chain_key = 'base-sepolia'").get()).toEqual({ n: 2 })
+  expect(
+    db.query("SELECT stake_micros, payout_micros FROM buy_ins WHERE chain_key = 'base-sepolia' AND round_id = 7 AND address = '0xabc'").get(),
+  ).toEqual({ stake_micros: 100, payout_micros: 200 })
   expect(db.query("SELECT source FROM rounds WHERE chain_key = 'base-sepolia' AND id = 8").get()).toEqual({ source: "bybit" })
   expect(db.query("SELECT token FROM sessions WHERE chain_key = 'base-sepolia'").get()).toEqual({ token: "session" })
   expect(db.query("SELECT signature FROM login_sigs WHERE chain_key = 'base-sepolia'").get()).toEqual({ signature: "signature" })
@@ -169,10 +178,71 @@ test("a new database indexes buy-ins and permits the same market id on two chain
   insertRound.run("base-sepolia")
   insertRound.run("near-testnet")
   getDb()
-    .query("INSERT INTO buy_ins (chain_key, id, round_id, address, side, stake_micros, created_at) VALUES ('base-sepolia', 'b1', 1, '0xabc', 'up', 100, 1)")
+    .query("INSERT INTO buy_ins (chain_key, round_id, address, side, stake_micros, created_at) VALUES ('base-sepolia', 1, '0xabc', 'up', 100, 1)")
     .run()
   expect(getDb().query("SELECT COUNT(*) AS n FROM rounds WHERE id = 1").get()).toEqual({ n: 2 })
-  expect(getDb().query("SELECT id FROM buy_ins WHERE chain_key = 'base-sepolia' AND address = '0xabc'").get()).toEqual({ id: "b1" })
+  expect(getDb().query("SELECT round_id FROM buy_ins WHERE chain_key = 'base-sepolia' AND address = '0xabc'").get()).toEqual({
+    round_id: 1,
+  })
+  const again = getDb().query(
+    "INSERT OR IGNORE INTO buy_ins (chain_key, round_id, address, side, stake_micros, created_at) VALUES ('base-sepolia', 1, '0xabc', 'up', 100, 1)",
+  )
+  expect(again.run().changes).toBe(0)
+})
+
+test("the buy_ins_v2 rebuild drops the UUID key, keeps every row, and runs once", () => {
+  dir = mkdtempSync(join(tmpdir(), "qm-db-"))
+  const path = join(dir, "market.sqlite")
+  // A production-shaped ledger: chain-scoped, UUID PK, redundant UNIQUE index.
+  const legacy = new Database(path)
+  legacy.exec(`
+    CREATE TABLE buy_ins (
+      chain_key TEXT NOT NULL,
+      id TEXT PRIMARY KEY,
+      round_id INTEGER NOT NULL,
+      address TEXT NOT NULL,
+      side TEXT NOT NULL,
+      stake_micros INTEGER NOT NULL,
+      payout_micros INTEGER,
+      created_at INTEGER NOT NULL,
+      UNIQUE(chain_key, round_id, address)
+    );
+    CREATE INDEX buy_ins_round_time ON buy_ins(chain_key, round_id, created_at);
+    CREATE INDEX buy_ins_address ON buy_ins(chain_key, address);
+    INSERT INTO buy_ins (id, chain_key, round_id, address, side, stake_micros, payout_micros, created_at) VALUES
+      ('b1', 'base-sepolia', 7, '0xabc', 'up', 100, 200, 1),
+      ('b2', 'base-sepolia', 8, '0xdef', 'down', 50, NULL, 2),
+      ('b3', 'near-testnet', 7, 'near.testnet', 'up', 10, NULL, 3);
+    CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+    INSERT INTO meta VALUES ('chain_schema_v1', '1'), ('custody_v1', '1');
+  `)
+  legacy.close()
+
+  useDatabase(path)
+  const db = getDb()
+  const columns = (db.query("PRAGMA table_info(buy_ins)").all() as { name: string }[]).map((column) => column.name)
+  expect(columns).not.toContain("id")
+  expect(db.query("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" })
+  expect(db.query("SELECT COUNT(*) AS n FROM buy_ins").get()).toEqual({ n: 3 })
+  expect(
+    db.query("SELECT side, payout_micros FROM buy_ins WHERE chain_key = 'base-sepolia' AND round_id = 7 AND address = '0xabc'").get(),
+  ).toEqual({ side: "up", payout_micros: 200 })
+  const names = indexNames("buy_ins")
+  expect(names).toContain("buy_ins_round_time")
+  expect(names).toContain("buy_ins_address")
+  expect(names).not.toContain("buy_ins_round")
+  expect(db.query("SELECT value FROM meta WHERE key = 'buy_ins_v2'").get()).toEqual({ value: "1" })
+  expect(db.query("SELECT value FROM meta WHERE key = 'buy_ins_v2_analyzed'").get()).toEqual({ value: "1" })
+  expect(db.query("SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'buy_ins_rebuilt'").get()).toEqual({ n: 0 })
+  // The composite key rejects a second buy-in for the same wallet in the same round.
+  const dup = db.query(
+    "INSERT OR IGNORE INTO buy_ins (chain_key, round_id, address, side, stake_micros, created_at) VALUES ('base-sepolia', 7, '0xabc', 'down', 1, 4)",
+  )
+  expect(dup.run().changes).toBe(0)
+
+  // Reopening is a marker-guarded no-op.
+  useDatabase(path)
+  expect(getDb().query("SELECT COUNT(*) AS n FROM buy_ins").get()).toEqual({ n: 3 })
 })
 
 test("round indexes cover open settle, open strike, and board reads", () => {

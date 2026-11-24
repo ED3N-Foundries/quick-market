@@ -49,7 +49,6 @@ type RoundRow = {
 }
 
 type BetRow = {
-  id: string
   round_id: number
   address: string
   side: Side
@@ -581,9 +580,9 @@ export function placeBuyIn(input: {
       } else {
         getDb()
           .query(
-            `INSERT INTO buy_ins (chain_key, id, round_id, address, side, stake_micros, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            `INSERT INTO buy_ins (chain_key, round_id, address, side, stake_micros, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
           )
-          .run(activeChainKey(), crypto.randomUUID(), id, input.address, input.side, input.stakeMicros, input.now)
+          .run(activeChainKey(), id, input.address, input.side, input.stakeMicros, input.now)
       }
       getDb()
         .query("UPDATE users SET balance_micros = balance_micros - ? WHERE chain_key = ? AND address = ?")
@@ -649,7 +648,6 @@ function closeRound(round: RoundRow, forceVoid = false): SettledEvent {
   const bets = loadBets(round.id)
   const outcome = settleRound({
     bets: bets.map((bet) => ({
-      id: bet.id,
       address: bet.address,
       side: bet.side,
       stakeMicros: bet.stake_micros,
@@ -664,13 +662,15 @@ function closeRound(round: RoundRow, forceVoid = false): SettledEvent {
     const current = getRound(round.id)
     if (!current || current.status !== "open") return null
     const chain = activeChainKey()
-    const setPayout = getDb().query("UPDATE buy_ins SET payout_micros = ? WHERE chain_key = ? AND id = ?")
+    const setPayout = getDb().query(
+      "UPDATE buy_ins SET payout_micros = ? WHERE chain_key = ? AND round_id = ? AND address = ?",
+    )
     const addBalance = getDb().query(
       "UPDATE users SET balance_micros = balance_micros + ? WHERE chain_key = ? AND address = ? RETURNING balance_micros",
     )
     const balances = new Map<string, number>()
     for (const payout of outcome.payouts) {
-      setPayout.run(payout.payoutMicros, chain, payout.id)
+      setPayout.run(payout.payoutMicros, chain, round.id, payout.address)
       const row = addBalance.get(payout.payoutMicros, chain, payout.address) as { balance_micros: number } | null
       if (row) balances.set(payout.address, row.balance_micros)
     }
@@ -1001,7 +1001,7 @@ export function placeBuyIns(input: {
       results.push({ address: order.address, ok: true, balanceMicros: user.balance - spentAfter })
     }
     const insert = getDb().query(
-      `INSERT OR IGNORE INTO buy_ins (chain_key, id, round_id, address, side, stake_micros, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT OR IGNORE INTO buy_ins (chain_key, round_id, address, side, stake_micros, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
     )
     const debit = getDb().query(
       `UPDATE users SET balance_micros = balance_micros - ? WHERE chain_key = ? AND address = ? AND balance_micros >= ?`,
@@ -1009,7 +1009,7 @@ export function placeBuyIns(input: {
     const undo = getDb().query(`DELETE FROM buy_ins WHERE chain_key = ? AND round_id = ? AND address = ?`)
     const missed = new Set<string>()
     for (const order of accepted) {
-      const inserted = insert.run(activeChainKey(), crypto.randomUUID(), id, order.address, order.side, order.stakeMicros, input.now)
+      const inserted = insert.run(activeChainKey(), id, order.address, order.side, order.stakeMicros, input.now)
       if (inserted.changes !== 1) {
         missed.add(order.address)
         continue

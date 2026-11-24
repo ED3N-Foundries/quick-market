@@ -4,8 +4,8 @@ import { settleRound, type BuyInInput } from "./settle"
 
 const USDC = 1_000_000
 
-function bet(id: string, side: "up" | "down", stake: number, address = id): BuyInInput {
-  return { id, address, side, stakeMicros: stake }
+function bet(address: string, side: "up" | "down", stake: number): BuyInInput {
+  return { address, side, stakeMicros: stake }
 }
 
 test("comparePrice treats trailing zeros as equal", () => {
@@ -16,7 +16,7 @@ test("comparePrice treats trailing zeros as equal", () => {
 
 test("winners split the pot after a 25 bps fee", () => {
   const result = settleRound({
-    bets: [bet("you", "up", 50 * USDC, "you"), bet("other", "up", 50 * USDC, "other"), bet("down", "down", 100 * USDC)],
+    bets: [bet("you", "up", 50 * USDC), bet("other", "up", 50 * USDC), bet("down", "down", 100 * USDC)],
     strike: "100",
     settle: "101",
     feeBps: 25,
@@ -25,9 +25,9 @@ test("winners split the pot after a 25 bps fee", () => {
   expect(result.resolution).toBe("paid")
   expect(result.winningSide).toBe("up")
   expect(result.feeMicros).toBe(0.5 * USDC)
-  const you = result.payouts.find((payout) => payout.id === "you")
+  const you = result.payouts.find((payout) => payout.address === "you")
   expect(you?.payoutMicros).toBe(99.75 * USDC)
-  expect(result.payouts.find((payout) => payout.id === "down")?.payoutMicros).toBe(0)
+  expect(result.payouts.find((payout) => payout.address === "down")?.payoutMicros).toBe(0)
   const paid = result.payouts.reduce((sum, payout) => sum + payout.payoutMicros, 0)
   expect(paid + result.feeMicros).toBe(200 * USDC)
 })

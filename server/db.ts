@@ -35,14 +35,13 @@ const CHAIN_TABLES: Record<string, string> = {
   )`,
   buy_ins: `CREATE TABLE IF NOT EXISTS buy_ins (
     chain_key TEXT NOT NULL,
-    id TEXT PRIMARY KEY,
     round_id INTEGER NOT NULL,
     address TEXT NOT NULL,
     side TEXT NOT NULL,
     stake_micros INTEGER NOT NULL,
     payout_micros INTEGER,
     created_at INTEGER NOT NULL,
-    UNIQUE(chain_key, round_id, address)
+    PRIMARY KEY (chain_key, round_id, address)
   )`,
   buy_in_requests: `CREATE TABLE IF NOT EXISTS buy_in_requests (
     chain_key TEXT NOT NULL,
@@ -326,7 +325,9 @@ function openDatabase(path: string): Database {
   db.exec(SCHEMA)
   migrateChainSchema(db)
   dropSwarm(db)
+  migrateBuyInsV2(db)
   ensureBuyInIndexes(db)
+  analyzeBuyInsV2(db)
   migrateRoundSource(db)
   ensureRoundIndexes(db)
   ensureHealthIndexes(db)
@@ -360,6 +361,50 @@ function migrateBuyIns(db: Database) {
   if (tables.has("bets") && !tables.has("buy_ins")) db.exec("ALTER TABLE bets RENAME TO buy_ins")
 }
 
+/** P1-6: drop the UUID primary key. The composite (chain_key, round_id, address)
+ *  key replaces the UUID PK and the redundant UNIQUE index, so an insert
+ *  maintains the key plus the two covering indexes instead of four index
+ *  writes, and the two dropped indexes return ~450 MB on the live ledger.
+ *  Runs once behind the buy_ins_v2 marker, inside the planned restart window.
+ *  The copy drops `id`; the old UNIQUE(chain_key, round_id, address) already
+ *  guarantees no duplicates reach the new primary key. */
+function migrateBuyInsV2(db: Database) {
+  const marked = db.query("SELECT value FROM meta WHERE key = 'buy_ins_v2'").get()
+  if (marked) return
+  if (!tableColumns(db, "buy_ins").includes("id")) {
+    db.query("INSERT INTO meta (key, value) VALUES ('buy_ins_v2', '1')").run()
+    return
+  }
+  const rebuild = db.transaction(() => {
+    db.exec(`CREATE TABLE buy_ins_rebuilt (
+      chain_key TEXT NOT NULL,
+      round_id INTEGER NOT NULL,
+      address TEXT NOT NULL,
+      side TEXT NOT NULL,
+      stake_micros INTEGER NOT NULL,
+      payout_micros INTEGER,
+      created_at INTEGER NOT NULL,
+      PRIMARY KEY (chain_key, round_id, address)
+    )`)
+    db.exec(`INSERT INTO buy_ins_rebuilt (chain_key, round_id, address, side, stake_micros, payout_micros, created_at)
+      SELECT chain_key, round_id, address, side, stake_micros, payout_micros, created_at FROM buy_ins`)
+    db.exec("DROP TABLE buy_ins")
+    db.exec("ALTER TABLE buy_ins_rebuilt RENAME TO buy_ins")
+    db.query("INSERT INTO meta (key, value) VALUES ('buy_ins_v2', '1')").run()
+  })
+  rebuild()
+}
+
+/** The P1-6 restart is the one sanctioned full-ANALYZE window: sqlite_stat1
+ *  runs 5x stale on the live ledger (RELIABILITY_PLAN 2.3). Runs after the
+ *  buy-in covering indexes exist so the fresh stats cover them. */
+function analyzeBuyInsV2(db: Database) {
+  const marked = db.query("SELECT value FROM meta WHERE key = 'buy_ins_v2_analyzed'").get()
+  if (marked) return
+  db.exec("ANALYZE")
+  db.query("INSERT INTO meta (key, value) VALUES ('buy_ins_v2_analyzed', '1')").run()
+}
+
 function legacyChain(db: Database): ChainKey {
   if (tableNames(db).has("users")) {
     const rows = db.query("SELECT address FROM users").all() as { address: string }[]
@@ -387,11 +432,18 @@ function migrateChainSchema(db: Database) {
     for (const [table, definition] of Object.entries(CHAIN_TABLES)) {
       const columns = tableColumns(db, table)
       if (columns.length === 0 || columns.includes("chain_key")) continue
-      const copy = columns.filter((column) => column !== "is_bot")
       const legacy = `${table}_before_chain`
       dropTableIndexes(db, table)
       db.exec(`ALTER TABLE ${table} RENAME TO ${legacy}`)
       db.exec(definition)
+      // Copy only the columns the target shape still has. The buy_ins rebuild
+      // dropped the UUID id column, and legacy rows still carry it.
+      const target = tableColumns(db, table)
+      const copy = columns.filter((column) => column !== "is_bot" && target.includes(column))
+      if (copy.length === 0) {
+        db.exec(`DROP TABLE ${legacy}`)
+        continue
+      }
       const names = copy.join(", ")
       db.query(`INSERT INTO ${table} (chain_key, ${names}) SELECT ?, ${names} FROM ${legacy}`).run(chain)
       db.exec(`DROP TABLE ${legacy}`)

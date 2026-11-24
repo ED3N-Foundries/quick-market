@@ -52,10 +52,10 @@ test("history lists a later market ahead of an older round with a higher id", ()
   expect(listRounds(10).map((row) => row.id)).toEqual([100, 500])
   const who = address(3)
   const betRow = getDb().query(
-    `INSERT INTO buy_ins (chain_key, id, round_id, address, side, stake_micros, created_at) VALUES ('base-sepolia', ?, ?, ?, 'up', 1, 0)`,
+    `INSERT INTO buy_ins (chain_key, round_id, address, side, stake_micros, created_at) VALUES ('base-sepolia', ?, ?, 'up', 1, 0)`,
   )
-  betRow.run("old", 500, who)
-  betRow.run("new", 100, who)
+  betRow.run(500, who)
+  betRow.run(100, who)
   expect(listRounds(10, who, true).map((row) => row.id)).toEqual([100, 500])
   expect(listRounds(10, null, false, 100).map((row) => row.id)).toEqual([500])
   expect(listRounds(10, who, true, 50).map((row) => row.id)).toEqual([100, 500])

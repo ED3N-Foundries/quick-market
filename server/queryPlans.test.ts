@@ -24,7 +24,7 @@ test("a 100k-round fixture uses indexes for open buy-ins, board, advance, and st
      VALUES (?, ?, ?, ?, ?, ?, 0, 0)`,
   )
   const insertBet = db.query(
-    "INSERT INTO buy_ins (chain_key, id, round_id, address, side, stake_micros, created_at) VALUES (?, ?, ?, ?, 'up', ?, ?)",
+    "INSERT INTO buy_ins (chain_key, round_id, address, side, stake_micros, created_at) VALUES (?, ?, ?, 'up', ?, ?)",
   )
   const load = db.transaction(() => {
     for (let index = 0; index < ROUNDS; index++) {
@@ -40,7 +40,7 @@ test("a 100k-round fixture uses indexes for open buy-ins, board, advance, and st
       // Six distinct wallets per round. Only the two open rounds carry TARGET.
       for (let slot = 0; slot < 6 && made < BUY_INS; slot++, made++) {
         const address = id >= openId && slot === 0 ? TARGET : `0x${(made + 1).toString(16).padStart(40, "0")}`
-        insertBet.run(CHAIN, `b${made}`, id, address, 1_000_000 + slot, T - (ROUNDS - id) * WINDOW)
+        insertBet.run(CHAIN, id, address, 1_000_000 + slot, T - (ROUNDS - id) * WINDOW)
       }
     }
   })
