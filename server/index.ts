@@ -4,7 +4,7 @@ import { loadMarket, marketPreferences, requireExplicitChain, TICK_MS, type Publ
 import { feeBps, marketMs, MIN_STAKE_MICROS, priceSource, viewMs, windowMs, type PriceSource } from "./config"
 import { nextMarketAt, planWake, rollMarketAt, runWake, type MarketTiming } from "./clock"
 import { takeTick } from "./tick"
-import { enabledMarketKeys, loadEnv } from "./env"
+import { chainConfig, enabledMarketKeys, loadEnv, nearTreasuryId } from "./env"
 import { pumpAccountKeyframe, pushAccountNow } from "./accountKeyframe"
 import { activeChainKey, withChain } from "./activeChain"
 import { startChainRuntime, type ChainRuntime } from "./chainRuntime"
@@ -50,6 +50,7 @@ import {
   youFor,
 } from "./rounds"
 import { nearCooldownStatus } from "./near"
+import { beginNearRuntimeRetry, degradedNearRuntime } from "./nearWatchdog"
 import { sweepMcpSessions } from "./mcp"
 
 
@@ -103,6 +104,25 @@ async function bootServer() {
     } catch (error) {
       if (key !== "near-testnet" || runtimes.size === 0) throw error
       console.error(error instanceof Error ? error.message : error)
+      // A NEAR boot failure degrades the runtime instead of omitting the market until
+      // process exit: grants close, chain calls refuse with NEAR_UNAVAILABLE, and a
+      // watchdog retries the boot in the background (nearWatchdog.ts).
+      const env = loadEnv()
+      let treasury = ""
+      try {
+        treasury = (await nearTreasuryId(env)) ?? ""
+      } catch {
+        treasury = ""
+      }
+      runtimes.set(key, degradedNearRuntime({ chain: chainConfig(key, env), treasury, token: env.tokenAccount.trim() }))
+      beginNearRuntimeRetry({
+        error,
+        start: () => startChainRuntime(key),
+        onReady: (runtime) => {
+          runtimes.set(key, runtime)
+          console.log("near runtime recovered after boot retry")
+        },
+      })
     }
   }
 }

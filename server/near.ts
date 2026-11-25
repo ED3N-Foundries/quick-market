@@ -35,7 +35,6 @@ export type ParsedDeposit = {
 }
 
 let latest: TreasuryReport | null = null
-let polling = false
 /** Last block head seen by the deposit scanner, for the lag metric. */
 let depositHead: { chain: ChainKey; head: number; at: number } | null = null
 /** Nonce allocation. A broadcast must not sit in front of the next signature. */
@@ -125,12 +124,18 @@ export type NearRpcEndpoint = {
   backoffMs: number
 }
 
-/** Preference order when NEAR_RPC_1..4 are unset. The official node is omitted on purpose. */
+/**
+ * Preference order when NEAR_RPC_1..4 are unset. The official node is omitted on purpose.
+ * Reads and patient sends prefer FastNear/Zan/Intear; dRPC is demoted to last for its ~15%
+ * failure rate and deprecation warnings, but keeps the shortest send ceiling so a
+ * wait_until=NONE broadcast still lands there first (nearSendOrder sorts by send timeout).
+ * Compose pins NEAR_RPC_1..4, so a reorder must move both lists in the same deploy.
+ */
 export const DEFAULT_NEAR_RPCS: readonly NearRpcEndpoint[] = [
-  { url: NEAR_DRPC, timeoutMs: 1_800, sendTimeoutMs: 1_800, backoffMs: 1_000 },
   { url: NEAR_FALLBACK_RPC, timeoutMs: 4_000, sendTimeoutMs: 20_000, backoffMs: 1_500 },
   { url: "https://api.zan.top/near-testnet", timeoutMs: 4_000, sendTimeoutMs: 8_000, backoffMs: 1_500 },
   { url: "https://testnet-rpc.intea.rs", timeoutMs: 4_000, sendTimeoutMs: 8_000, backoffMs: 2_000 },
+  { url: NEAR_DRPC, timeoutMs: 1_800, sendTimeoutMs: 1_800, backoffMs: 1_000 },
 ]
 
 /** A send that waits for inclusion starts on an endpoint at least this patient. */
@@ -223,13 +228,91 @@ export function nearRpcGapMs(env: Record<string, string | undefined> = process.e
   return NEAR_RPC_GAP_DEFAULT_MS
 }
 
+/** Past this lag the deposit scanner takes bigger bites under a time budget instead of 12 blocks. */
+export const NEAR_DEPOSIT_CATCHUP_LAG_DEFAULT = 1_000
+export const NEAR_DEPOSIT_CATCHUP_BATCH_DEFAULT = 200
+export const NEAR_DEPOSIT_CATCHUP_BUDGET_DEFAULT_MS = 10_000
+export const NEAR_DEPOSIT_CATCHUP_GAP_DEFAULT_MS = 2_000
+
+export function nearDepositCatchupLag(env: Record<string, string | undefined> = process.env): number {
+  const raw = Number(env.NEAR_DEPOSIT_CATCHUP_LAG)
+  if (Number.isInteger(raw)) return Math.min(100_000, Math.max(100, raw))
+  return NEAR_DEPOSIT_CATCHUP_LAG_DEFAULT
+}
+
+/**
+ * Own clamp on purpose: the normal batch caps at 32 blocks, so a catch-up batch of 200
+ * routed through `nearDepositBatch` would silently cap. A backlog needs bigger bites.
+ */
+export function nearDepositCatchupBatch(env: Record<string, string | undefined> = process.env): number {
+  const raw = Number(env.NEAR_DEPOSIT_CATCHUP_BATCH)
+  if (Number.isInteger(raw)) return Math.min(1_000, Math.max(12, raw))
+  return NEAR_DEPOSIT_CATCHUP_BATCH_DEFAULT
+}
+
+export function nearDepositCatchupBudgetMs(env: Record<string, string | undefined> = process.env): number {
+  const raw = Number(env.NEAR_DEPOSIT_CATCHUP_BUDGET_MS)
+  if (Number.isInteger(raw)) return Math.min(60_000, Math.max(1_000, raw))
+  return NEAR_DEPOSIT_CATCHUP_BUDGET_DEFAULT_MS
+}
+
+/** While catching up the next batch starts after this gap, not the 20 s custody interval. */
+export function nearDepositCatchupGapMs(env: Record<string, string | undefined> = process.env): number {
+  const raw = Number(env.NEAR_DEPOSIT_CATCHUP_GAP_MS)
+  if (Number.isInteger(raw)) return Math.min(60_000, Math.max(250, raw))
+  return NEAR_DEPOSIT_CATCHUP_GAP_DEFAULT_MS
+}
+
+/** A pruned range the scanner jumped over. Deposits inside it were never credited. */
+export type NearDepositSkip = { from: number; to: number; at: number }
+
 export type NearDepositLag = {
   chain: ChainKey
   cursor: number | null
   head: number | null
   lag: number | null
   batch: number
+  mode: "normal" | "catchup"
+  budgetMs: number
+  skipped: NearDepositSkip[]
   updatedAt: number | null
+}
+
+const NEAR_DEPOSIT_SKIPS_MAX = 50
+
+function depositSkipsKey(chain: ChainKey): string {
+  return `${chain}:near_deposit_skips`
+}
+
+function readDepositSkips(chain: ChainKey): NearDepositSkip[] {
+  try {
+    const row = getDb().query("SELECT value FROM meta WHERE key = ?").get(depositSkipsKey(chain)) as {
+      value: string
+    } | null
+    if (!row) return []
+    const parsed = JSON.parse(row.value) as unknown
+    if (!Array.isArray(parsed)) return []
+    const skips: NearDepositSkip[] = []
+    for (const item of parsed) {
+      if (!item || typeof item !== "object") continue
+      const { from, to, at } = item as Record<string, unknown>
+      if (!Number.isSafeInteger(from) || !Number.isSafeInteger(to) || !Number.isSafeInteger(at)) continue
+      skips.push({ from: from as number, to: to as number, at: at as number })
+    }
+    return skips.slice(-NEAR_DEPOSIT_SKIPS_MAX)
+  } catch {
+    return []
+  }
+}
+
+/** Persist a pruned-range jump so an operator sees it in health, not only in the log. */
+function recordDepositSkip(chain: ChainKey, from: number, to: number, now = Date.now()): void {
+  const skips = readDepositSkips(chain)
+  skips.push({ from, to, at: now })
+  const trimmed = skips.slice(-NEAR_DEPOSIT_SKIPS_MAX)
+  getDb()
+    .query("INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+    .run(depositSkipsKey(chain), JSON.stringify(trimmed))
 }
 
 /** Deposit cursor against the last observed head. Health-only; never scans history. */
@@ -246,12 +329,17 @@ export function nearDepositLag(chain: ChainKey = activeChainKey()): NearDepositL
     cursor = null
   }
   const head = depositHead?.chain === chain ? depositHead.head : null
+  const lag = cursor != null && head != null ? Math.max(0, head - cursor) : null
+  const mode = lag != null && lag > nearDepositCatchupLag() ? "catchup" : "normal"
   return {
     chain,
     cursor,
     head,
-    lag: cursor != null && head != null ? Math.max(0, head - cursor) : null,
+    lag,
     batch,
+    mode,
+    budgetMs: mode === "catchup" ? nearDepositCatchupBudgetMs() : 0,
+    skipped: readDepositSkips(chain),
     updatedAt: depositHead?.chain === chain ? depositHead.at : null,
   }
 }
@@ -337,6 +425,7 @@ type NearRpcAttempt = {
   lastMs: number
   lastMethod: string
   lastError: string | null
+  lastKind: NearFailureKind | null
 }
 
 const rpcAttempts = new Map<string, NearRpcAttempt>()
@@ -352,6 +441,7 @@ export type NearRpcEndpointStatus = NearRpcEndpoint & {
   lastMs: number | null
   lastMethod: string | null
   lastError: string | null
+  lastKind: NearFailureKind | null
   quietForMs: number
 }
 
@@ -372,6 +462,7 @@ export function nearRpcStatus(now = Date.now(), endpoints = nearRpcEndpoints()):
       lastMs: attempt?.lastMs ?? null,
       lastMethod: attempt?.lastMethod ?? null,
       lastError: attempt?.lastError ?? null,
+      lastKind: attempt?.lastKind ?? null,
       quietForMs,
     }
   })
@@ -437,9 +528,14 @@ export function nearRpcOrder(
   return [...ready, ...cooling]
 }
 
-/** A waiting send starts on a patient endpoint. A broadcast (NONE) keeps preference order, so dRPC can accept it. */
+/**
+ * A waiting send starts on a patient endpoint. A broadcast (NONE) wants a fast accept, so
+ * the shortest send ceiling answers first — dRPC stays the broadcast hop after the demotion.
+ */
 export function nearSendOrder(endpoints: readonly NearRpcEndpoint[], waitUntil: string | undefined): NearRpcEndpoint[] {
-  if (!waitUntil || waitUntil === "NONE") return [...endpoints]
+  if (!waitUntil || waitUntil === "NONE") {
+    return [...endpoints].sort((a, b) => a.sendTimeoutMs - b.sendTimeoutMs)
+  }
   const patient = endpoints.filter((endpoint) => endpoint.sendTimeoutMs >= PATIENT_SEND_MS)
   const quick = endpoints.filter((endpoint) => endpoint.sendTimeoutMs < PATIENT_SEND_MS)
   return patient.length > 0 ? [...patient, ...quick] : [...endpoints]
@@ -451,20 +547,29 @@ function waitUntilOf(params: unknown): string | undefined {
   return typeof value === "string" ? value : undefined
 }
 
-/** A timed-out, refused, or unreachable call can move to the next endpoint. An execution failure cannot. */
-export function nearRpcBusy(error: unknown): boolean {
-  if (
-    error instanceof Error &&
-    (error.name === "TimeoutError" || error.name === "AbortError" || error.name === "SyntaxError")
-  ) {
-    return true
-  }
-  const text = nearErrorText(error)
-  if (text === "Server error" || text.startsWith("NEAR RPC returned")) return true
-  const lower = text.toLowerCase()
-  if (lower.includes("timeout_error") || lower.includes("timed out") || lower.includes("timeout")) return true
-  if (historyMissingText(lower)) return true
+export type NearFailureKind = "abort" | "rate" | "server" | "history" | "execution" | "other"
+
+function rateLimitedText(lower: string): boolean {
   return (
+    /(^|[^0-9])429([^0-9]|$)/.test(lower) ||
+    lower.includes("rate limit") ||
+    lower.includes("rate_limit") ||
+    lower.includes("ratelimit") ||
+    lower.includes("too many requests")
+  )
+}
+
+function executionErrorText(lower: string): boolean {
+  if (lower.includes("actionerror") || lower.includes("functioncallerror")) return true
+  // A nonce error re-signs; every other invalid transaction stays with the node that judged it.
+  return lower.includes("invalidtxerror") && !lower.includes("nonce")
+}
+
+function serverErrorText(lower: string): boolean {
+  return (
+    lower === "server error" ||
+    lower.startsWith("near rpc returned") ||
+    /(^|[^0-9])50[0-4]([^0-9]|$)/.test(lower) ||
     lower.includes("fetch failed") ||
     lower.includes("econnreset") ||
     lower.includes("econnrefused") ||
@@ -472,6 +577,33 @@ export function nearRpcBusy(error: unknown): boolean {
     lower.includes("unable to connect") ||
     lower.includes("socket")
   )
+}
+
+/**
+ * Classify one RPC failure so each hop gets the right parking and accounting:
+ * abort rotates without parking and never looks like a rate ban, rate parks and
+ * counts toward the funding breaker, execution stays with the node that answered.
+ */
+export function nearFailureKind(error: unknown): NearFailureKind {
+  if (error instanceof Error) {
+    if (error.name === "TimeoutError" || error.name === "AbortError") return "abort"
+    if (error.name === "SyntaxError") return "server"
+  }
+  const lower = nearErrorText(error).toLowerCase()
+  if (rateLimitedText(lower)) return "rate"
+  if (historyMissingText(lower)) return "history"
+  if (executionErrorText(lower)) return "execution"
+  if (serverErrorText(lower)) return "server"
+  if (lower.includes("timeout") || lower.includes("timed out") || lower.includes("timeout_error")) return "server"
+  return "other"
+}
+
+/** A hop worth retrying elsewhere: aborted, rate-limited, unhealthy, or history-missing. */
+const NEAR_BUSY_KINDS: readonly NearFailureKind[] = ["abort", "rate", "server", "history"]
+
+/** A timed-out, refused, rate-limited, or unreachable call moves to the next endpoint. An execution failure cannot. */
+export function nearRpcBusy(error: unknown): boolean {
+  return NEAR_BUSY_KINDS.includes(nearFailureKind(error))
 }
 
 function nearErrorText(error: unknown): string {
@@ -526,8 +658,10 @@ export async function callNearRpc(
     }
   }
   const send = method === "send_tx"
-  let ordered = nearRpcOrder(endpoints, Date.now(), quietUntil)
-  if (send) ordered = nearSendOrder(ordered, waitUntilOf(params))
+  let ordered = endpoints
+  if (send) ordered = nearSendOrder(endpoints, waitUntilOf(params))
+  // Cooling endpoints stay fallbacks within the same call, whatever the send preference.
+  ordered = nearRpcOrder(ordered, Date.now(), quietUntil)
   const budget = send ? Math.max(0, ...endpoints.map((endpoint) => endpoint.sendTimeoutMs)) : 0
   const started = Date.now()
   let last = "NEAR RPC failed"
@@ -554,11 +688,13 @@ export async function callNearRpc(
         lastMs: Date.now() - attemptStarted,
         lastMethod: method,
         lastError: null,
+        lastKind: null,
       })
       noteRpcSuccess()
       return result
     } catch (error) {
       last = rpcFailureText(error)
+      const kind = nearFailureKind(error)
       rpcAttempts.set(endpoint.url, {
         attempts: (previous?.attempts ?? 0) + 1,
         successes: previous?.successes ?? 0,
@@ -569,11 +705,15 @@ export async function callNearRpc(
         lastMs: Date.now() - attemptStarted,
         lastMethod: method,
         lastError: last.slice(0, 300),
+        lastKind: kind,
       })
-      if (!nearRpcBusy(error) && !nearRpcBusy(new Error(last))) break
+      // An execution failure (or an unrecognized one) stays with the node that answered.
+      if (kind === "execution" || kind === "other") break
       busyInCall += 1
-      if (last.toLowerCase().includes("429") || last.toLowerCase().includes("rate")) rateLimitedInCall += 1
-      quietUntil.set(endpoint.url, Date.now() + endpoint.backoffMs)
+      // An aborted hop is a slow node, not a sick one: rotate without parking it, and
+      // never let an abort look like a rate-limit ban. Rate and server hops park for backoff.
+      if (kind === "rate") rateLimitedInCall += 1
+      if (kind !== "abort") quietUntil.set(endpoint.url, Date.now() + endpoint.backoffMs)
     }
   }
   const failedAt = Date.now()
@@ -1316,21 +1456,28 @@ function saveDepositCursor(cursorKey: string, height: number) {
 async function pollNearDeposits(treasury: string) {
   // Background reads are deliberately outside the funding breaker. They fail
   // over and back off on their own without pausing withdrawals or grants.
+  const chainKey = activeChainKey()
   const token = loadEnv().tokenAccount.trim()
-  const cursorKey = `${activeChainKey()}:near_deposit_height`
+  const cursorKey = `${chainKey}:near_deposit_height`
   const cursorRow = getDb().query("SELECT value FROM meta WHERE key = ?").get(cursorKey) as { value: string } | null
   const latest = await nearBlock(undefined, true)
-  depositHead = { chain: activeChainKey(), head: latest.header.height, at: Date.now() }
+  depositHead = { chain: chainKey, head: latest.header.height, at: Date.now() }
   if (!cursorRow) {
     getDb().query("INSERT INTO meta (key, value) VALUES (?, ?)").run(cursorKey, String(latest.header.height))
     return
   }
   const cursor = Number(cursorRow.value)
   if (!Number.isSafeInteger(cursor)) throw new Error("NEAR deposit cursor is invalid")
-  const batch = nearDepositBatch()
+  // Past the catch-up lag the scanner takes bigger bites under a time budget, so a
+  // multi-day backlog drains without starving `book` or tripping the funding breaker.
+  const catchingUp = latest.header.height - cursor > nearDepositCatchupLag()
+  const batch = catchingUp ? nearDepositCatchupBatch() : nearDepositBatch()
+  const budgetMs = catchingUp ? nearDepositCatchupBudgetMs() : 0
+  const started = Date.now()
   const gapMs = nearRpcGapMs()
   const end = Math.min(latest.header.height, cursor + batch)
   for (let height = cursor + 1; height <= end; height += 1) {
+    if (budgetMs > 0 && Date.now() - started >= budgetMs) return
     let block: NearBlock
     try {
       block = await nearBlock(height, true)
@@ -1338,8 +1485,9 @@ async function pollNearDeposits(treasury: string) {
       if (isNearCooling(error)) return
       const resume = nearHistoryMissing(error) ? prunedDepositResume(cursor, latest.header.height) : null
       if (resume === null) throw error
-      console.error(`near deposits skipped ${height}..${resume}, pruned`)
+      console.error(`near deposits skipped ${height}..${resume}, pruned; cursor ${cursor} -> ${resume}`)
       saveDepositCursor(cursorKey, resume)
+      recordDepositSkip(chainKey, height, resume)
       return
     }
     if (gapMs > 0) await sleep(gapMs)
@@ -1409,29 +1557,49 @@ async function resumeNearWithdrawals() {
   }
 }
 
-export function startNearCustody(treasury: string) {
+export type NearCustodyLoop = { stop: () => void }
+
+/**
+ * Self-scheduling custody: the next tick follows the previous cycle plus a gap, so a slow
+ * batch can no longer make the scanner skip intervals. While the deposit lag is past the
+ * catch-up threshold the gap is seconds, not the custody interval, so a backlog drains
+ * between bounded bites instead of parking for 20 s after every small batch.
+ */
+export function startNearCustody(treasury: string): NearCustodyLoop {
   const chainKey = activeChainKey()
   console.log(`near rpc ${nearRpcEndpoints().map((endpoint) => endpoint.url).join(" ")}`)
-  const runtime = globalThis as unknown as { quickMarketNearCustody?: ReturnType<typeof setInterval> }
-  if (runtime.quickMarketNearCustody) clearInterval(runtime.quickMarketNearCustody)
-  const tick = () => {
-    withChain(chainKey, () => {
-      if (polling) return
-      polling = true
-      Promise.all([
-        pollNearDeposits(treasury).catch((error) => {
-          if (isNearCooling(error)) return
-          console.error(error)
-        }),
-        resumeNearWithdrawals().catch((error) => {
-          if (isNearCooling(error)) return
-          console.error(error)
-        }),
-      ]).finally(() => {
-        polling = false
-      })
-    })
+  const runtime = globalThis as unknown as { quickMarketNearCustody?: NearCustodyLoop }
+  runtime.quickMarketNearCustody?.stop()
+  let stopped = false
+  const loop: NearCustodyLoop = {
+    stop: () => {
+      stopped = true
+    },
   }
-  tick()
-  runtime.quickMarketNearCustody = setInterval(tick, nearCustodyIntervalMs())
+  runtime.quickMarketNearCustody = loop
+  const tick = async (): Promise<void> => {
+    try {
+      await withChain(chainKey, () =>
+        Promise.all([
+          pollNearDeposits(treasury).catch((error) => {
+            if (isNearCooling(error)) return
+            console.error(error)
+          }),
+          resumeNearWithdrawals().catch((error) => {
+            if (isNearCooling(error)) return
+            console.error(error)
+          }),
+        ]),
+      )
+    } finally {
+      if (!stopped) {
+        const lag = nearDepositLag(chainKey).lag
+        const gap = lag != null && lag > nearDepositCatchupLag() ? nearDepositCatchupGapMs() : nearCustodyIntervalMs()
+        const timer = setTimeout(() => void tick(), gap)
+        timer.unref?.()
+      }
+    }
+  }
+  void tick()
+  return loop
 }

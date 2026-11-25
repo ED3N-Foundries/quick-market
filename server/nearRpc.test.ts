@@ -5,6 +5,8 @@ import {
   NEAR_FALLBACK_RPC,
   NEAR_PUBLIC_RPC,
   callNearRpc,
+  nearCooldownStatus,
+  nearFailureKind,
   nearHistoryMissing,
   nearRpcEndpoints,
   nearRpcOrder,
@@ -12,11 +14,12 @@ import {
   nearSendOrder,
   parseNearRpcLine,
   prunedDepositResume,
+  resetNearCooldownForTest,
   resetNearRpcQuiet,
 } from "./near"
 
-const drpc = DEFAULT_NEAR_RPCS[0]
-const fastnear = DEFAULT_NEAR_RPCS[1]
+const fastnear = DEFAULT_NEAR_RPCS[0]
+const drpc = DEFAULT_NEAR_RPCS[3]
 
 test("a NEAR RPC line is a url and three millisecond budgets", () => {
   expect(parseNearRpcLine(" https://near-testnet.drpc.org/ 1800 1800 1000 ")).toEqual({
@@ -41,32 +44,57 @@ test("four NEAR lines replace the default list and a fifth is refused", () => {
   expect(() => nearRpcEndpoints({ NEAR_RPC_5: "https://five.example/near 1800 1800 1000" })).toThrow("4 endpoints")
 })
 
-test("an unset list prefers dRPC and leaves the official node out", () => {
+test("an unset list prefers FastNear for reads and demotes dRPC to last", () => {
   const urls = nearRpcEndpoints({}).map((endpoint) => endpoint.url)
   expect(urls).toEqual([
-    NEAR_DRPC,
     NEAR_FALLBACK_RPC,
     "https://api.zan.top/near-testnet",
     "https://testnet-rpc.intea.rs",
+    NEAR_DRPC,
   ])
   expect(urls).not.toContain(NEAR_PUBLIC_RPC)
-  expect(drpc.sendTimeoutMs).toBe(1_800)
   expect(fastnear.sendTimeoutMs).toBe(20_000)
+  expect(drpc.sendTimeoutMs).toBe(1_800)
   const legacy = nearRpcEndpoints({ RPC_URL: "https://example.test/near/" })
   expect(legacy).toEqual([{ url: "https://example.test/near", timeoutMs: 8_000, sendTimeoutMs: 20_000, backoffMs: 1_000 }])
   expect(nearRpcEndpoints({ RPC_URL: "https://sepolia.base.org" }).map((endpoint) => endpoint.url)).toEqual(urls)
+})
+
+test("a broadcast still lands on the fast-accept hop after the demotion", () => {
+  expect(nearSendOrder(DEFAULT_NEAR_RPCS, "NONE").map((endpoint) => endpoint.url)[0]).toBe(NEAR_DRPC)
+  expect(nearSendOrder(DEFAULT_NEAR_RPCS, undefined).map((endpoint) => endpoint.url)[0]).toBe(NEAR_DRPC)
+  expect(nearSendOrder(DEFAULT_NEAR_RPCS, "INCLUDED").map((endpoint) => endpoint.url)[0]).toBe(NEAR_FALLBACK_RPC)
 })
 
 test("a cooling endpoint is deprioritized and a waiting send starts on a patient node", () => {
   const quiet = new Map<string, number>([[drpc.url, 5_000]])
   expect(nearRpcOrder(DEFAULT_NEAR_RPCS, 4_000, quiet).map((endpoint) => endpoint.url)[0]).toBe(NEAR_FALLBACK_RPC)
   expect(nearRpcOrder(DEFAULT_NEAR_RPCS, 4_000, quiet).at(-1)?.url).toBe(NEAR_DRPC)
-  expect(nearRpcOrder(DEFAULT_NEAR_RPCS, 5_000, quiet)[0]?.url).toBe(NEAR_DRPC)
+  expect(nearRpcOrder(DEFAULT_NEAR_RPCS, 5_000, quiet)[0]?.url).toBe(NEAR_FALLBACK_RPC)
   const allQuiet = new Map(DEFAULT_NEAR_RPCS.map((endpoint, index) => [endpoint.url, 10_000 + index]))
   expect(nearRpcOrder(DEFAULT_NEAR_RPCS, 1_000, allQuiet)).toEqual([...DEFAULT_NEAR_RPCS])
   expect(nearSendOrder([drpc, fastnear], "EXECUTED").map((endpoint) => endpoint.url)).toEqual([fastnear.url, drpc.url])
   expect(nearSendOrder([drpc, fastnear], "NONE").map((endpoint) => endpoint.url)).toEqual([drpc.url, fastnear.url])
   expect(nearSendOrder([drpc, fastnear], "INCLUDED")[0]?.url).toBe(fastnear.url)
+})
+
+test("RPC failures classify into kinds that decide parking and rotation", () => {
+  const named = (name: string) => Object.assign(new Error("boom"), { name })
+  expect(nearFailureKind(named("TimeoutError"))).toBe("abort")
+  expect(nearFailureKind(named("AbortError"))).toBe("abort")
+  expect(nearFailureKind(new Error("NEAR RPC returned 429"))).toBe("rate")
+  expect(nearFailureKind(new Error("rate limit exceeded"))).toBe("rate")
+  expect(nearFailureKind(new Error("Too many requests"))).toBe("rate")
+  expect(nearFailureKind(new Error("DB Not Found Error: BLOCK: abc"))).toBe("history")
+  expect(nearFailureKind(new Error("UNKNOWN_CHUNK while fetching"))).toBe("history")
+  expect(nearFailureKind(new Error('{"ActionError":"mint failed"}'))).toBe("execution")
+  expect(nearFailureKind(new Error("FunctionCallError happened"))).toBe("execution")
+  expect(nearFailureKind(new Error("InvalidTxError: nonce must be 42"))).toBe("other")
+  expect(nearFailureKind(new Error("Server error"))).toBe("server")
+  expect(nearFailureKind(new Error("NEAR RPC returned 503"))).toBe("server")
+  expect(nearFailureKind(new Error("fetch failed"))).toBe("server")
+  expect(nearFailureKind(new Error("504 Gateway Timeout"))).toBe("server")
+  expect(nearFailureKind(new Error("totally unknown failure"))).toBe("other")
 })
 
 test("a pruned deposit cursor resumes at the block before the head", () => {
@@ -259,6 +287,71 @@ test("an execution failure does not fall through", async () => {
   } finally {
     resetNearRpcQuiet()
     failed.stop(true)
+    ready.stop(true)
+  }
+})
+
+test("an abort-only walk rotates without parking endpoints or looking rate-limited", async () => {
+  resetNearRpcQuiet()
+  resetNearCooldownForTest()
+  const hits: string[] = []
+  const slow = Bun.serve({
+    port: 0,
+    async fetch(request) {
+      hits.push(new URL(request.url).pathname)
+      await Bun.sleep(300)
+      return Response.json({ jsonrpc: "2.0", id: "quick-market", result: {} })
+    },
+  })
+  const endpoints = [
+    { url: `http://127.0.0.1:${slow.port}/a`, timeoutMs: 40, sendTimeoutMs: 40, backoffMs: 60_000 },
+    { url: `http://127.0.0.1:${slow.port}/b`, timeoutMs: 40, sendTimeoutMs: 40, backoffMs: 60_000 },
+  ]
+  try {
+    await expect(callNearRpc(endpoints, "query", {})).rejects.toThrow()
+    // Both hops answered too slowly, so both were tried — an abort rotates.
+    expect(hits).toEqual(["/a", "/b"])
+    const status = nearRpcStatus(Date.now(), endpoints)
+    // An abort is a slow node, not a sick one: no parking, no rate ban, no cooldown.
+    expect(status.map((endpoint) => endpoint.state)).toEqual(["error", "error"])
+    expect(status.every((endpoint) => endpoint.lastKind === "abort")).toBe(true)
+    expect(nearCooldownStatus().cooling).toBe(false)
+  } finally {
+    resetNearRpcQuiet()
+    slow.stop(true)
+  }
+})
+
+test("a rate-limited body rotates and parks the hop even when the status line is clean", async () => {
+  resetNearRpcQuiet()
+  const hits: string[] = []
+  const limited = Bun.serve({
+    port: 0,
+    fetch() {
+      hits.push("limited")
+      return Response.json({ jsonrpc: "2.0", id: "quick-market", error: { message: "Too many requests" } })
+    },
+  })
+  const ready = Bun.serve({
+    port: 0,
+    fetch() {
+      hits.push("ready")
+      return Response.json({ jsonrpc: "2.0", id: "quick-market", result: { ok: true } })
+    },
+  })
+  const endpoints = [
+    { url: `http://127.0.0.1:${limited.port}/near`, timeoutMs: 1_000, sendTimeoutMs: 1_000, backoffMs: 60_000 },
+    { url: `http://127.0.0.1:${ready.port}/near`, timeoutMs: 1_000, sendTimeoutMs: 1_000, backoffMs: 1_000 },
+  ]
+  try {
+    expect(await callNearRpc(endpoints, "query", {})).toEqual({ ok: true })
+    expect(hits).toEqual(["limited", "ready"])
+    const status = nearRpcStatus(Date.now(), endpoints)
+    expect(status[0]?.state).toBe("cooling")
+    expect(status[0]?.lastKind).toBe("rate")
+  } finally {
+    resetNearRpcQuiet()
+    limited.stop(true)
     ready.stop(true)
   }
 })

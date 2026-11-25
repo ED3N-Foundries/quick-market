@@ -305,6 +305,35 @@ test("a pending grant with no hash is cleared on resume", async () => {
   expect(youFor(who)?.grantAt).toBeNull()
 })
 
+test("a resume still in flight collapses a second call instead of double-watching", async () => {
+  const hash = `0x${"ee".repeat(32)}`
+  getDb()
+    .query(
+      "INSERT INTO users (chain_key, address, balance_micros, created_at, grant_pending_at, grant_tx, grant_seen) VALUES ('base-sepolia', ?, 0, 0, ?, ?, 1)",
+    )
+    .run(who, 40, hash)
+  let watches = 0
+  let release: () => void = () => {}
+  const gate = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const watch = async () => {
+    watches += 1
+    await gate
+  }
+  const input = { chainKey: "base-sepolia" as const, amount: 100_000_000, watch }
+  const first = resumePendingGrants(input)
+  await Bun.sleep(20)
+  const second = resumePendingGrants(input)
+  release()
+  await first
+  await second
+  expect(watches).toBe(1)
+  expect(youFor(who)?.grantPending).toBeNull()
+  expect(youFor(who)?.grantAt).toBe(40)
+  expect(youFor(who)?.balanceMicros).toBe(100_000_000)
+})
+
 test("grant timing and cutover are pure", () => {
   expect(grantDue(null, 5_000, hour)).toBe(true)
   expect(grantDue(0, hour - 1, hour)).toBe(false)

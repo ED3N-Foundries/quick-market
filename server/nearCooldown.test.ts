@@ -6,6 +6,10 @@ import {
   nearCooldownStatus,
   nearCustodyIntervalMs,
   nearDepositBatch,
+  nearDepositCatchupBatch,
+  nearDepositCatchupBudgetMs,
+  nearDepositCatchupGapMs,
+  nearDepositCatchupLag,
   nearDepositLag,
   nearRpcGapMs,
   requestNearWithdraw,
@@ -173,12 +177,24 @@ test("deposit lag reads the stored cursor without touching history", () => {
   getDb()
     .query("INSERT INTO meta (key, value) VALUES (?, ?)")
     .run("near-testnet:near_deposit_height", "111326")
-  expect(nearDepositLag("near-testnet")).toEqual({
-    chain: "near-testnet",
-    cursor: 111326,
-    head: null,
-    lag: null,
-    batch: 12,
-    updatedAt: null,
-  })
+  const lag = nearDepositLag("near-testnet")
+  expect(lag.chain).toBe("near-testnet")
+  expect(lag.cursor).toBe(111326)
+  expect(lag.batch).toBe(12)
+  expect(lag.mode).toBe("normal")
+  expect(lag.budgetMs).toBe(0)
+  expect(lag.skipped).toEqual([])
+})
+
+test("catch-up caps come from env and bypass the 32-block batch ceiling", () => {
+  expect(nearDepositCatchupLag({})).toBe(1_000)
+  expect(nearDepositCatchupLag({ NEAR_DEPOSIT_CATCHUP_LAG: "50" })).toBe(100)
+  expect(nearDepositCatchupLag({ NEAR_DEPOSIT_CATCHUP_LAG: "999999" })).toBe(100_000)
+  expect(nearDepositCatchupBatch({})).toBe(200)
+  expect(nearDepositCatchupBatch({ NEAR_DEPOSIT_CATCHUP_BATCH: "999" })).toBe(999)
+  expect(nearDepositCatchupBatch({ NEAR_DEPOSIT_CATCHUP_BATCH: "5" })).toBe(12)
+  expect(nearDepositCatchupBudgetMs({})).toBe(10_000)
+  expect(nearDepositCatchupBudgetMs({ NEAR_DEPOSIT_CATCHUP_BUDGET_MS: "500" })).toBe(1_000)
+  expect(nearDepositCatchupGapMs({})).toBe(2_000)
+  expect(nearDepositCatchupGapMs({ NEAR_DEPOSIT_CATCHUP_GAP_MS: "10" })).toBe(250)
 })

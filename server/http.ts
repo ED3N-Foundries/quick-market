@@ -23,6 +23,7 @@ import { orderLatency } from "./orderLatency"
 import { noteRequestError, snapshotProcessHealth } from "./processHealth"
 import { parseMicros } from "./money"
 import { NEAR_COOLDOWN_CODE, isNearCooling, nearCooldownStatus, nearDepositLag, nearRpcStatus, type NearFundingState } from "./near"
+import { nearRuntimeSlot } from "./nearWatchdog"
 import {
   board,
   feedStatus,
@@ -129,9 +130,11 @@ function liveChainKeys(http: Pick<HttpDeps, "liveChains" | "chainKey">): ChainKe
   return [http.chainKey()]
 }
 
-function nearLiveState(http: Pick<HttpDeps, "liveChains" | "chainKey">): { cooling: NearFundingState; rpc: ReturnType<typeof nearRpcStatus> } {
-  if (!isNearLive(http)) return { cooling: { cooling: false, retryAfterMs: 0, untilMs: null, reason: null }, rpc: [] }
-  return { cooling: nearCooldownStatus(), rpc: nearRpcStatus() }
+function nearLiveState(
+  http: Pick<HttpDeps, "liveChains" | "chainKey">,
+): { cooling: NearFundingState; rpc: ReturnType<typeof nearRpcStatus>; runtime: ReturnType<typeof nearRuntimeSlot> | null } {
+  if (!isNearLive(http)) return { cooling: { cooling: false, retryAfterMs: 0, untilMs: null, reason: null }, rpc: [], runtime: null }
+  return { cooling: nearCooldownStatus(), rpc: nearRpcStatus(), runtime: nearRuntimeSlot() }
 }
 
 function coolingResponse(funding: NearFundingState): Response {
@@ -185,6 +188,7 @@ function getHealth(): Response {
     previous: proc?.previous ?? null,
     nearRpc: near.rpc,
     nearCooldown: cooling,
+    nearRuntime: near.runtime,
     nearDeposit: isNearLive(http) ? nearDepositLag("near-testnet") : null,
     stream: http.streamMetrics(),
     orderLatency: orderLatency.snapshot(),
@@ -288,6 +292,7 @@ function getStatus(): Response {
     previous: proc?.previous ?? null,
     nearRpc: near.rpc,
     nearCooldown: cooling,
+    nearRuntime: near.runtime,
     nearDeposit: isNearLive(http) ? nearDepositLag("near-testnet") : null,
     orderLatency: orderLatency.snapshot(now),
     mcp: mcpSessionStats(),

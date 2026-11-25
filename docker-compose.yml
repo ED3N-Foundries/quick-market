@@ -39,10 +39,10 @@ services:
       - path: ${DEPLOY_ENV_FILE:-./deploy.env}
         required: true
     environment:
-      NEAR_RPC_1: "https://near-testnet.drpc.org 1800 1800 1000"
-      NEAR_RPC_2: "https://test.rpc.fastnear.com 4000 20000 1500"
-      NEAR_RPC_3: "https://api.zan.top/near-testnet 4000 8000 1500"
-      NEAR_RPC_4: "https://testnet-rpc.intea.rs 4000 8000 2000"
+      NEAR_RPC_1: "https://test.rpc.fastnear.com 4000 20000 1500"
+      NEAR_RPC_2: "https://api.zan.top/near-testnet 4000 8000 1500"
+      NEAR_RPC_3: "https://testnet-rpc.intea.rs 4000 8000 2000"
+      NEAR_RPC_4: "https://near-testnet.drpc.org 1800 1800 1000"
     volumes:
       - qm_data:/data
     ports:

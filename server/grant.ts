@@ -196,8 +196,26 @@ type PendingGrantRow = { address: string; grant_pending_at: number; grant_tx: st
 /**
  * After a restart the in-memory mint is gone.
  * A stored hash is watched again and credited at step 3. A row with no hash was never accepted, so the slot opens.
+ * A call while one resume is still walking collapses into it: the boot path and the NEAR
+ * watchdog retry share this, and a second concurrent walk would double-watch the same rows.
  */
+const resumingGrants = new Map<ChainKey, Promise<void>>()
+
 export function resumePendingGrants(input: {
+  chainKey: ChainKey
+  amount: number
+  watch: (hash: string, report: (progress: GrantProgress) => void) => Promise<void>
+}): Promise<void> {
+  const existing = resumingGrants.get(input.chainKey)
+  if (existing) return existing
+  const run = walkPendingGrants(input).finally(() => {
+    if (resumingGrants.get(input.chainKey) === run) resumingGrants.delete(input.chainKey)
+  })
+  resumingGrants.set(input.chainKey, run)
+  return run
+}
+
+async function walkPendingGrants(input: {
   chainKey: ChainKey
   amount: number
   watch: (hash: string, report: (progress: GrantProgress) => void) => Promise<void>
