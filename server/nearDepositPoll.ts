@@ -281,8 +281,12 @@ export async function pollNearDepositIndex(treasury: string): Promise<NearDeposi
     }
   } catch (error) {
     poll.failures += 1
-    if (error instanceof NearDepositIndexThrottled && error.retryAfterMs != null) {
-      poll.holdUntilMs = Date.now() + Math.min(error.retryAfterMs, NEAR_DEPOSIT_INDEX_HOLD_MAX_MS)
+    if (error instanceof NearDepositIndexThrottled) {
+      // A 429 with no retry-after still has to park. The free tier is 10/min
+      // and 420/day; retrying on the catch-up gap (2 s) would spend that quota
+      // and keep the ban in place. The hold cap is the park when the header is absent.
+      const retryAfterMs = error.retryAfterMs ?? NEAR_DEPOSIT_INDEX_HOLD_MAX_MS
+      poll.holdUntilMs = Date.now() + Math.min(retryAfterMs, NEAR_DEPOSIT_INDEX_HOLD_MAX_MS)
     }
     poll.lastError = messageOf(error)
     return { ok: false, pages, events: 0, credits: 0, held: false }

@@ -363,6 +363,30 @@ test("an RPC outage keeps the hint for the next poll instead of skipping it", as
   }
 })
 
+test("a 429 without retry-after still parks the poll", async () => {
+  seedDb()
+  const index = mockIndex({ pages: () => [[]], status: () => 429 })
+  const rpc = mockRpc()
+  const restore = envPatch({
+    TOKEN_ACCOUNT: token,
+    NEAR_DEPOSIT_INDEX_URL: `http://127.0.0.1:${index.server.port}`,
+    NEAR_RPC_1: `http://127.0.0.1:${rpc.server.port}/near 500 500 100`,
+  })
+  try {
+    const throttled = await pollNearDepositIndex(treasury)
+    expect(throttled.ok).toBe(false)
+    expect(throttled.held).toBe(false)
+    expect(index.counter.fetches).toBe(1)
+    const held = await pollNearDepositIndex(treasury)
+    expect(held.held).toBe(true)
+    expect(index.counter.fetches).toBe(1)
+  } finally {
+    restore()
+    index.server.stop(true)
+    rpc.server.stop(true)
+  }
+})
+
 test("a throttled index holds the poll and honors retry-after", async () => {
   seedDb()
   const index = mockIndex({ pages: () => [[]], status: () => 429, retryAfter: "30" })
