@@ -140,6 +140,11 @@ export function feedStatus(now: number): "live" | "stale" {
   return now - lastReceivedAt <= LIVE_MS ? "live" : "stale"
 }
 
+/** The last print arrival, for the public slim-health feed age. */
+export function feedLastReceivedAt(): number {
+  return lastReceivedAt
+}
+
 /** The most tape points one reply may carry. */
 export const TAPE_POINTS_MAX = 2_000
 

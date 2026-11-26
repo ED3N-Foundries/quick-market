@@ -50,10 +50,12 @@ services:
     networks:
       - qm
     healthcheck:
-      test: ["CMD", "bun", "-e", "const r = await fetch('http://127.0.0.1:3001/api/state'); if (!r.ok) process.exit(1)"]
+      # D1: stall-aware. HTTP 200 alone said "healthy" through the v1 2.2 wedge;
+      # this asserts the process status and feed liveness the slim health reports.
+      test: ["CMD", "bun", "-e", "const r = await fetch('http://127.0.0.1:3001/api/health'); if (!r.ok) process.exit(1); const j = await r.json(); if (!j.feedUp || j.status === 'down') process.exit(1)"]
       interval: 10s
       timeout: 5s
-      retries: 12
+      retries: 6
       start_period: 1800s
 
   quick-market-agent:

@@ -174,16 +174,27 @@ test("a failing background walk does not trip the funding breaker", async () => 
 })
 
 test("deposit lag reads the stored cursor without touching history", () => {
-  getDb()
-    .query("INSERT INTO meta (key, value) VALUES (?, ?)")
-    .run("near-testnet:near_deposit_height", "111326")
-  const lag = nearDepositLag("near-testnet")
-  expect(lag.chain).toBe("near-testnet")
-  expect(lag.cursor).toBe(111326)
-  expect(lag.batch).toBe(12)
-  expect(lag.mode).toBe("normal")
-  expect(lag.budgetMs).toBe(0)
-  expect(lag.skipped).toEqual([])
+  // Scan-only deployment (D1): a blank index URL keeps the block walk primary,
+  // so the cursor fields exist and no indexer poll is attempted.
+  const saved = process.env.NEAR_DEPOSIT_INDEX_URL
+  process.env.NEAR_DEPOSIT_INDEX_URL = ""
+  try {
+    getDb()
+      .query("INSERT INTO meta (key, value) VALUES (?, ?)")
+      .run("near-testnet:near_deposit_height", "111326")
+    const lag = nearDepositLag("near-testnet")
+    expect(lag.chain).toBe("near-testnet")
+    expect(lag.source).toBe("scan")
+    expect(lag.indexUrl).toBe(null)
+    expect(lag.cursor).toBe(111326)
+    expect(lag.batch).toBe(12)
+    expect(lag.mode).toBe("normal")
+    expect(lag.budgetMs).toBe(0)
+    expect(lag.skipped).toEqual([])
+  } finally {
+    if (saved === undefined) delete process.env.NEAR_DEPOSIT_INDEX_URL
+    else process.env.NEAR_DEPOSIT_INDEX_URL = saved
+  }
 })
 
 test("catch-up caps come from env and bypass the 32-block batch ceiling", () => {

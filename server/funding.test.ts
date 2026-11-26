@@ -7,6 +7,7 @@ import { describeTreasury } from "../shared/near"
 import { getDb, useDatabase } from "./db"
 import { collectFunding, type EvmBalances } from "./funding"
 import { bindHttp, handle, handleInternal } from "./http"
+import { resetRuntime } from "./rounds"
 
 afterEach(() => {
   useDatabase(":memory:")
@@ -104,9 +105,14 @@ test("the public health route is liveness only", async () => {
     serveUi: false,
     distDir: "/tmp/none",
   })
+  // D1: slim health carries the stall-aware facts the compose healthcheck asserts.
+  // resetRuntime clears any feed print an earlier suite left behind, so the
+  // feed facts are deterministic here.
+  resetRuntime()
   const health = await handle(new Request("http://market/api/health"))
   expect(health.status).toBe(200)
-  expect(await health.json()).toEqual({ ok: true })
+  const slim = (await health.json()) as { ok: boolean; status: string; feedUp: boolean; feedAgeMs: number | null }
+  expect(slim).toEqual({ ok: true, status: "ok", feedUp: false, feedAgeMs: null })
   expect((await handle(new Request("http://market/api/status"))).status).toBe(404)
   expect((await handle(new Request("http://market/api/health/history"))).status).toBe(404)
   const funding = await handleInternal(new Request("http://market/api/funding"))

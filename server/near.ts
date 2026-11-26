@@ -19,6 +19,12 @@ import { marketPreferences } from "../shared/market"
 import { MINT_CONFIRMATIONS, MINT_RECEIPT_TIMEOUT_MS } from "../shared/mint"
 import { parseNearPublicKey, publicKeyBytes } from "../shared/nearKey"
 import { encodeFunctionCall, jsonArgs, signTransaction } from "./nearTx"
+import {
+  nearDepositIndexHealth,
+  nearDepositPollMs,
+  nearDepositScanActive,
+  pollNearDepositIndex,
+} from "./nearDepositPoll"
 
 /** A missing key or invalid NEAR token stops the process before it listens. */
 export class NearConfigError extends Error {}
@@ -266,16 +272,37 @@ export function nearDepositCatchupGapMs(env: Record<string, string | undefined> 
 /** A pruned range the scanner jumped over. Deposits inside it were never credited. */
 export type NearDepositSkip = { from: number; to: number; at: number }
 
+/**
+ * D1: deposit discovery is the indexer poll; the block walk is the fallback.
+ * `source` says which path is live right now. The scan cursor fields exist
+ * only in scan mode — in indexer mode the block lag is not a countdown, and
+ * the marker (nearDepositPoll) is the stop-point that matters.
+ */
 export type NearDepositLag = {
   chain: ChainKey
-  cursor: number | null
-  head: number | null
-  lag: number | null
-  batch: number
-  mode: "normal" | "catchup"
-  budgetMs: number
+  source: "indexer" | "scan"
+  lastPollAt: number | null
+  lastOkAt: number | null
+  lastError: string | null
+  eventsSeen: number
+  lastEventBlock: number | null
   skipped: NearDepositSkip[]
-  updatedAt: number | null
+  /** Indexer-path facts. `indexUrl` is null in scan-only deployments. */
+  indexUrl: string | null
+  credits: number
+  transfersSeen: number
+  hintMismatches: number
+  downForMs: number | null
+  marker: { blockHeight: number; eventIndex: number; receiptId: string } | null
+  markerAt: number | null
+  /** Scan mode only: the block cursor against the last observed head. */
+  cursor?: number | null
+  head?: number | null
+  lag?: number | null
+  batch?: number
+  mode?: "normal" | "catchup"
+  budgetMs?: number
+  updatedAt?: number | null
 }
 
 const NEAR_DEPOSIT_SKIPS_MAX = 50
@@ -315,8 +342,28 @@ function recordDepositSkip(chain: ChainKey, from: number, to: number, now = Date
     .run(depositSkipsKey(chain), JSON.stringify(trimmed))
 }
 
-/** Deposit cursor against the last observed head. Health-only; never scans history. */
+/** Deposit discovery health: the indexer poll when green, the block walk when it is not. */
 export function nearDepositLag(chain: ChainKey = activeChainKey()): NearDepositLag {
+  const scan = nearDepositScanActive()
+  const index = nearDepositIndexHealth()
+  const base: NearDepositLag = {
+    chain,
+    source: scan ? "scan" : "indexer",
+    lastPollAt: index.lastPollAt,
+    lastOkAt: index.lastOkAt,
+    lastError: index.lastError,
+    eventsSeen: index.eventsSeen,
+    lastEventBlock: index.lastEventBlock,
+    skipped: readDepositSkips(chain),
+    indexUrl: index.url,
+    credits: index.credits,
+    transfersSeen: index.transfersSeen,
+    hintMismatches: index.hintMismatches,
+    downForMs: index.downForMs,
+    marker: index.marker,
+    markerAt: index.markerAt,
+  }
+  if (!scan) return base
   const batch = nearDepositBatch()
   let cursor: number | null = null
   try {
@@ -332,14 +379,13 @@ export function nearDepositLag(chain: ChainKey = activeChainKey()): NearDepositL
   const lag = cursor != null && head != null ? Math.max(0, head - cursor) : null
   const mode = lag != null && lag > nearDepositCatchupLag() ? "catchup" : "normal"
   return {
-    chain,
+    ...base,
     cursor,
     head,
     lag,
     batch,
     mode,
     budgetMs: mode === "catchup" ? nearDepositCatchupBudgetMs() : 0,
-    skipped: readDepositSkips(chain),
     updatedAt: depositHead?.chain === chain ? depositHead.at : null,
   }
 }
@@ -1561,9 +1607,10 @@ export type NearCustodyLoop = { stop: () => void }
 
 /**
  * Self-scheduling custody: the next tick follows the previous cycle plus a gap, so a slow
- * batch can no longer make the scanner skip intervals. While the deposit lag is past the
- * catch-up threshold the gap is seconds, not the custody interval, so a backlog drains
- * between bounded bites instead of parking for 20 s after every small batch.
+ * batch can no longer make the scanner skip intervals. D1: each tick polls the NearBlocks
+ * account feed first; the block walk below runs only while that poll is off or failing
+ * past the grace window, and while it does run, the catch-up gap logic keeps draining a
+ * backlog between bounded bites instead of parking for the custody interval.
  */
 export function startNearCustody(treasury: string): NearCustodyLoop {
   const chainKey = activeChainKey()
@@ -1578,10 +1625,16 @@ export function startNearCustody(treasury: string): NearCustodyLoop {
   }
   runtime.quickMarketNearCustody = loop
   const tick = async (): Promise<void> => {
+    // The block walk runs only while the indexer poll is off or has been
+    // failing past the grace window; a green poll idles it entirely.
+    const scan = nearDepositScanActive()
     try {
       await withChain(chainKey, () =>
         Promise.all([
-          pollNearDeposits(treasury).catch((error) => {
+          pollNearDepositIndex(treasury).catch((error) => {
+            console.error(error)
+          }),
+          (scan ? pollNearDeposits(treasury) : Promise.resolve()).catch((error) => {
             if (isNearCooling(error)) return
             console.error(error)
           }),
@@ -1593,8 +1646,16 @@ export function startNearCustody(treasury: string): NearCustodyLoop {
       )
     } finally {
       if (!stopped) {
-        const lag = nearDepositLag(chainKey).lag
-        const gap = lag != null && lag > nearDepositCatchupLag() ? nearDepositCatchupGapMs() : nearCustodyIntervalMs()
+        const scanNext = nearDepositScanActive()
+        let gap: number
+        if (scanNext) {
+          const lag = nearDepositLag(chainKey).lag ?? null
+          gap =
+            lag != null && lag > nearDepositCatchupLag() ? nearDepositCatchupGapMs() : nearCustodyIntervalMs()
+        } else {
+          // Indexer mode ticks at the poll cadence; the scan fields stay quiet.
+          gap = nearDepositPollMs()
+        }
         const timer = setTimeout(() => void tick(), gap)
         timer.unref?.()
       }

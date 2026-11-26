@@ -26,6 +26,7 @@ import { NEAR_COOLDOWN_CODE, isNearCooling, nearCooldownStatus, nearDepositLag, 
 import { nearRuntimeSlot } from "./nearWatchdog"
 import {
   board,
+  feedLastReceivedAt,
   feedStatus,
   handoffNow,
   listRounds,
@@ -521,12 +522,35 @@ async function serveAsset(file: Bun.BunFile, html: boolean, lang: Lang | null): 
   })
 }
 
+/**
+ * Public slim health (D1 §2 item 7). The compose healthcheck asserts
+ * `status !== "down" && feedUp`, so a wedged market that still answers HTTP
+ * flips the container unhealthy instead of looking fine.
+ */
+function slimHealth(): Record<string, unknown> {
+  const now = Date.now()
+  let status = "ok"
+  try {
+    status = snapshotProcessHealth().status ?? "ok"
+  } catch {
+    status = "ok"
+  }
+  const feedUp = feedStatus(now) === "live"
+  const lastReceivedAt = feedLastReceivedAt()
+  return {
+    ok: true,
+    status,
+    feedUp,
+    feedAgeMs: lastReceivedAt > 0 ? Math.max(0, now - lastReceivedAt) : null,
+  }
+}
+
 type RouteHandler = (req: Request, url: URL) => Response | Promise<Response>
 
 const routes: Record<string, RouteHandler> = {
   "GET /api/markets": () => json(useDeps().markets()),
   "GET /api/config": () => json(useDeps().config()),
-  "GET /api/health": () => json({ ok: true }),
+  "GET /api/health": () => json(slimHealth()),
   "GET /api/feeds": () => getFeeds(),
   "GET /api/tape": (_req, url) => getTape(url),
   "GET /api/state": (req) => getState(req),

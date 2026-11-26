@@ -490,9 +490,12 @@ test("internal health reports the mcp session stats and the last auth prune", as
   const statusBody = (await status.json()) as { mcp?: { sessions?: number }; auth?: { deleted?: number; at?: number } }
   expect(statusBody.mcp?.sessions).toBeGreaterThanOrEqual(1)
   expect(statusBody.auth).toEqual({ deleted: 0, at: prunedAt })
-  // The public health route stays a fixed body for the load balancer.
+  // The public health route stays a fixed slim shape for the load balancer and
+  // the compose healthcheck (status + feed facts, no internals).
+  resetRuntime()
   const publicHealth = await handle(new Request("http://localhost/api/health?chain=base-sepolia"))
-  expect(await publicHealth.json()).toEqual({ ok: true })
+  const slim = (await publicHealth.json()) as { ok: boolean; status: string; feedUp: boolean; feedAgeMs: number | null }
+  expect(slim).toEqual({ ok: true, status: "ok", feedUp: false, feedAgeMs: null })
 })
 
 test("book clamps a huge tail to fifteen minutes", async () => {

@@ -143,6 +143,9 @@ test("custody self-schedules a catch-up backlog in bounded bites and settles to 
   const server = mockNearChain({ head: () => head })
   const restore = envPatch({
     NEAR_RPC_1: `http://127.0.0.1:${server.port}/near 500 500 100`,
+    // D1: these suites exercise the fallback block walk, so the indexer poll
+    // is off and the walk stays the primary discovery path.
+    NEAR_DEPOSIT_INDEX_URL: "",
     NEAR_RPC_GAP_MS: "0",
     NEAR_DEPOSIT_CATCHUP_LAG: "100",
     NEAR_DEPOSIT_CATCHUP_GAP_MS: "250",
@@ -177,6 +180,7 @@ test("the catch-up budget yields mid-batch so a bite cannot starve the market", 
   const server = mockNearChain({ head: () => head, blockDelayMs: 200 })
   const restore = envPatch({
     NEAR_RPC_1: `http://127.0.0.1:${server.port}/near 500 500 100`,
+    NEAR_DEPOSIT_INDEX_URL: "",
     NEAR_RPC_GAP_MS: "0",
     NEAR_DEPOSIT_CATCHUP_LAG: "100",
     NEAR_DEPOSIT_CATCHUP_GAP_MS: "250",
@@ -207,6 +211,7 @@ test("a pruned range is recorded, not just logged, and the cursor jumps past it"
   const server = mockNearChain({ head: () => head, pruned: () => true })
   const restore = envPatch({
     NEAR_RPC_1: `http://127.0.0.1:${server.port}/near 500 500 100`,
+    NEAR_DEPOSIT_INDEX_URL: "",
     NEAR_RPC_GAP_MS: "0",
   })
   seedCursor(0)
@@ -214,6 +219,7 @@ test("a pruned range is recorded, not just logged, and the cursor jumps past it"
   try {
     await awaitLag((lag) => (lag.cursor ?? 0) === head - 1, 4_000)
     const lag = nearDepositLag("near-testnet")
+    expect(lag.source).toBe("scan")
     expect(lag.skipped).toEqual([{ from: 1, to: head - 1, at: expect.any(Number) }])
     const stored = getDb().query("SELECT value FROM meta WHERE key = 'near-testnet:near_deposit_skips'").get() as {
       value: string
@@ -233,6 +239,7 @@ test("starting custody again stops the previous loop instead of doubling the sca
   const server = mockNearChain({ head: () => head })
   const restore = envPatch({
     NEAR_RPC_1: `http://127.0.0.1:${server.port}/near 500 500 100`,
+    NEAR_DEPOSIT_INDEX_URL: "",
     NEAR_RPC_GAP_MS: "0",
     NEAR_DEPOSIT_CATCHUP_LAG: "100",
     NEAR_DEPOSIT_CATCHUP_GAP_MS: "250",
