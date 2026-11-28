@@ -341,6 +341,8 @@ export function App({
   const grantInFlight = funding || grantPending !== null
   const isNearChain = market.config.chainKey === "near-testnet"
   const nearCooling = isNearChain && market.nearFunding.cooling
+  const ledgerOnly = isNearChain && market.config.ledgerOnly
+  const grantCooling = nearCooling && !ledgerOnly
   const nearWait = nearCooling ? formatNearRetry(market.nearRetryMs) : ""
   useEffect(() => {
     const mark = baselineRef.current
@@ -445,7 +447,7 @@ export function App({
       setFundError("Reconnecting to the market")
       return
     }
-    if (nearCooling) {
+    if (grantCooling) {
       setFundError("NEAR funding paused — RPC cooling. Try again shortly.")
       setFundOpen(true)
       return
@@ -698,6 +700,7 @@ export function App({
                       <button
                         type="button"
                         onClick={() => {
+                          if (ledgerOnly) return
                           setWalletMenuOpen(false)
                           setWithdrawError(null)
                           if (market.blocked) {
@@ -707,10 +710,10 @@ export function App({
                           }
                           setWithdrawOpen(true)
                         }}
-                        disabled={!you}
-                        title={lost ? text.reconnectingMarket : undefined}
+                        disabled={!you || ledgerOnly}
+                        title={ledgerOnly ? text.withdrawalsPaused : lost ? text.reconnectingMarket : undefined}
                       >
-                        {text.withdraw}
+                        {ledgerOnly ? text.withdrawalsPaused : text.withdraw}
                       </button>
                       <button
                         type="button"
@@ -768,13 +771,13 @@ export function App({
                   type="button"
                   className="grant-status"
                   onClick={openGrant}
-                  disabled={!session.token || paused || nearCooling}
-                  aria-disabled={!session.token || paused || nearCooling}
-                  title={nearCooling ? `${text.nearPaused} ${text.nearRetry(nearWait)}` : lost ? text.reconnectingMarket : undefined}
+                  disabled={!session.token || paused || grantCooling}
+                  aria-disabled={!session.token || paused || grantCooling}
+                  title={grantCooling ? `${text.nearPaused} ${text.nearRetry(nearWait)}` : lost ? text.reconnectingMarket : undefined}
                 >
                   {grantStatusLabel(grantWait, market.config.grantMicros, lang)}
                 </button>
-                {nearCooling && (
+                {grantCooling && (
                   <p className="note warn" role="status">
                     {text.nearPaused} {text.nearRetry(nearWait)} {text.nearContinues}
                   </p>
@@ -785,13 +788,16 @@ export function App({
                 <p className="grant-status" data-processing={grantInFlight ? "1" : "0"}>
                   {grantStatusLabel(grantWait, market.config.grantMicros, lang, grantInFlight)}
                 </p>
-                {nearCooling && !grantInFlight && (
+                {grantCooling && !grantInFlight && (
                   <p className="note warn" role="status">
                     {text.nearPaused} {text.nearRetry(nearWait)} {text.nearContinues}
                   </p>
                 )}
               </>
             ))}
+          {ledgerOnly && session.token && (
+            <p className="note" role="status">{text.depositsPaused}</p>
+          )}
           {!held && (
             <>
               <label className="stake-field">
@@ -852,7 +858,7 @@ export function App({
           blocked={paused}
           notice={lost}
           error={fundError}
-          cooling={nearCooling}
+          cooling={grantCooling}
           coolingWait={nearWait}
           onClose={() => {
             setFundOpen(false)
@@ -867,7 +873,7 @@ export function App({
               setFundError("Reconnecting to the market")
               return
             }
-            if (nearCooling) {
+            if (grantCooling) {
               setFundError("NEAR funding paused — RPC cooling. Try again shortly.")
               return
             }

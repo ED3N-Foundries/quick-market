@@ -2,7 +2,7 @@ import { beforeEach, expect, test } from "bun:test"
 import { getDb, useDatabase } from "./db"
 import { GRANT_FOLLOW_MS, MINT_CONFIRMATIONS } from "../shared/mint"
 import { loadMarket, marketPreferences } from "../shared/market"
-import { applyGrant, cutoverAmount, grantDue, grantOnSignIn, grantSettings, noteGrantTx, onGrantNoted, resumePendingGrants, settleGrantRequest } from "./grant"
+import { applyGrant, cutoverAmount, grantDue, grantOnSignIn, grantSettings, nearGrantSkipsMint, noteGrantTx, onGrantNoted, resumePendingGrants, settleGrantRequest } from "./grant"
 import { youFor } from "./rounds"
 
 const who = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -141,6 +141,77 @@ test("a pending grant stays while this process is still minting", async () => {
 })
 
 
+
+test("NEAR ledger-only credits without minting and skips a second claim inside the interval", async () => {
+  marketPreferences.chain = "near-testnet"
+  const account = "ab".repeat(32)
+  let mints = 0
+  const input = {
+    address: account,
+    chainKey: "near-testnet" as const,
+    amount: 100_000_000,
+    intervalMs: hour,
+    skipMint: true,
+    mint: async () => {
+      mints += 1
+    },
+  }
+  expect(await applyGrant({ ...input, now: 0 })).toBe(true)
+  expect(mints).toBe(0)
+  expect(youFor(account)?.balanceMicros).toBe(100_000_000)
+  expect(youFor(account)?.grantPending).toBeNull()
+  expect(await applyGrant({ ...input, now: hour - 1 })).toBe(false)
+  expect(youFor(account)?.balanceMicros).toBe(100_000_000)
+  expect(mints).toBe(0)
+})
+
+test("Base still mints when skipMint is set", async () => {
+  let mints = 0
+  const credited = await applyGrant({
+    address: who,
+    now: 0,
+    chainKey: "base-sepolia",
+    amount: 100_000_000,
+    intervalMs: hour,
+    skipMint: true,
+    mint: async () => {
+      mints += 1
+    },
+  })
+  expect(credited).toBe(true)
+  expect(mints).toBe(1)
+  expect(youFor(who)?.balanceMicros).toBe(100_000_000)
+})
+
+test("a NEAR ledger-only resume still watches a hash that already left", async () => {
+  marketPreferences.chain = "near-testnet"
+  const account = "cd".repeat(32)
+  const hash = "H".repeat(44)
+  getDb()
+    .query(
+      "INSERT INTO users (chain_key, address, balance_micros, created_at, grant_pending_at, grant_tx, grant_seen) VALUES ('near-testnet', ?, 0, 0, ?, ?, 1)",
+    )
+    .run(account, 40, hash)
+  let watched = ""
+  await resumePendingGrants({
+    chainKey: "near-testnet",
+    amount: 100_000_000,
+    watch: async (got) => {
+      watched = got
+    },
+  })
+  expect(watched).toBe(hash)
+  expect(youFor(account)?.grantPending).toBeNull()
+  expect(youFor(account)?.balanceMicros).toBe(100_000_000)
+})
+
+test("the ledger-only flag skips NEAR mints and leaves Base alone", () => {
+  expect(nearGrantSkipsMint("near-testnet", { NEAR_LEDGER_ONLY: "1" })).toBe(true)
+  expect(nearGrantSkipsMint("near-testnet", { NEAR_LEDGER_ONLY: "yes" })).toBe(true)
+  expect(nearGrantSkipsMint("near-testnet", {})).toBe(false)
+  expect(nearGrantSkipsMint("near-testnet", { NEAR_LEDGER_ONLY: "0" })).toBe(false)
+  expect(nearGrantSkipsMint("base-sepolia", { NEAR_LEDGER_ONLY: "1" })).toBe(false)
+})
 
 test("NEAR testnet grants the same way as Base Sepolia", async () => {
   marketPreferences.chain = "near-testnet"

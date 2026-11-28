@@ -1,6 +1,7 @@
 import { dirname, join } from "node:path"
 import type { ChainKey } from "../shared/chain"
 import { loadMarket, marketPreferences, requireExplicitChain, TICK_MS, type PublicConfig } from "../shared/market"
+import { nearLedgerOnly } from "./nearLedger"
 import { feeBps, marketMs, MIN_STAKE_MICROS, priceSource, viewMs, windowMs, type PriceSource } from "./config"
 import { nextMarketAt, planWake, rollMarketAt, runWake, type MarketTiming } from "./clock"
 import { takeTick } from "./tick"
@@ -355,6 +356,7 @@ function publicConfig(): PublicConfig {
     grantMicros: grant.amount,
     grantIntervalMs: grant.intervalMs,
     confirmations: marketPreferences.confirmations,
+    ledgerOnly: current.chain.key === "near-testnet" && nearLedgerOnly(),
   }
 }
 

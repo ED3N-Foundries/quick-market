@@ -7,7 +7,8 @@ import type { PublicConfig } from "../shared/market"
 import { priceSource, viewMs, windowMs } from "./config"
 import { dbShapeStats, getDb } from "./db"
 import { feedsNow } from "./feeds"
-import { grantOnSignIn, grantSettings, startGrant } from "./grant"
+import { grantOnSignIn, grantSettings, nearGrantSkipsMint, startGrant } from "./grant"
+import { NEAR_WITHDRAWALS_PAUSED } from "./nearLedger"
 import { listArchives } from "./archive"
 import {
   averageQueryStats,
@@ -372,7 +373,8 @@ async function postSession(req: Request): Promise<Response> {
   if (!result.ok) return json({ error: result.error }, result.error === NEAR_BUSY ? 503 : 400)
   if (http.grantsOpen() && grantOnSignIn(result.you.grantAt)) {
     const chainKey = http.chainKey()
-    if (chainKey !== "near-testnet" || !nearFundingFor(chainKey).cooling) {
+    const skipMint = nearGrantSkipsMint(chainKey)
+    if (skipMint || chainKey !== "near-testnet" || !nearFundingFor(chainKey).cooling) {
       const settings = grantSettings()
       const started = startGrant({
         address: result.you.address,
@@ -381,6 +383,7 @@ async function postSession(req: Request): Promise<Response> {
         amount: settings.amount,
         intervalMs: settings.intervalMs,
         mint: (amount, report) => http.mint(amount, report),
+        skipMint,
       })
       if (started.claimed) {
         void started.done.catch((error) => {
@@ -406,7 +409,8 @@ async function postGrant(req: Request): Promise<Response> {
   const now = Date.now()
   const settings = grantSettings()
   const chainKey = http.chainKey()
-  if (chainKey === "near-testnet") {
+  const skipMint = nearGrantSkipsMint(chainKey)
+  if (chainKey === "near-testnet" && !skipMint) {
     const funding = nearFundingFor(chainKey)
     if (funding.cooling) return coolingResponse(funding)
   }
@@ -417,6 +421,7 @@ async function postGrant(req: Request): Promise<Response> {
     amount: settings.amount,
     intervalMs: settings.intervalMs,
     mint: (amount, report) => http.mint(amount, report),
+    skipMint,
   })
   if (started.claimed) {
     void started.done.catch((error) => {
@@ -438,6 +443,9 @@ async function postWithdraw(req: Request): Promise<Response> {
   const http = useDeps()
   const session = readSession(req)
   if (!session.address) return json({ error: "Connect a wallet first" }, 401)
+  if (nearGrantSkipsMint(http.chainKey())) {
+    return json({ error: NEAR_WITHDRAWALS_PAUSED, you: youFor(session.address) }, 400)
+  }
   if (http.chainKey() === "near-testnet") {
     const funding = nearFundingFor(http.chainKey())
     if (funding.cooling) return coolingResponse(funding)

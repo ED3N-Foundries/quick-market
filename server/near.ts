@@ -25,6 +25,7 @@ import {
   nearDepositScanActive,
   pollNearDepositIndex,
 } from "./nearDepositPoll"
+import { nearLedgerOnly } from "./nearLedger"
 
 /** A missing key or invalid NEAR token stops the process before it listens. */
 export class NearConfigError extends Error {}
@@ -280,7 +281,7 @@ export type NearDepositSkip = { from: number; to: number; at: number }
  */
 export type NearDepositLag = {
   chain: ChainKey
-  source: "indexer" | "scan"
+  source: "indexer" | "scan" | "off"
   lastPollAt: number | null
   lastOkAt: number | null
   lastError: string | null
@@ -342,8 +343,30 @@ function recordDepositSkip(chain: ChainKey, from: number, to: number, now = Date
     .run(depositSkipsKey(chain), JSON.stringify(trimmed))
 }
 
+/** Ledger-only NEAR does not poll or walk. The cursor is not a countdown. */
+function nearDepositOff(chain: ChainKey): NearDepositLag {
+  return {
+    chain,
+    source: "off",
+    lastPollAt: null,
+    lastOkAt: null,
+    lastError: null,
+    eventsSeen: 0,
+    lastEventBlock: null,
+    skipped: readDepositSkips(chain),
+    indexUrl: null,
+    credits: 0,
+    transfersSeen: 0,
+    hintMismatches: 0,
+    downForMs: null,
+    marker: null,
+    markerAt: null,
+  }
+}
+
 /** Deposit discovery health: the indexer poll when green, the block walk when it is not. */
 export function nearDepositLag(chain: ChainKey = activeChainKey()): NearDepositLag {
+  if (nearLedgerOnly()) return nearDepositOff(chain)
   const scan = nearDepositScanActive()
   const index = nearDepositIndexHealth()
   const base: NearDepositLag = {
@@ -1172,6 +1195,12 @@ function publishReport(report: TreasuryReport): TreasuryReport {
   return report
 }
 
+/** A ledger-only boot must not mint the gap. The next restart would mint it again. */
+export function nearBootShouldMint(mintMicros: bigint, env: Record<string, string | undefined> = process.env): boolean {
+  if (nearLedgerOnly(env)) return false
+  return mintMicros > 0n
+}
+
 export async function bootNear(treasury: string): Promise<TreasuryReport> {
   const env = loadEnv()
   const token = env.tokenAccount.trim()
@@ -1186,7 +1215,7 @@ export async function bootNear(treasury: string): Promise<TreasuryReport> {
   try {
     const first = await collectHoldings(treasury, [])
     const planned = planSeed({ treasury: first.treasury, ledgerMicros: ledgerSumMicros(), agents: [] })
-    if (planned.mintMicros > 0n) {
+    if (nearBootShouldMint(planned.mintMicros)) {
       await submit({
         signerId: treasury,
         secretKey: signingKey(),
@@ -1627,11 +1656,12 @@ export function startNearCustody(treasury: string): NearCustodyLoop {
   const tick = async (): Promise<void> => {
     // The block walk runs only while the indexer poll is off or has been
     // failing past the grace window; a green poll idles it entirely.
-    const scan = nearDepositScanActive()
+    const ledgerOnly = nearLedgerOnly()
+    const scan = !ledgerOnly && nearDepositScanActive()
     try {
       await withChain(chainKey, () =>
         Promise.all([
-          pollNearDepositIndex(treasury).catch((error) => {
+          (ledgerOnly ? Promise.resolve() : pollNearDepositIndex(treasury)).catch((error) => {
             console.error(error)
           }),
           (scan ? pollNearDeposits(treasury) : Promise.resolve()).catch((error) => {
@@ -1646,7 +1676,7 @@ export function startNearCustody(treasury: string): NearCustodyLoop {
       )
     } finally {
       if (!stopped) {
-        const scanNext = nearDepositScanActive()
+        const scanNext = !nearLedgerOnly() && nearDepositScanActive()
         let gap: number
         if (scanNext) {
           const lag = nearDepositLag(chainKey).lag ?? null

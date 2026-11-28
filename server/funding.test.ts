@@ -5,7 +5,7 @@ import { afterEach, expect, test } from "bun:test"
 import { CHAINS } from "../shared/chain"
 import { describeTreasury } from "../shared/near"
 import { getDb, useDatabase } from "./db"
-import { collectFunding, type EvmBalances } from "./funding"
+import { collectFunding, describeEvm, describeNear, type EvmBalances } from "./funding"
 import { bindHttp, handle, handleInternal } from "./http"
 import { resetRuntime } from "./rounds"
 
@@ -81,6 +81,51 @@ test("funding shows public addresses, the gap, and no key material", async () =>
   expect(body).not.toContain("privateKey")
   expect(body).not.toContain("ed25519:")
   expect(body).not.toMatch(/0x[0-9a-fA-F]{64}/)
+})
+
+test("ledger-only NEAR does not call a treasury gap a shortfall", () => {
+  const near = describeTreasury({
+    account: "treasury.testnet",
+    treasury: { exists: true, nearYocto: 1n, tokenMicros: 1_000_000n },
+    ledgerMicros: 5_000_000n,
+    agents: [],
+  })
+  const input = {
+    chain: CHAINS["near-testnet"],
+    treasury: "treasury.testnet",
+    token: "qm.testnet",
+    tokenLabel: "QM",
+    report: near,
+  }
+  const previous = process.env.NEAR_LEDGER_ONLY
+  try {
+    delete process.env.NEAR_LEDGER_ONLY
+    const off = describeNear(input)
+    expect(off.tokenBalance.short).toBe(true)
+    expect(off.lines.join(" ")).not.toContain("Ledger-only")
+
+    process.env.NEAR_LEDGER_ONLY = "1"
+    const on = describeNear(input)
+    expect(on.tokenBalance.short).toBe(false)
+    expect(on.native.short).toBe(true)
+    expect(on.lines[0]).toContain("Ledger-only")
+    expect(on.lines[0]).toContain("not a shortfall")
+
+    const base = describeEvm({
+      chain: CHAINS["base-sepolia"],
+      treasury: "0x826020c36F4e1b6320e5E3dCade1a888E9fbDeF6",
+      token: "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+      tokenLabel: "QM USDC",
+      balances: { nativeWei: 0n, tokenMicros: 1_000_000n, error: null },
+      spendableMicros: 5_000_000n,
+      openStakeMicros: 2_000_000n,
+    })
+    expect(base.tokenBalance.short).toBe(true)
+    expect(base.native.short).toBe(true)
+  } finally {
+    if (previous === undefined) delete process.env.NEAR_LEDGER_ONLY
+    else process.env.NEAR_LEDGER_ONLY = previous
+  }
 })
 
 test("the public health route is liveness only", async () => {

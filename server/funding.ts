@@ -4,6 +4,7 @@ import { base, baseSepolia } from "viem/chains"
 import type { ChainConfig, ChainKey } from "../shared/chain"
 import { formatQm, formatToken, type TreasuryReport } from "../shared/near"
 import { usdcAbi } from "../shared/usdc"
+import { nearLedgerOnly } from "./nearLedger"
 
 /** 0.00005 ETH. Below this, a withdraw has no gas. */
 export const GAS_FLOOR_WEI = 50_000_000_000_000n
@@ -170,6 +171,7 @@ export function describeNear(input: {
       cooling: input.cooling ?? null,
     }
   }
+  const ledgerOnly = input.chain.key === "near-testnet" && nearLedgerOnly()
   return {
     chainKey: input.chain.key,
     chainName: input.chain.name,
@@ -187,10 +189,12 @@ export function describeNear(input: {
       symbol: input.tokenLabel,
       have: report.token,
       need: report.tokenNeed,
-      short: decimalLess(report.token, report.tokenNeed),
+      short: !ledgerOnly && decimalLess(report.token, report.tokenNeed),
     },
     explorer: explorerUrl(input.chain, input.treasury),
-    lines: report.lines,
+    lines: ledgerOnly
+      ? ["Ledger-only. NEAR withdrawals are off. A treasury gap is not a shortfall.", ...report.lines]
+      : report.lines,
     shortAgents: report.shortAgents.map((agent) => ({
       account: agent.account,
       near: agent.near,

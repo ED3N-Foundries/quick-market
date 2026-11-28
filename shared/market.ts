@@ -40,6 +40,8 @@ export type PublicConfig = {
   grantMicros: number
   grantIntervalMs: number
   confirmations: number
+  /** NEAR credits the ledger and does not mint. Withdrawals and deposits are off. */
+  ledgerOnly: boolean
 }
 
 const seconds = z.int().min(1).max(120)
@@ -63,6 +65,7 @@ export const publicConfigSchema = z.strictObject({
   grantMicros: z.int().nonnegative(),
   grantIntervalMs: z.int().nonnegative(),
   confirmations: positive,
+  ledgerOnly: z.boolean(),
 })
 
 type _publicConfig = Assert<Equal<z.infer<typeof publicConfigSchema>, PublicConfig>>

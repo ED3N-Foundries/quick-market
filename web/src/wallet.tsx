@@ -751,7 +751,7 @@ function NearBridge({ children, chain }: { children: ReactNode; chain: ChainConf
     disconnect,
     switchChain: () => {},
     expire: disconnect,
-    deposit: async () => ({ ok: false, message: "Deposits on NEAR Testnet are QM transfers to the treasury." }),
+    deposit: async () => ({ ok: false, message: "Deposits are paused on NEAR." }),
   }
 
   return <SessionContext.Provider value={session}>{children}</SessionContext.Provider>

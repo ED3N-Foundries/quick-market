@@ -9,7 +9,8 @@ import { NEP413_RECIPIENT } from "../shared/nearKey"
 import type { PublicConfig } from "../shared/market"
 import { activeChainKey, withChain } from "./activeChain"
 import { chainConfig } from "./env"
-import { grantDue, grantOnSignIn, grantSettings, startGrant } from "./grant"
+import { grantDue, grantOnSignIn, grantSettings, nearGrantSkipsMint, startGrant } from "./grant"
+import { NEAR_WITHDRAWALS_PAUSED } from "./nearLedger"
 import { normalizeAccount, parseMicros } from "./money"
 import { orderLatency } from "./orderLatency"
 import {
@@ -598,6 +599,7 @@ function registerTools(server: McpServer, accounts: Map<string, Bound>, deps: Mc
     async (args) => {
       const picked = pickAccount(accounts, args.address)
       if (!picked.ok) return fail(picked.error)
+      if (nearGrantSkipsMint(activeChainKey())) return fail(NEAR_WITHDRAWALS_PAUSED)
       const cooling = nearCooling()
       if (cooling) return fail(cooling.error, cooling.code, { retryAfterMs: cooling.retryAfterMs, coolingUntil: cooling.coolingUntil })
       const amount = args.amountMicros !== undefined ? (Number.isSafeInteger(args.amountMicros) && args.amountMicros > 0 ? args.amountMicros : null) : parseMicros(args.amount)
@@ -627,12 +629,13 @@ async function claimGrant(accounts: Map<string, Bound>, deps: McpDeps, raw: stri
   if (!deps.grantsOpen()) return fail("Grants are only on testnet.")
   const picked = pickAccount(accounts, raw)
   if (!picked.ok) return fail(picked.error)
-  const cooling = nearCooling()
+  const chainKey = activeChainKey()
+  const skipMint = nearGrantSkipsMint(chainKey)
+  const cooling = skipMint ? null : nearCooling()
   if (cooling) return fail(cooling.error, cooling.code, { retryAfterMs: cooling.retryAfterMs, coolingUntil: cooling.coolingUntil })
   const address = picked.bound.address
   const now = Date.now()
   const settings = grantSettings()
-  const chainKey = activeChainKey()
   const started = startGrant({
     address,
     now,
@@ -640,6 +643,7 @@ async function claimGrant(accounts: Map<string, Bound>, deps: McpDeps, raw: stri
     amount: settings.amount,
     intervalMs: settings.intervalMs,
     mint: (amount, report) => deps.mint(amount, report),
+    skipMint,
   })
   if (started.claimed) {
     void started.done.catch((error) => {

@@ -2,6 +2,7 @@ import type { ChainKey } from "../shared/chain"
 import { isNearAccountId } from "../shared/near"
 import { activeChainKey } from "./activeChain"
 import { loadEnv } from "./env"
+import { nearLedgerOnly } from "./nearLedger"
 import { getDb } from "./db"
 import { applyNearDeposit, callNearRpc, nearRpcEndpoints, parseNearDeposits } from "./near"
 
@@ -245,6 +246,7 @@ type HandleOutcome = "skip" | "credited" | "mismatch" | "retry"
  * are fully handled — an unverified event leaves the marker for the next poll.
  */
 export async function pollNearDepositIndex(treasury: string): Promise<NearDepositIndexRun> {
+  if (nearLedgerOnly()) return { ok: true, pages: 0, events: 0, credits: 0, held: false }
   const now = Date.now()
   poll.lastPollAt = now
   if (poll.startedAt == null) poll.startedAt = now
@@ -425,7 +427,8 @@ export function nearDepositIndexHealth(now = Date.now()): NearDepositIndexHealth
  * grace window. A green poll idles the walk entirely, so the ~81-calls/min
  * serial scan stops grinding against blocks that carry no deposits.
  */
-export function nearDepositScanActive(now = Date.now()): boolean {
+export function nearDepositScanActive(now = Date.now(), env: Record<string, string | undefined> = process.env): boolean {
+  if (nearLedgerOnly(env)) return false
   const url = nearDepositIndexUrl()
   if (!url) return true
   const anchor = poll.lastOkAt ?? poll.startedAt

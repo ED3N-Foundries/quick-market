@@ -78,6 +78,39 @@ test("grant is gated with 503 and no slot is claimed while cooling", async () =>
   expect(pending).toBeNull()
 })
 
+test("ledger-only NEAR grant credits during cooling and does not mint", async () => {
+  process.env.NEAR_LEDGER_ONLY = "1"
+  try {
+    tripNearCooldown("test cooling")
+    const response = await handle(authed("/api/grant"))
+    expect(response.status).toBe(200)
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    const balance = withChain("near-testnet", () => youFor(address)?.balanceMicros)
+    expect(balance).toBe(10_000_000)
+  } finally {
+    delete process.env.NEAR_LEDGER_ONLY
+  }
+})
+
+test("ledger-only NEAR withdraw does not debit", async () => {
+  process.env.NEAR_LEDGER_ONLY = "1"
+  try {
+    withChain("near-testnet", () => {
+      getDb()
+        .query("UPDATE users SET balance_micros = ? WHERE chain_key = ? AND address = ?")
+        .run(5_000_000, "near-testnet", address)
+    })
+    const response = await handle(authed("/api/withdraw", "POST", { amount: "1" }))
+    expect(response.status).toBe(400)
+    const body = (await response.json()) as { error?: string }
+    expect(body.error).toBe("withdrawals_paused")
+    const balance = withChain("near-testnet", () => youFor(address)?.balanceMicros)
+    expect(balance).toBe(5_000_000)
+  } finally {
+    delete process.env.NEAR_LEDGER_ONLY
+  }
+})
+
 test("withdraw is gated with 503 while cooling", async () => {
   withChain("near-testnet", () => {
     getDb()

@@ -6,6 +6,7 @@ import { markAccountDirty } from "./accountDirty"
 import { getDb } from "./db"
 import { trackGrant } from "./grantWait"
 import { normalizeAccount } from "./money"
+import { nearLedgerOnly } from "./nearLedger"
 
 export type GrantProgress = { txHash?: string; seen?: number }
 
@@ -47,7 +48,7 @@ export function cutoverAmount(flag: string | null, sumMicros: number): number | 
   return sumMicros
 }
 
-/** Claim the in-flight slot, then mint. The claim commits before this returns. */
+/** Claim the in-flight slot, then mint — or, on NEAR ledger-only, credit without a mint. */
 export function startGrant(input: {
   address: string
   now: number
@@ -55,14 +56,22 @@ export function startGrant(input: {
   amount: number
   intervalMs: number
   mint: (amountMicros: number, report: (progress: GrantProgress) => void) => Promise<void>
+  /** NEAR ledger-only. Base must not set this. A stored grant_tx is still watched. */
+  skipMint?: boolean
 }): { claimed: boolean; done: Promise<boolean> } {
   if (input.chainKey !== "base-sepolia" && input.chainKey !== "near-testnet") return { claimed: false, done: Promise.resolve(false) }
   const address = normalizeAccount(input.address, input.chainKey)
   if (!address) return { claimed: false, done: Promise.resolve(false) }
   if (!claimSlot(address, input.now, input.intervalMs, input.chainKey)) return { claimed: false, done: Promise.resolve(false) }
   touchGrant(input.chainKey, address)
-  const done = trackGrant(address, () => finishGrant(address, input.now, input.amount, input.mint, input.chainKey))
+  const skipMint = input.skipMint === true && input.chainKey === "near-testnet"
+  const done = trackGrant(address, () => finishGrant(address, input.now, input.amount, input.mint, input.chainKey, skipMint))
   return { claimed: true, done }
+}
+
+/** True when this NEAR grant should credit the ledger and leave the chain alone. */
+export function nearGrantSkipsMint(chainKey: ChainKey, env: Record<string, string | undefined> = process.env): boolean {
+  return chainKey === "near-testnet" && nearLedgerOnly(env)
 }
 
 export async function applyGrant(input: {
@@ -72,6 +81,7 @@ export async function applyGrant(input: {
   amount: number
   intervalMs: number
   mint: (amountMicros: number, report: (progress: GrantProgress) => void) => Promise<void>
+  skipMint?: boolean
 }): Promise<boolean> {
   const started = startGrant(input)
   if (!started.claimed) return false
@@ -158,12 +168,15 @@ async function finishGrant(
   amount: number,
   mint: (amountMicros: number, report: (progress: GrantProgress) => void) => Promise<void>,
   chainKey: ChainKey,
+  skipMint: boolean,
 ): Promise<boolean> {
-  try {
-    await mint(amount, (progress) => noteGrantProgress(address, chainKey, progress))
-  } catch (error) {
-    clearPending(address, chainKey)
-    throw error
+  if (!skipMint) {
+    try {
+      await mint(amount, (progress) => noteGrantProgress(address, chainKey, progress))
+    } catch (error) {
+      clearPending(address, chainKey)
+      throw error
+    }
   }
   return creditGrant(address, now, amount, chainKey)
 }

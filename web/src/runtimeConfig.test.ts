@@ -20,6 +20,7 @@ const baseConfig: PublicConfig = {
   grantMicros: 100_000_000,
   grantIntervalMs: 120_000,
   confirmations: 1,
+  ledgerOnly: false,
 }
 
 test("runtime config selects the existing Base Sepolia token", () => {
